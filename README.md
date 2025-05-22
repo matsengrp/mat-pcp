@@ -1,6 +1,6 @@
 # `mat-pcp`
 
-A simple pipeline for filtering, optimizing, and extraction pcp's from a MAT tree.
+A simple pipeline for filtering, optimizing, and extracting parent child pairs (pcp's) from a MAT tree.
 
 ## Running the pipeline 
 
