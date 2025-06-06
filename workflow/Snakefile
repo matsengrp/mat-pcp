@@ -152,6 +152,8 @@ rule edit_ref_gtf:
         gtf="results_{mat}/ref/edited_ref.gtf",
     params:
         edits=config["add_to_ref_gtf"],
+    conda:
+        "envs/default.yml"
     script:
         "scripts/edit_ref_gtf.py"
 
@@ -163,6 +165,8 @@ rule ref_coding_sites:
         fasta=rules.get_ref_fasta.output.ref_fasta,
     output:
         csv="results_{mat}/ref/coding_sites.csv",
+    conda:
+        "envs/default.yml"
     script:
         "scripts/ref_coding_sites.py"
 
