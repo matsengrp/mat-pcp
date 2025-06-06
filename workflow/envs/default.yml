@@ -3,7 +3,8 @@ channels:
   - https://repo.prefix.dev/bioconda
 
 dependencies:
-  - python=3.9
+  - biopython
+  - matplotlib
   - seaborn
   - pandas
   - nbconvert
