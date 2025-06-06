@@ -1,6 +1,6 @@
 channels:
-  - https://repo.prefix.dev/conda-forge
-  - https://repo.prefix.dev/bioconda
+  - https://prefix.dev/conda-forge
+  - https://prefix.dev/bioconda
 
 dependencies:
   - biopython

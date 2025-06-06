@@ -7,6 +7,16 @@ import yaml
 
 configfile: "config/config.yaml"
 
+# Function to get thread count with fallback to default
+def get_threads(rule_name):
+    """Get thread count for a rule from config with fallback to default"""
+    if "threads" in config and rule_name in config["threads"]:
+        return config["threads"][rule_name]
+    elif "threads" in config and "default" in config["threads"]:
+        return config["threads"]["default"]
+    else:
+        return 1  # Fallback if no thread config is available
+
 results_files = [
     "ref/coding_sites.csv",
     "mat/filtered_metadata.tsv.gz",
@@ -27,6 +37,7 @@ rule get_mat_tree:
     params:
         mat=lambda wc: config["mat_trees"][wc.mat]["mat"],
         meta=lambda wc: config["mat_trees"][wc.mat]["meta"],
+    threads: 1  # Linking files doesn't benefit from multiple threads
     output:
         mat="results_{mat}/mat/mat_tree.pb.gz",
         meta="results_{mat}/mat/tree_metadata.tsv.gz"
@@ -41,12 +52,12 @@ rule filter_metadata:
     input:
         meta="results_{mat}/mat/tree_metadata.tsv.gz"
     output:
-        # invalid_strains="results_{mat}/mat/invalid_strains.txt",
         filtered_metadata="results_{mat}/mat/filtered_metadata.tsv.gz"
     params:
         qc_filter_options = config["qc_filter_options"],
         subset_frac = config["subset_frac"],
         datetime_cutoff = config["datetime_cutoff"]
+    threads: get_threads("filter_metadata")
     log:
         notebook="results_{mat}/log/filter_metadata.ipynb",
         invalid_strains="results_{mat}/log/invalid_strains.txt"
@@ -56,12 +67,6 @@ rule filter_metadata:
         "notebooks/filter_metadata.ipynb"
 
 
-# TODO idk if we need to convert to newick, dont think so.
-# matUtils extract \
-    # -i {output.filtered_pb} \
-    # -t {output.filtered_nwk}
-# TODO if we filter the pb, shouldn't this be reflected in the filtered metadata?
-# currently, we aren't applying a filter there.
 rule filter_mat_tree:
     """
     extract valid sequences from the mat tree,
@@ -73,8 +78,8 @@ rule filter_mat_tree:
         mat_tree = rules.get_mat_tree.output.mat,
         filtered_metadata = rules.filter_metadata.output.filtered_metadata
     output:
-        # filtered_nwk="results_{mat}/mat/filtered_tree.nwk",
         filtered_pb="results_{mat}/mat/filtered_tree_raw.pb"
+    threads: get_threads("filter_mat_tree")
     log:
         stderr="results_{mat}/log/filter_mat_tree.stderr",
         stdout="results_{mat}/log/filter_mat_tree.stdout",
@@ -109,6 +114,7 @@ rule optimize_mat_tree:
         tree = rules.filter_mat_tree.output.filtered_pb
     output:
         optimized_tree = "results_{mat}/mat/filtered_tree.pb"
+    threads: get_threads("optimize_mat_tree")
     log:
         stderr = "results_{mat}/log/optimize_mat_tree.stderr",
         stdout = "results_{mat}/log/optimize_mat_tree.stdout"
@@ -119,7 +125,8 @@ rule optimize_mat_tree:
         (
             matOptimize \
                 -i {input.tree} \
-                -o {output.optimized_tree}
+                -o {output.optimized_tree} \
+                -T {threads}
         ) > {log.stdout} 2> {log.stderr}
         """
 
@@ -128,6 +135,7 @@ rule get_ref_fasta:
     """Get the reference FASTA."""
     params:
         url=config["ref_fasta"],
+    threads: 1  # Network I/O doesn't benefit from multiple threads
     output:
         ref_fasta="results_{mat}/ref/ref.fa",
     shell:
@@ -138,6 +146,7 @@ rule get_ref_gtf:
     """Get the reference GTF."""
     params:
         url=config["ref_gtf"],
+    threads: 1  # Network I/O doesn't benefit from multiple threads
     output:
         ref_gtf="results_{mat}/ref/original_ref.gtf",
     shell:
@@ -150,6 +159,7 @@ rule edit_ref_gtf:
         gtf=rules.get_ref_gtf.output.ref_gtf
     output:
         gtf="results_{mat}/ref/edited_ref.gtf",
+    threads: 1  # Simple file editing doesn't benefit from multiple threads
     params:
         edits=config["add_to_ref_gtf"],
     conda:
@@ -165,6 +175,7 @@ rule ref_coding_sites:
         fasta=rules.get_ref_fasta.output.ref_fasta,
     output:
         csv="results_{mat}/ref/coding_sites.csv",
+    threads: get_threads("ref_coding_sites")
     conda:
         "envs/default.yml"
     script:
@@ -179,6 +190,7 @@ rule extract_pcps:
         fasta=rules.get_ref_fasta.output.ref_fasta
     output:
         pcps="results_{mat}/mat/all_pcps.csv"
+    threads: get_threads("extract_pcps")
     log:
         stderr="results_{mat}/log/extract_pcps.stderr",
         stdout="results_{mat}/log/extract_pcps.stdout"
