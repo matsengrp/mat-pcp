@@ -39,7 +39,7 @@ add_to_ref_gtf:
 threads:
   filter_metadata: 1
   filter_mat_tree: 1
-  optimize_mat_tree: 2
+  optimize_mat_tree: 12
   ref_coding_sites: 1
   extract_pcps: 1
   default: 1  # Default number of threads if not specified for a rule
