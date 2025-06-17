@@ -5,9 +5,9 @@
 # The most recent public trees are at
 # http://hgdownload.soe.ucsc.edu/goldenPath/wuhCor1/UShER_SARS-CoV-2/
 mat_trees:
-  Feb-12-2025:
-    mat: ../data/mat_trees/gisaidAndPublic.2025-02-12.masked.pb.gz 
-    meta: ../data/mat_trees/gisaidAndPublic.2025-02-12.metadata.tsv.gz 
+  June-01-2022:
+    mat: ../data/mat_trees/public-2022-06-01.all.masked.pb.gz
+    meta: ../data/mat_trees/public-2022-06-01.metadata.tsv.gz
 
 qc_filter_options:
   invalid_date_resolutions: ["MISSING", "MONTH", "YEAR"]
@@ -24,8 +24,11 @@ ref_gtf: http://hgdownload.soe.ucsc.edu/goldenPath/wuhCor1/bigZips/genes/ncbiGen
 # additional kwargs to go with the matUtils extract command, post metadata filtering. 
 mat_subset_kwargs: ""
 
+# Whether to optimize the filtered tree for maximum parsimony
+optimize_tree: false
+
 # Added parameters for metadata filtering
-subset_frac: 0.005  # Default to .5% random sampling
+subset_frac: 1.0  # Default to .5% random sampling
 
 # Date cutoff for filtering metadata
 datetime_cutoff: "2022-06-01"

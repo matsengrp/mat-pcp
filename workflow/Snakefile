@@ -17,10 +17,17 @@ def get_threads(rule_name):
     else:
         return 1  # Fallback if no thread config is available
 
+# Function to determine the final tree output based on config
+def get_final_tree(wildcards):
+    """Get the final tree path based on whether optimization is enabled"""
+    if config.get("optimize_tree", True):  # Default to True if not specified
+        return f"results_{wildcards.mat}/mat/filtered_tree.pb"
+    else:
+        return f"results_{wildcards.mat}/mat/filtered_tree_raw.pb"
+
 results_files = [
     "ref/coding_sites.csv",
     "mat/filtered_metadata.tsv.gz",
-    "mat/filtered_tree.pb",
     "mat/all_pcps.csv"
 ]
 
@@ -109,6 +116,7 @@ rule optimize_mat_tree:
     """
     Optimize the filtered tree for maximum parsimony using matOptimize.
     This ensures the tree maintains optimal parsimony after extraction/filtering.
+    This rule is conditional based on the optimize_tree config parameter.
     """
     input:
         tree = rules.filter_mat_tree.output.filtered_pb
@@ -183,9 +191,9 @@ rule ref_coding_sites:
 
 
 rule extract_pcps:
-    """Extract parent-child pairs (PCPs) from the optimized tree."""
+    """Extract parent-child pairs (PCPs) from the tree."""
     input:
-        tree=rules.optimize_mat_tree.output.optimized_tree,
+        tree=lambda wildcards: get_final_tree(wildcards),
         gtf=rules.edit_ref_gtf.output.gtf,
         fasta=rules.get_ref_fasta.output.ref_fasta
     output:
