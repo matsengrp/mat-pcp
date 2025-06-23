@@ -4,6 +4,7 @@
 import os
 import textwrap
 import yaml
+import pandas as pd
 
 configfile: "config/config.yaml"
 
@@ -139,6 +140,137 @@ rule optimize_mat_tree:
         """
 
 
+checkpoint get_clades:
+    """Extract clade information from filtered metadata to determine which clades to process."""
+    input:
+        metadata=rules.filter_metadata.output.filtered_metadata
+    output:
+        clade_counts="results_{mat}/mat/clade_counts.csv"
+    log:
+        "results_{mat}/log/get_clades.log"
+    threads: 1
+    conda:
+        "envs/default.yml"
+    params:
+        min_clade_size=config.get("min_clade_size", 100)
+    shell:
+        """
+        (
+            zcat {input.metadata} | \
+            awk -F'\t' 'NR==1 {{for(i=1;i<=NF;i++) if($i=="Nextstrain_clade") col=i}} 
+                        NR>1 && col {{print $col}}' | \
+            sort | uniq -c | \
+            awk -v min={params.min_clade_size} 'BEGIN {{print "nextstrain_clade,count,adequate_sample_counts"}} 
+                 {{gsub(/^ +/, "", $0); split($0, a, " "); 
+                   adequate=(a[1]>=min?"true":"false"); 
+                   print a[2]","a[1]","adequate}}' > {output.clade_counts}
+        ) > {log} 2>&1
+        """
+
+
+def clades_w_adequate_counts(wildcards):
+    """Get list of clades with adequate sample counts."""
+    checkpoint_output = checkpoints.get_clades.get(**wildcards).output.clade_counts
+    clades_df = pd.read_csv(checkpoint_output)
+    clades = clades_df[clades_df['adequate_sample_counts'] == 'true']['nextstrain_clade'].tolist()
+    # Filter out excluded clades
+    clades_to_exclude = config.get("clades_to_exclude", [])
+    return [clade for clade in clades if clade not in clades_to_exclude]
+
+
+rule samples_by_clade:
+    """Extract sample names for a specific clade."""
+    input:
+        metadata=rules.filter_metadata.output.filtered_metadata
+    output:
+        samples="results_{mat}/mat/clades/{clade}_samples.txt"
+    log:
+        "results_{mat}/log/samples_by_clade_{clade}.log"
+    threads: 1
+    conda:
+        "envs/default.yml"
+    params:
+        clade="{clade}"
+    shell:
+        """
+        (
+            zcat {input.metadata} | \
+            awk -F'\t' -v clade="{params.clade}" \
+            'NR==1 {{for(i=1;i<=NF;i++) {{if($i=="strain") strcol=i; if($i=="Nextstrain_clade") cladecol=i}}} 
+             NR>1 && $cladecol==clade {{print $strcol}}' > {output.samples}
+        ) > {log} 2>&1
+        """
+
+
+rule mat_clade_subset:
+    """Extract mutation-annotated tree for a specific clade."""
+    input:
+        tree=lambda wildcards: get_final_tree(wildcards),
+        samples=rules.samples_by_clade.output.samples
+    output:
+        tree="results_{mat}/mat/clades/{clade}_tree.pb"
+    threads: get_threads("mat_clade_subset")
+    log:
+        stderr="results_{mat}/log/mat_clade_subset_{clade}.stderr",
+        stdout="results_{mat}/log/mat_clade_subset_{clade}.stdout"
+    conda:
+        "envs/usher.yml"
+    shell:
+        """
+        (
+            matUtils extract \
+                -i {input.tree} \
+                -s {input.samples} \
+                -o {output.tree}
+        ) > {log.stdout} 2> {log.stderr}
+        """
+
+
+rule extract_pcps_by_clade:
+    """Extract parent-child pairs (PCPs) from a clade-specific tree."""
+    input:
+        tree=rules.mat_clade_subset.output.tree,
+        gtf="results_{mat}/ref/edited_ref.gtf",
+        fasta="results_{mat}/ref/ref.fa"
+    output:
+        pcps="results_{mat}/mat/clades/{clade}_pcps.csv"
+    threads: get_threads("extract_pcps")
+    log:
+        stderr="results_{mat}/log/extract_pcps_{clade}.stderr",
+        stdout="results_{mat}/log/extract_pcps_{clade}.stdout"
+    conda:
+        "envs/bte.yml"
+    shell:
+        """
+        (
+            python workflow/scripts/pcp_from_tree.py \
+                {input.tree} \
+                {input.fasta} \
+                {input.gtf} \
+                {output.pcps}
+        ) > {log.stdout} 2> {log.stderr}
+        """
+
+
+rule aggregate_clade_pcps:
+    """Aggregate all clade-specific PCPs into a single file."""
+    input:
+        pcps=lambda wildcards: expand(
+            "results_{mat}/mat/clades/{clade}_pcps.csv",
+            mat=wildcards.mat,
+            clade=clades_w_adequate_counts(wildcards)
+        )
+    output:
+        all_pcps="results_{mat}/mat/all_pcps.csv"
+    log:
+        "results_{mat}/log/aggregate_clade_pcps.log"
+    threads: 1
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/aggregate_clade_pcps.py"
+
+
 rule get_ref_fasta:
     """Get the reference FASTA."""
     params:
@@ -190,27 +322,3 @@ rule ref_coding_sites:
         "scripts/ref_coding_sites.py"
 
 
-rule extract_pcps:
-    """Extract parent-child pairs (PCPs) from the tree."""
-    input:
-        tree=lambda wildcards: get_final_tree(wildcards),
-        gtf=rules.edit_ref_gtf.output.gtf,
-        fasta=rules.get_ref_fasta.output.ref_fasta
-    output:
-        pcps="results_{mat}/mat/all_pcps.csv"
-    threads: get_threads("extract_pcps")
-    log:
-        stderr="results_{mat}/log/extract_pcps.stderr",
-        stdout="results_{mat}/log/extract_pcps.stdout"
-    conda:
-        "envs/bte.yml"
-    shell:
-        """
-        (
-            python workflow/scripts/pcp_from_tree.py \
-                {input.tree} \
-                {input.fasta} \
-                {input.gtf} \
-                {output.pcps}
-        ) > {log.stdout} 2> {log.stderr}
-        """

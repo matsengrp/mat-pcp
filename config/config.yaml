@@ -38,6 +38,10 @@ datetime_cutoff: "2022-06-01"
 add_to_ref_gtf:
   ORF9b: [28284, 28577]
 
+# Clade-level extraction configuration
+min_clade_size: 100  # Minimum number of samples per clade to process
+clades_to_exclude: []  # List of clades to exclude from analysis
+
 # Thread configuration for each rule
 threads:
   filter_metadata: 1
@@ -45,4 +49,5 @@ threads:
   optimize_mat_tree: 12
   ref_coding_sites: 1
   extract_pcps: 1
+  mat_clade_subset: 4
   default: 1  # Default number of threads if not specified for a rule
