@@ -28,7 +28,7 @@ mat_subset_kwargs: ""
 optimize_tree: false
 
 # Added parameters for metadata filtering
-subset_frac: 1.0  # Default to .5% random sampling
+subset_frac: 0.005  # Default to .5% random sampling
 
 # Date cutoff for filtering metadata
 datetime_cutoff: "2022-06-01"
@@ -39,7 +39,7 @@ add_to_ref_gtf:
   ORF9b: [28284, 28577]
 
 # Clade-level extraction configuration
-min_clade_size: 100  # Minimum number of samples per clade to process
+min_clade_size: 10  # Minimum number of samples per clade to process
 clades_to_exclude: []  # List of clades to exclude from analysis
 
 # Thread configuration for each rule
