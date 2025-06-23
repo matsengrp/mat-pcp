@@ -21,7 +21,7 @@ def get_threads(rule_name):
 # Function to determine the final tree output based on config
 def get_final_tree(wildcards):
     """Get the final tree path based on whether optimization is enabled"""
-    if config.get("optimize_tree", True):  # Default to True if not specified
+    if config.get("optimize_tree", False):  # Default to False if not specified
         return f"results_{wildcards.mat}/mat/filtered_tree.pb"
     else:
         return f"results_{wildcards.mat}/mat/filtered_tree_raw.pb"
@@ -172,10 +172,10 @@ def clades_w_adequate_counts(wildcards):
     """Get list of clades with adequate sample counts."""
     checkpoint_output = checkpoints.get_clades.get(**wildcards).output.clade_counts
     clades_df = pd.read_csv(checkpoint_output)
-    clades = clades_df[clades_df['adequate_sample_counts'] == 'true']['nextstrain_clade'].tolist()
-    # Filter out excluded clades
+    clades = clades_df[clades_df['adequate_sample_counts'] == True]['nextstrain_clade'].tolist()
+    # Filter out excluded clades and NaN values
     clades_to_exclude = config.get("clades_to_exclude", [])
-    return [clade for clade in clades if clade not in clades_to_exclude]
+    return [clade for clade in clades if clade not in clades_to_exclude and pd.notna(clade)]
 
 
 rule samples_by_clade:
@@ -196,7 +196,7 @@ rule samples_by_clade:
         (
             zcat {input.metadata} | \
             awk -F'\t' -v clade="{params.clade}" \
-            'NR==1 {{for(i=1;i<=NF;i++) {{if($i=="strain") strcol=i; if($i=="Nextstrain_clade") cladecol=i}}} 
+            'NR==1 {{for(i=1;i<=NF;i++) {{if($i=="strain") strcol=i; if($i=="Nextstrain_clade") cladecol=i}}}} 
              NR>1 && $cladecol==clade {{print $strcol}}' > {output.samples}
         ) > {log} 2>&1
         """
@@ -259,7 +259,9 @@ rule aggregate_clade_pcps:
             "results_{mat}/mat/clades/{clade}_pcps.csv",
             mat=wildcards.mat,
             clade=clades_w_adequate_counts(wildcards)
-        )
+        ),
+        # Explicit dependency on filtered tree to ensure proper order
+        tree=lambda wildcards: get_final_tree(wildcards)
     output:
         all_pcps="results_{mat}/mat/all_pcps.csv"
     log:

@@ -5,9 +5,9 @@
 # The most recent public trees are at
 # http://hgdownload.soe.ucsc.edu/goldenPath/wuhCor1/UShER_SARS-CoV-2/
 mat_trees:
-  June-01-2022:
-    mat: ../data/mat_trees/public-2022-06-01.all.masked.pb.gz
-    meta: ../data/mat_trees/public-2022-06-01.metadata.tsv.gz
+  June-01-2022-test-clades:
+    mat: data/mat_trees/public-2022-06-01.all.masked.pb.gz
+    meta: data/mat_trees/public-2022-06-01.metadata.tsv.gz
 
 qc_filter_options:
   invalid_date_resolutions: ["MISSING", "MONTH", "YEAR"]
