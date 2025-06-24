@@ -1,0 +1,53 @@
+{
+  "results_directory": "results_test_data",
+  "files": {
+    "results_test_data/mat/all_pcps.csv": {
+      "exists": true,
+      "size": 14800997,
+      "lines": 1925,
+      "checksum": null
+    },
+    "results_test_data/mat/clade_counts.csv": {
+      "exists": true,
+      "size": 352,
+      "lines": 26,
+      "checksum": "7432fde16ceb25ca621b2d732aa33752"
+    },
+    "results_test_data/mat/filtered_metadata.tsv.gz": {
+      "exists": true,
+      "size": 67415,
+      "lines": null,
+      "checksum": "441def9f297f3ae6528759982322eb21"
+    },
+    "results_test_data/mat/filtered_tree_raw.pb": {
+      "exists": true,
+      "size": 476404,
+      "lines": null,
+      "checksum": "d9e51df9bdcb0b57b37eeed43161f737"
+    }
+  },
+  "pcp_summary": {
+    "total_pcps": 1924,
+    "columns": [
+      "Unnamed: 0",
+      "parent_name",
+      "child_name",
+      "parent",
+      "child",
+      "branch_length",
+      "clade"
+    ],
+    "num_columns": 7,
+    "unique_child_clades": null,
+    "unique_parent_clades": null,
+    "first_5_child_nodes": null
+  },
+  "clade_counts_summary": {
+    "total_clades": 25,
+    "total_sequences": 2437,
+    "clades_with_adequate_samples": 22,
+    "checksum": "7432fde16ceb25ca621b2d732aa33752"
+  },
+  "num_clade_sample_files": 22,
+  "empty_clade_files": []
+}

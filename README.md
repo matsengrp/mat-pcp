@@ -67,4 +67,37 @@ The main output is `mat/all_pcps.csv`, containing the extracted parent-child pai
 
 **NOTE**: Currently, this pipeline is focused on SARS-CoV-2 data but can be adapted for other organisms by modifying the configuration file.
 
+## Testing and CI
+
+The pipeline includes automated testing via GitHub Actions that runs on every push and pull request. The CI workflow:
+
+1. Sets up the environment using pixi (providing snakemake and conda)
+2. Runs the pipeline on test data in `test_data/`
+3. Validates outputs against expected results
+4. Reports any differences in pipeline behavior
+
+### Running Tests Locally
+
+To run the same tests that CI runs:
+
+```bash
+# Install dependencies
+pixi install
+
+# Run test pipeline
+pixi run snakemake -j 2 --use-conda \
+  --config mat_trees.test_data.mat=test_data/filtered_tree_raw.pb.gz \
+           mat_trees.test_data.metadata=test_data/filtered_metadata.tsv.gz
+
+# Validate results
+python workflow/scripts/validate_test.py
+```
+
+The validation checks:
+- Total number of PCPs extracted
+- Number of clades processed
+- Total sequences across all clades
+- Presence of expected output files
+- Checksums of key output files
+
 
