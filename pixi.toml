@@ -3,9 +3,7 @@ name = "mat-pcp"
 version = "0.1.0"
 description = "Mutation-annotated tree parent-child pair extraction pipeline"
 channels = ["conda-forge", "bioconda"]
-#platforms = ["linux-64", "osx-64", "osx-arm64"]
-#platforms = ["linux-64", "osx-64", "osx-arm64"]
-platforms = ["osx-arm64"]
+platforms = ["linux-64", "osx-64", "osx-arm64"]
 
 [tasks]
 
