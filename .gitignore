@@ -1,0 +1,5 @@
+**/_ignore/
+.snakemake
+data/
+results*
+!results_test_data
