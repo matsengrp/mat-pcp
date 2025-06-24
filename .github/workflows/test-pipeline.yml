@@ -24,8 +24,7 @@ jobs:
     - name: Run test pipeline
       run: |
         pixi run snakemake -j 2 --use-conda \
-          --config mat_trees.test_data.mat=test_data/filtered_tree_raw.pb.gz \
-                   mat_trees.test_data.metadata=test_data/filtered_metadata.tsv.gz
+          --config mat_trees='{"test_data":{"mat":"test_data/filtered_tree_raw.pb.gz","metadata":"test_data/filtered_metadata.tsv.gz"}}'
     
     - name: Generate test summary
       run: |
