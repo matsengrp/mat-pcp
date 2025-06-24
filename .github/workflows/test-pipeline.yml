@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     
     - name: Setup Pixi
       uses: prefix-dev/setup-pixi@v0.8.0
@@ -37,7 +37,7 @@ jobs:
         
     - name: Upload test summary
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: test-summary
         path: test_summary.txt
