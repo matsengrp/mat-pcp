@@ -1,13 +1,13 @@
 # Configuration file for pipeline
 
-# List matutils pre-built mutation-annotated tree. We do the analysis for each tree and put
-# in a subdirectory called `results_{mat}` where `{mat}` is the name of that tree.
+# Output directory for results
+output_dir: "results_test_data"
+
+# Matutils pre-built mutation-annotated tree and metadata
 # The most recent public trees are at
 # http://hgdownload.soe.ucsc.edu/goldenPath/wuhCor1/UShER_SARS-CoV-2/
-mat_trees:
-  test_data:
-    mat: test_data/filtered_tree_raw.pb.gz
-    meta: test_data/filtered_metadata.tsv.gz
+mat: test_data/filtered_tree_raw.pb.gz
+meta: test_data/filtered_metadata.tsv.gz
 
 qc_filter_options:
   invalid_date_resolutions: ["MISSING", "MONTH", "YEAR"]

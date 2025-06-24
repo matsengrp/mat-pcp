@@ -19,12 +19,13 @@ def get_threads(rule_name):
         return 1  # Fallback if no thread config is available
 
 # Function to determine the final tree output based on config
-def get_final_tree(wildcards):
+def get_final_tree():
     """Get the final tree path based on whether optimization is enabled"""
+    output_dir = config["output_dir"]
     if config.get("optimize_tree", False):  # Default to False if not specified
-        return f"results_{wildcards.mat}/mat/filtered_tree.pb"
+        return f"{output_dir}/mat/filtered_tree.pb"
     else:
-        return f"results_{wildcards.mat}/mat/filtered_tree_raw.pb"
+        return f"{output_dir}/mat/filtered_tree_raw.pb"
 
 results_files = [
     "ref/coding_sites.csv",
@@ -35,22 +36,21 @@ results_files = [
 rule all:
     """Target rule with desired output files."""
     input:
-        expand(
-            [os.path.join("results_{mat}", f) for f in results_files],
-            mat=config["mat_trees"],
-        )
+        [os.path.join(config["output_dir"], f) for f in results_files]
 
 rule get_mat_tree:
     """Get the pre-built mutation-annotated tree, nwk, and metadata"""
     params:
-        mat=lambda wc: config["mat_trees"][wc.mat]["mat"],
-        meta=lambda wc: config["mat_trees"][wc.mat]["meta"],
+        mat=config["mat"],
+        meta=config["meta"],
+        output_dir=config["output_dir"]
     threads: 1  # Linking files doesn't benefit from multiple threads
     output:
-        mat="results_{mat}/mat/mat_tree.pb.gz",
-        meta="results_{mat}/mat/tree_metadata.tsv.gz"
+        mat=os.path.join(config["output_dir"], "mat/mat_tree.pb.gz"),
+        meta=os.path.join(config["output_dir"], "mat/tree_metadata.tsv.gz")
     shell:
         """
+        mkdir -p {params.output_dir}/mat
         ln -sr {params.mat} {output.mat}
         ln -sr {params.meta} {output.meta}
         """
@@ -58,17 +58,17 @@ rule get_mat_tree:
 rule filter_metadata:
     """filter the mat tree to remove invalid sequences"""
     input:
-        meta="results_{mat}/mat/tree_metadata.tsv.gz"
+        meta=rules.get_mat_tree.output.meta
     output:
-        filtered_metadata="results_{mat}/mat/filtered_metadata.tsv.gz"
+        filtered_metadata=os.path.join(config["output_dir"], "mat/filtered_metadata.tsv.gz")
     params:
         qc_filter_options = config["qc_filter_options"],
         subset_frac = config["subset_frac"],
         datetime_cutoff = config["datetime_cutoff"]
     threads: get_threads("filter_metadata")
     log:
-        notebook="results_{mat}/log/filter_metadata.ipynb",
-        invalid_strains="results_{mat}/log/invalid_strains.txt"
+        notebook=os.path.join(config["output_dir"], "log/filter_metadata.ipynb"),
+        invalid_strains=os.path.join(config["output_dir"], "log/invalid_strains.txt")
     conda:
         "envs/default.yml"
     notebook:
@@ -86,12 +86,12 @@ rule filter_mat_tree:
         mat_tree = rules.get_mat_tree.output.mat,
         filtered_metadata = rules.filter_metadata.output.filtered_metadata
     output:
-        filtered_pb="results_{mat}/mat/filtered_tree_raw.pb"
+        filtered_pb=os.path.join(config["output_dir"], "mat/filtered_tree_raw.pb")
     threads: get_threads("filter_mat_tree")
     log:
-        stderr="results_{mat}/log/filter_mat_tree.stderr",
-        stdout="results_{mat}/log/filter_mat_tree.stdout",
-        valid_strains="results_{mat}/log/valid_strains.txt",
+        stderr=os.path.join(config["output_dir"], "log/filter_mat_tree.stderr"),
+        stdout=os.path.join(config["output_dir"], "log/filter_mat_tree.stdout"),
+        valid_strains=os.path.join(config["output_dir"], "log/valid_strains.txt"),
     conda:
         "envs/usher.yml"
     params:
@@ -122,11 +122,11 @@ rule optimize_mat_tree:
     input:
         tree = rules.filter_mat_tree.output.filtered_pb
     output:
-        optimized_tree = "results_{mat}/mat/filtered_tree.pb"
+        optimized_tree = os.path.join(config["output_dir"], "mat/filtered_tree.pb")
     threads: get_threads("optimize_mat_tree")
     log:
-        stderr = "results_{mat}/log/optimize_mat_tree.stderr",
-        stdout = "results_{mat}/log/optimize_mat_tree.stdout"
+        stderr = os.path.join(config["output_dir"], "log/optimize_mat_tree.stderr"),
+        stdout = os.path.join(config["output_dir"], "log/optimize_mat_tree.stdout")
     conda:
         "envs/usher.yml"
     shell:
@@ -145,9 +145,9 @@ checkpoint get_clades:
     input:
         metadata=rules.filter_metadata.output.filtered_metadata
     output:
-        clade_counts="results_{mat}/mat/clade_counts.csv"
+        clade_counts=os.path.join(config["output_dir"], "mat/clade_counts.csv")
     log:
-        "results_{mat}/log/get_clades.log"
+        os.path.join(config["output_dir"], "log/get_clades.log")
     threads: 1
     conda:
         "envs/default.yml"
@@ -168,9 +168,9 @@ checkpoint get_clades:
         """
 
 
-def clades_w_adequate_counts(wildcards):
+def clades_w_adequate_counts():
     """Get list of clades with adequate sample counts."""
-    checkpoint_output = checkpoints.get_clades.get(**wildcards).output.clade_counts
+    checkpoint_output = checkpoints.get_clades.get().output.clade_counts
     clades_df = pd.read_csv(checkpoint_output)
     clades = clades_df[clades_df['adequate_sample_counts'] == True]['nextstrain_clade'].tolist()
     # Filter out excluded clades and NaN values
@@ -183,9 +183,9 @@ rule samples_by_clade:
     input:
         metadata=rules.filter_metadata.output.filtered_metadata
     output:
-        samples="results_{mat}/mat/clades/{clade}_samples.txt"
+        samples=os.path.join(config["output_dir"], "mat/clades/{clade}_samples.txt")
     log:
-        "results_{mat}/log/samples_by_clade_{clade}.log"
+        os.path.join(config["output_dir"], "log/samples_by_clade_{clade}.log")
     threads: 1
     conda:
         "envs/default.yml"
@@ -205,14 +205,14 @@ rule samples_by_clade:
 rule mat_clade_subset:
     """Extract mutation-annotated tree for a specific clade."""
     input:
-        tree=lambda wildcards: get_final_tree(wildcards),
+        tree=get_final_tree(),
         samples=rules.samples_by_clade.output.samples
     output:
-        tree="results_{mat}/mat/clades/{clade}_tree.pb"
+        tree=os.path.join(config["output_dir"], "mat/clades/{clade}_tree.pb")
     threads: get_threads("mat_clade_subset")
     log:
-        stderr="results_{mat}/log/mat_clade_subset_{clade}.stderr",
-        stdout="results_{mat}/log/mat_clade_subset_{clade}.stdout"
+        stderr=os.path.join(config["output_dir"], "log/mat_clade_subset_{clade}.stderr"),
+        stdout=os.path.join(config["output_dir"], "log/mat_clade_subset_{clade}.stdout")
     conda:
         "envs/usher.yml"
     shell:
@@ -230,14 +230,14 @@ rule extract_pcps_by_clade:
     """Extract parent-child pairs (PCPs) from a clade-specific tree."""
     input:
         tree=rules.mat_clade_subset.output.tree,
-        gtf="results_{mat}/ref/edited_ref.gtf",
-        fasta="results_{mat}/ref/ref.fa"
+        gtf=os.path.join(config["output_dir"], "ref/edited_ref.gtf"),
+        fasta=os.path.join(config["output_dir"], "ref/ref.fa")
     output:
-        pcps="results_{mat}/mat/clades/{clade}_pcps.csv"
+        pcps=os.path.join(config["output_dir"], "mat/clades/{clade}_pcps.csv")
     threads: get_threads("extract_pcps")
     log:
-        stderr="results_{mat}/log/extract_pcps_{clade}.stderr",
-        stdout="results_{mat}/log/extract_pcps_{clade}.stdout"
+        stderr=os.path.join(config["output_dir"], "log/extract_pcps_{clade}.stderr"),
+        stdout=os.path.join(config["output_dir"], "log/extract_pcps_{clade}.stdout")
     conda:
         "envs/bte.yml"
     shell:
@@ -256,16 +256,13 @@ rule aggregate_clade_pcps:
     """Aggregate all clade-specific PCPs into a single file."""
     input:
         pcps=lambda wildcards: expand(
-            "results_{mat}/mat/clades/{clade}_pcps.csv",
-            mat=wildcards.mat,
-            clade=clades_w_adequate_counts(wildcards)
-        )#,
-        # Explicit dependency on filtered tree to ensure proper order
-        # tree=lambda wildcards: get_final_tree(wildcards)
+            os.path.join(config["output_dir"], "mat/clades/{clade}_pcps.csv"),
+            clade=clades_w_adequate_counts()
+        )
     output:
-        all_pcps="results_{mat}/mat/all_pcps.csv"
+        all_pcps=os.path.join(config["output_dir"], "mat/all_pcps.csv")
     log:
-        "results_{mat}/log/aggregate_clade_pcps.log"
+        os.path.join(config["output_dir"], "log/aggregate_clade_pcps.log")
     threads: 1
     conda:
         "envs/default.yml"
@@ -279,7 +276,7 @@ rule get_ref_fasta:
         url=config["ref_fasta"],
     threads: 1  # Network I/O doesn't benefit from multiple threads
     output:
-        ref_fasta="results_{mat}/ref/ref.fa",
+        ref_fasta=os.path.join(config["output_dir"], "ref/ref.fa"),
     shell:
         "curl -L {params.url} | gunzip -c > {output.ref_fasta}"
 
@@ -290,7 +287,7 @@ rule get_ref_gtf:
         url=config["ref_gtf"],
     threads: 1  # Network I/O doesn't benefit from multiple threads
     output:
-        ref_gtf="results_{mat}/ref/original_ref.gtf",
+        ref_gtf=os.path.join(config["output_dir"], "ref/original_ref.gtf"),
     shell:
         "curl -L {params.url} | gunzip -c > {output.ref_gtf}"
 
@@ -300,7 +297,7 @@ rule edit_ref_gtf:
     input:
         gtf=rules.get_ref_gtf.output.ref_gtf
     output:
-        gtf="results_{mat}/ref/edited_ref.gtf",
+        gtf=os.path.join(config["output_dir"], "ref/edited_ref.gtf"),
     threads: 1  # Simple file editing doesn't benefit from multiple threads
     params:
         edits=config["add_to_ref_gtf"],
@@ -316,7 +313,7 @@ rule ref_coding_sites:
         gtf=rules.edit_ref_gtf.output.gtf,
         fasta=rules.get_ref_fasta.output.ref_fasta,
     output:
-        csv="results_{mat}/ref/coding_sites.csv",
+        csv=os.path.join(config["output_dir"], "ref/coding_sites.csv"),
     threads: get_threads("ref_coding_sites")
     conda:
         "envs/default.yml"
