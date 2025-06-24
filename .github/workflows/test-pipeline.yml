@@ -28,11 +28,11 @@ jobs:
     
     - name: Generate test summary
       run: |
-        python workflow/scripts/test_summary.py results_test_data > test_summary.txt
+        pixi run python workflow/scripts/test_summary.py results_test_data > test_summary.txt
         
     - name: Compare with expected results
       run: |
-        python workflow/scripts/validate_test.py
+        pixi run python workflow/scripts/validate_test.py
         
     - name: Upload test summary
       if: always()
