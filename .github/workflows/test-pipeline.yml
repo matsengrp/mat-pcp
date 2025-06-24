@@ -1,0 +1,42 @@
+name: Test Pipeline
+
+on:
+  push:
+    branches: [ main, "2-clade-level-pcp-extraction" ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Pixi
+      uses: prefix-dev/setup-pixi@v0.8.0
+      with:
+        pixi-version: latest
+        
+    - name: Install dependencies
+      run: pixi install
+      
+    - name: Run test pipeline
+      run: |
+        pixi run snakemake -j 2 --use-conda \
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" meta="test_data/filtered_metadata.tsv.gz"
+    
+    - name: Generate test summary
+      run: |
+        pixi run python workflow/scripts/test_summary.py results_test_data > test_summary.txt
+        
+    - name: Compare with expected results
+      run: |
+        pixi run python workflow/scripts/validate_test.py
+        
+    - name: Upload test summary
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-summary
+        path: test_summary.txt

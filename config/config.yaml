@@ -1,13 +1,13 @@
 # Configuration file for pipeline
 
-# List matutils pre-built mutation-annotated tree. We do the analysis for each tree and put
-# in a subdirectory called `results_{mat}` where `{mat}` is the name of that tree.
+# Output directory for results
+output_dir: "results_test_data"
+
+# Matutils pre-built mutation-annotated tree and metadata
 # The most recent public trees are at
 # http://hgdownload.soe.ucsc.edu/goldenPath/wuhCor1/UShER_SARS-CoV-2/
-mat_trees:
-  June-01-2022:
-    mat: ../data/mat_trees/public-2022-06-01.all.masked.pb.gz
-    meta: ../data/mat_trees/public-2022-06-01.metadata.tsv.gz
+mat: test_data/filtered_tree_raw.pb.gz
+meta: test_data/filtered_metadata.tsv.gz
 
 qc_filter_options:
   invalid_date_resolutions: ["MISSING", "MONTH", "YEAR"]
@@ -28,7 +28,7 @@ mat_subset_kwargs: ""
 optimize_tree: false
 
 # Added parameters for metadata filtering
-subset_frac: 1.0  # Default to .5% random sampling
+subset_frac: 0.1  # Default to .5% random sampling
 
 # Date cutoff for filtering metadata
 datetime_cutoff: "2022-06-01"
@@ -38,6 +38,10 @@ datetime_cutoff: "2022-06-01"
 add_to_ref_gtf:
   ORF9b: [28284, 28577]
 
+# Clade-level extraction configuration
+min_clade_size: 2  # Minimum number of samples per clade to process
+clades_to_exclude: []  # List of clades to exclude from analysis
+
 # Thread configuration for each rule
 threads:
   filter_metadata: 1
@@ -45,4 +49,5 @@ threads:
   optimize_mat_tree: 12
   ref_coding_sites: 1
   extract_pcps: 1
+  mat_clade_subset: 4
   default: 1  # Default number of threads if not specified for a rule
