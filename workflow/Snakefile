@@ -197,7 +197,7 @@ rule samples_by_clade:
             zcat {input.metadata} | \
             awk -F'\t' -v clade="{params.clade}" \
             'NR==1 {{for(i=1;i<=NF;i++) {{if($i=="strain") strcol=i; if($i=="Nextstrain_clade") cladecol=i}}}} 
-             NR>1 && $cladecol==clade {{print $strcol}}' > {output.samples}
+             NR>1 && $cladecol ~ "^"clade"( |$)" {{print $strcol}}' > {output.samples}
         ) > {log} 2>&1
         """
 
@@ -259,9 +259,9 @@ rule aggregate_clade_pcps:
             "results_{mat}/mat/clades/{clade}_pcps.csv",
             mat=wildcards.mat,
             clade=clades_w_adequate_counts(wildcards)
-        ),
+        )#,
         # Explicit dependency on filtered tree to ensure proper order
-        tree=lambda wildcards: get_final_tree(wildcards)
+        # tree=lambda wildcards: get_final_tree(wildcards)
     output:
         all_pcps="results_{mat}/mat/all_pcps.csv"
     log:

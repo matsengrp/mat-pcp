@@ -39,7 +39,7 @@ add_to_ref_gtf:
   ORF9b: [28284, 28577]
 
 # Clade-level extraction configuration
-min_clade_size: 1  # Minimum number of samples per clade to process
+min_clade_size: 2  # Minimum number of samples per clade to process
 clades_to_exclude: []  # List of clades to exclude from analysis
 
 # Thread configuration for each rule
