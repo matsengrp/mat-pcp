@@ -1,3 +1,6 @@
+.DS_Store
+pixi.lock
+
 **/_ignore/
 .snakemake
 data/
