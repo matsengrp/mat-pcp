@@ -67,12 +67,11 @@ rule filter_metadata:
         datetime_cutoff = config["datetime_cutoff"]
     threads: get_threads("filter_metadata")
     log:
-        notebook=os.path.join(config["output_dir"], "log/filter_metadata.ipynb"),
         invalid_strains=os.path.join(config["output_dir"], "log/invalid_strains.txt")
     conda:
         "envs/default.yml"
-    notebook:
-        "notebooks/filter_metadata.ipynb"
+    script:
+        "scripts/filter_metadata.py"
 
 
 rule filter_mat_tree:
