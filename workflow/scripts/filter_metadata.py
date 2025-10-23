@@ -101,38 +101,44 @@ def main():
         meta_df = meta_df.sample(n=subset_size, random_state=42)
         print(f"After random subsetting: {len(meta_df)}")
 
-    # Process dates
-    print("Processing dates...")
-    meta_df["date_resolution"] = meta_df["date"].apply(determine_resolution)
-    meta_df["date_resolution_str"] = meta_df["date_resolution"].apply(lambda x: x.name)
-    meta_df.drop(columns=["date_resolution"], inplace=True)
+    # Process dates if date column exists
+    if "date" in meta_df.columns:
+        print("Processing dates...")
+        meta_df["date_resolution"] = meta_df["date"].apply(determine_resolution)
+        meta_df["date_resolution_str"] = meta_df["date_resolution"].apply(lambda x: x.name)
+        meta_df.drop(columns=["date_resolution"], inplace=True)
 
-    # Convert dates
-    meta_df["date"] = meta_df["date"].apply(robust_fromisoformat)
+        # Convert dates
+        meta_df["date"] = meta_df["date"].apply(robust_fromisoformat)
 
-    # Apply datetime cutoff filtering right after date conversion
-    datetime_cutoff = datetime.fromisoformat(DATETIME_CUTOFF)
-    valid_dates = ~pd.isna(meta_df["date"])
-    date_filtered_df = meta_df[valid_dates & (meta_df["date"] <= datetime_cutoff)]
+        # Apply datetime cutoff filtering right after date conversion
+        datetime_cutoff = datetime.fromisoformat(DATETIME_CUTOFF)
+        valid_dates = ~pd.isna(meta_df["date"])
+        date_filtered_df = meta_df[valid_dates & (meta_df["date"] <= datetime_cutoff)]
 
-    # Keep track of dropped samples due to date cutoff
-    dropped_by_cutoff = len(meta_df) - len(date_filtered_df)
-    print(f"Dropped {dropped_by_cutoff} samples due to date cutoff or invalid dates")
+        # Keep track of dropped samples due to date cutoff
+        dropped_by_cutoff = len(meta_df) - len(date_filtered_df)
+        print(f"Dropped {dropped_by_cutoff} samples due to date cutoff or invalid dates")
 
-    # Replace the original dataframe with the filtered one
-    meta_df = date_filtered_df
-    print(f"Dataset size after date cutoff filtering: {len(meta_df)}")
+        # Replace the original dataframe with the filtered one
+        meta_df = date_filtered_df
+        print(f"Dataset size after date cutoff filtering: {len(meta_df)}")
 
-    # QC Filter #1 - Date Resolution
-    print("Applying QC Filter #1 - Date Resolution...")
-    invalid_resolution = meta_df["date_resolution_str"].isin(INVALID_DATE_RES)
-    invalid_time = meta_df["date"] < robust_fromisoformat(MIN_DATE)
-    invalid_date = meta_df[invalid_resolution | invalid_time]
-    qc_1_strain_to_drop = invalid_date["strain"].to_list()
-    qc_1_idx_to_drop = invalid_date.index.to_list()
-    print(f"There are {len(qc_1_idx_to_drop)} samples to drop due to invalid date")
+        # QC Filter #1 - Date Resolution
+        print("Applying QC Filter #1 - Date Resolution...")
+        invalid_resolution = meta_df["date_resolution_str"].isin(INVALID_DATE_RES)
+        invalid_time = meta_df["date"] < robust_fromisoformat(MIN_DATE)
+        invalid_date = meta_df[invalid_resolution | invalid_time]
+        qc_1_strain_to_drop = invalid_date["strain"].to_list()
+        qc_1_idx_to_drop = invalid_date.index.to_list()
+        print(f"There are {len(qc_1_idx_to_drop)} samples to drop due to invalid date")
 
-    meta_df.drop(qc_1_idx_to_drop, inplace=True)
+        meta_df.drop(qc_1_idx_to_drop, inplace=True)
+    else:
+        print(
+            "Warning: 'date' column not found in metadata. Date filters will not be applied."
+        )
+        qc_1_strain_to_drop = []
 
     # QC Filter #2 - Host
     print("Applying QC Filter #2 - Host...")
@@ -180,7 +186,10 @@ def main():
     # Output results
     print("Saving outputs...")
     print(f"Final dataset size: {len(meta_df)}")
-    print(f"Date range: {meta_df['date'].min()} to {meta_df['date'].max()}")
+    if "date" in meta_df.columns:
+        print(f"Date range: {meta_df['date'].min()} to {meta_df['date'].max()}")
+    else:
+        print("Date information not available in metadata")
 
     if "host" in meta_df.columns:
         print(f"Number of unique hosts: {meta_df['host'].nunique()}")
