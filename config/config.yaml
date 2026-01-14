@@ -39,6 +39,7 @@ add_to_ref_gtf:
   ORF9b: [28284, 28577]
 
 # Clade-level extraction configuration
+clade_column: "Nextstrain_clade"  # Column name in metadata for clade assignment
 min_clade_size: 2  # Minimum number of samples per clade to process
 clades_to_exclude: []  # List of clades to exclude from analysis
 
