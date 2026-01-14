@@ -151,15 +151,16 @@ checkpoint get_clades:
     conda:
         "envs/default.yml"
     params:
-        min_clade_size=config.get("min_clade_size", 100)
+        min_clade_size=config.get("min_clade_size", 100),
+        clade_column=config.get("clade_column")
     shell:
         """
         (
             zcat {input.metadata} | \
-            awk -F'\t' 'NR==1 {{for(i=1;i<=NF;i++) if($i=="Nextstrain_clade") col=i}} 
+            awk -F'\t' 'NR==1 {{for(i=1;i<=NF;i++) if($i=="{params.clade_column}") col=i}} 
                         NR>1 && col {{print $col}}' | \
             sort | uniq -c | \
-            awk -v min={params.min_clade_size} 'BEGIN {{print "nextstrain_clade,count,adequate_sample_counts"}} 
+            awk -v min={params.min_clade_size} 'BEGIN {{print "{params.clade_column},count,adequate_sample_counts"}} 
                  {{gsub(/^ +/, "", $0); split($0, a, " "); 
                    adequate=(a[1]>=min?"true":"false"); 
                    print a[2]","a[1]","adequate}}' > {output.clade_counts}
@@ -171,7 +172,7 @@ def clades_w_adequate_counts():
     """Get list of clades with adequate sample counts."""
     checkpoint_output = checkpoints.get_clades.get().output.clade_counts
     clades_df = pd.read_csv(checkpoint_output)
-    clades = clades_df[clades_df['adequate_sample_counts'] == True]['nextstrain_clade'].tolist()
+    clades = clades_df[clades_df['adequate_sample_counts'] == True][config.get("clade_column")].tolist()
     # Filter out excluded clades and NaN values
     clades_to_exclude = config.get("clades_to_exclude", [])
     return [clade for clade in clades if clade not in clades_to_exclude and pd.notna(clade)]
@@ -189,13 +190,14 @@ rule samples_by_clade:
     conda:
         "envs/default.yml"
     params:
-        clade="{clade}"
+        clade="{clade}",
+        clade_column=config.get("clade_column")
     shell:
         """
         (
             zcat {input.metadata} | \
             awk -F'\t' -v clade="{params.clade}" \
-            'NR==1 {{for(i=1;i<=NF;i++) {{if($i=="strain") strcol=i; if($i=="Nextstrain_clade") cladecol=i}}}} 
+            'NR==1 {{for(i=1;i<=NF;i++) {{if($i=="strain") strcol=i; if($i=="{params.clade_column}") cladecol=i}}}} 
              NR>1 && $cladecol ~ "^"clade"( |$)" {{print $strcol}}' > {output.samples}
         ) > {log} 2>&1
         """
