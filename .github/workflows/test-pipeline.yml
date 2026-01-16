@@ -90,6 +90,40 @@ jobs:
         pixi run snakemake -j 2 --use-conda \
           --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1
 
+    - name: Verify input linking
+      run: |
+        # Check symlinks were created
+        test -L results_test_data/mat/mat_tree.pb.gz
+        test -L results_test_data/mat/metadata.tsv.gz
+        echo "Input linking verified!"
+
+    - name: Verify metadata filtering
+      run: |
+        pixi run python -c "
+        import pandas as pd
+        import gzip
+
+        # Load filtered metadata
+        with gzip.open('results_test_data/mat/filtered_metadata.tsv.gz', 'rt') as f:
+            df = pd.read_csv(f, sep='\t')
+
+        print(f'Filtered metadata rows: {len(df)}')
+        assert len(df) > 0, 'Filtered metadata is empty!'
+
+        # Check required columns exist
+        required_cols = ['strain', 'date']
+        for col in required_cols:
+            assert col in df.columns, f'Missing column: {col}'
+
+        print('Metadata filtering verified!')
+        "
+
+    - name: Verify invalid strains log
+      run: |
+        test -f results_test_data/log/invalid_strains.txt
+        head -10 results_test_data/log/invalid_strains.txt
+        echo "Invalid strains log verified!"
+
     - name: Verify conda environments created
       run: |
         # Check that snakemake created the conda environments
