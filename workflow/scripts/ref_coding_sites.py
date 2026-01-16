@@ -1,17 +1,33 @@
+#!/usr/bin/env python3
 """Get all sites in the GTF that correspond to a coding sequence."""
 
-
 import Bio.SeqIO
-
 import pandas as pd
 
+# Get inputs from snakemake
+gtf_file = snakemake.input.gtf
+fasta_file = snakemake.input.fasta
+output_csv = snakemake.output.csv
+log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
-# get CDS features
+
+def log(msg):
+    """Write to log file if available, otherwise print."""
+    if log_file:
+        with open(log_file, "a") as f:
+            f.write(msg + "\n")
+    print(msg)
+
+
+log(f"Loading GTF from {gtf_file}")
+
+# Get CDS features
 cds_features = (
     pd.read_csv(
-        snakemake.input.gtf,
+        gtf_file,
         sep="\t",
         header=None,
+        comment="#",
         names=[
             "seqName",
             "source",
@@ -28,17 +44,25 @@ cds_features = (
     .assign(
         frame=lambda x: x["frame"].astype(int),
         gene=lambda x: x["attribute"].str.extract(r'^gene_id "(\w+)"'),
-        # handle shifts for multiple CDSs for ORF1ab
         genelength=lambda x: x["end"] - x["start"] + 1,
-        shift=lambda x: x.groupby("gene")["genelength"].shift(fill_value=0),
+        shift=lambda x: x.groupby("gene")["genelength"].shift(fill_value=0).astype(int),
     )
     .drop(columns=["seqName", "source", "score", "feature", "attribute"])
 )
 
-assert all(cds_features["frame"] == 0), "non frame 0 CDSs\n" + str(cds_features)
-assert all(cds_features["strand"] == "+"), "non + sense CDS\n" + str(cds_features)
+log(f"Found {len(cds_features)} CDS features")
+log(f"Genes: {sorted(cds_features['gene'].unique())}")
 
-# get sites with codon position assigned
+# Validate CDS features
+assert all(cds_features["frame"] == 0), (
+    f"Non frame-0 CDSs found:\n{cds_features[cds_features['frame'] != 0]}"
+)
+assert all(cds_features["strand"] == "+"), (
+    f"Non-positive-sense CDSs found:\n{cds_features[cds_features['strand'] != '+']}"
+)
+
+# Get sites with codon position assigned
+log("Mapping sites to codon positions...")
 sites = (
     cds_features.assign(
         site=lambda x: x.apply(lambda r: list(range(r["start"], r["end"] + 1)), axis=1),
@@ -58,28 +82,44 @@ sites = (
     .groupby("site", as_index=False)
     .aggregate(
         codon_position=pd.NamedAgg(
-            "codon_position",
-            lambda s: ";".join(map(str, s.values)),
+            "codon_position", lambda s: ";".join(map(str, s.values))
         ),
         codon_site=pd.NamedAgg("codon_site", lambda s: ";".join(map(str, s.values))),
         gene=pd.NamedAgg("gene", lambda s: ";".join(s)),
+        genelength=pd.NamedAgg("genelength", lambda s: ";".join(map(str, s.values))),
+        shift=pd.NamedAgg("shift", lambda s: ";".join(map(str, s.values))),
     )
 )
 
-# add any non-coding sites
-length = len(Bio.SeqIO.read(snakemake.input.fasta, "fasta"))
+log(f"Mapped {len(sites)} coding sites")
+
+# Add non-coding sites
+log(f"Loading reference FASTA from {fasta_file}")
+ref_record = Bio.SeqIO.read(fasta_file, "fasta")
+length = len(ref_record)
+log(f"Reference length: {length} bp")
+
 noncoding_sites = sorted(set(range(1, length + 1)) - set(sites["site"]))
+log(f"Non-coding sites: {len(noncoding_sites)}")
 
-sites = pd.concat([
-    sites,
-    pd.DataFrame(
-        {
-            "site": noncoding_sites,
-            "codon_position": "noncoding",
-            "codon_site": "noncoding",
-            "gene": "noncoding",
-        }
-    ),
-]).sort_values("site")
+sites = pd.concat(
+    [
+        sites,
+        pd.DataFrame(
+            {
+                "site": noncoding_sites,
+                "codon_position": "noncoding",
+                "codon_site": "noncoding",
+                "gene": "noncoding",
+                "genelength": "noncoding",
+                "shift": "noncoding",
+            }
+        ),
+    ]
+).sort_values("site")
 
-sites.to_csv(snakemake.output.csv, index=False)
+# Select final columns
+sites = sites[["site", "codon_position", "codon_site", "gene"]]
+
+sites.to_csv(output_csv, index=False)
+log(f"Saved {len(sites)} sites to {output_csv}")

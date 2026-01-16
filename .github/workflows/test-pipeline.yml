@@ -124,6 +124,59 @@ jobs:
         head -10 results_test_data/log/invalid_strains.txt
         echo "Invalid strains log verified!"
 
+    - name: Verify tree filtering
+      run: |
+        test -f results_test_data/mat/filtered_tree_raw.pb
+        echo "Tree filtering verified!"
+
+        # Check log files
+        test -f results_test_data/log/filter_mat_tree.stdout
+        test -f results_test_data/log/valid_strains.txt
+        echo "Valid strains: $(wc -l < results_test_data/log/valid_strains.txt)"
+
+    - name: Verify reference files
+      run: |
+        # Check FASTA
+        test -f results_test_data/ref/ref.fa
+        pixi run python -c "
+        from Bio import SeqIO
+        rec = SeqIO.read('results_test_data/ref/ref.fa', 'fasta')
+        print(f'Reference: {rec.id}, length: {len(rec)} bp')
+        assert len(rec) > 29000, 'Reference too short!'
+        "
+
+        # Check GTF files
+        test -f results_test_data/ref/original_ref.gtf
+        test -f results_test_data/ref/edited_ref.gtf
+
+        # Verify ORF9b was added
+        grep -q "ORF9b" results_test_data/ref/edited_ref.gtf && \
+          echo "ORF9b gene added successfully!"
+
+    - name: Verify coding sites
+      run: |
+        test -f results_test_data/ref/coding_sites.csv
+        pixi run python -c "
+        import pandas as pd
+        df = pd.read_csv('results_test_data/ref/coding_sites.csv')
+        print(f'Coding sites: {len(df)} total')
+
+        # Check structure
+        assert 'site' in df.columns
+        assert 'codon_position' in df.columns
+        assert 'gene' in df.columns
+
+        # Check gene coverage
+        genes = set()
+        for g in df['gene']:
+            if g != 'noncoding':
+                genes.update(g.split(';'))
+        print(f'Genes found: {sorted(genes)}')
+
+        # Verify ORF9b is present
+        assert 'ORF9b' in genes, 'ORF9b not found in coding sites!'
+        "
+
     - name: Verify conda environments created
       run: |
         # Check that snakemake created the conda environments
