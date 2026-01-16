@@ -42,29 +42,28 @@ rule get_mat_tree:
     """Get the pre-built mutation-annotated tree, nwk, and metadata"""
     params:
         mat=config["mat"],
-        meta=config["meta"],
+        metadata=config["metadata"],
         output_dir=config["output_dir"]
     threads: 1  # Linking files doesn't benefit from multiple threads
     output:
         mat=os.path.join(config["output_dir"], "mat/mat_tree.pb.gz"),
-        meta=os.path.join(config["output_dir"], "mat/tree_metadata.tsv.gz")
+        metadata=os.path.join(config["output_dir"], "mat/tree_metadata.tsv.gz")
     shell:
         """
         mkdir -p {params.output_dir}/mat
-        ln -sr {params.mat} {output.mat}
-        ln -sr {params.meta} {output.meta}
+        ln -sf $(realpath {params.mat}) {output.mat}
+        ln -sf $(realpath {params.metadata}) {output.metadata}
         """
 
 rule filter_metadata:
     """filter the mat tree to remove invalid sequences"""
     input:
-        meta=rules.get_mat_tree.output.meta
+        metadata=rules.get_mat_tree.output.metadata
     output:
         filtered_metadata=os.path.join(config["output_dir"], "mat/filtered_metadata.tsv.gz")
     params:
         qc_filter_options = config["qc_filter_options"],
-        subset_frac = config["subset_frac"],
-        datetime_cutoff = config["datetime_cutoff"]
+        subset_frac = config["subset_frac"]
     threads: get_threads("filter_metadata")
     log:
         invalid_strains=os.path.join(config["output_dir"], "log/invalid_strains.txt")

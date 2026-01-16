@@ -5,5 +5,8 @@ pixi.lock
 **/_ignore/
 .snakemake
 data/
+!data/usher_masked_sites.yaml
+!data/lan_2022/
+!data/lan_2022/41467_2022_28603_MOESM11_ESM.txt
 results*
 !results_test_data

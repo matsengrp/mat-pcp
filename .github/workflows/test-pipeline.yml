@@ -2,38 +2,63 @@ name: Test Pipeline
 
 on:
   push:
-    branches: [ main, "2-clade-level-pcp-extraction" ]
+    branches: [ main, "unified-pipeline-*" ]
   pull_request:
     branches: [ main ]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Setup Pixi
       uses: prefix-dev/setup-pixi@v0.8.0
       with:
         pixi-version: latest
-        
+
     - name: Install dependencies
       run: pixi install
-      
-    - name: Run test pipeline
+
+    - name: Validate config schema
+      run: |
+        pixi run python -c "
+        import yaml
+        with open('config/config.yaml') as f:
+            config = yaml.safe_load(f)
+
+        # Check required top-level keys exist
+        required_keys = [
+            'output_dir', 'ref_fasta', 'ref_gtf', 'qc_filter_options',
+            'clade_column', 'min_clade_size', 'max_nt_mutations',
+            'site_include_range', 'clade_founders', 'threads'
+        ]
+        for key in required_keys:
+            assert key in config, f'Missing required config key: {key}'
+
+        print('Config schema validation passed!')
+        "
+
+    - name: Validate data files exist
+      run: |
+        test -f data/usher_masked_sites.yaml
+        test -f data/lan_2022/41467_2022_28603_MOESM11_ESM.txt
+        echo "Data files validation passed!"
+
+    - name: Run test pipeline (existing functionality)
       run: |
         pixi run snakemake -j 2 --use-conda \
-          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" meta="test_data/filtered_metadata.tsv.gz"
-    
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1
+
     - name: Generate test summary
       run: |
         pixi run python workflow/scripts/test_summary.py results_test_data > test_summary.txt
-        
+
     - name: Compare with expected results
       run: |
         pixi run python workflow/scripts/validate_test.py
-        
+
     - name: Upload test summary
       if: always()
       uses: actions/upload-artifact@v4
