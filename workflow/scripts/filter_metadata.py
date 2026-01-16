@@ -72,10 +72,10 @@ def robust_fromisoformat(date_string: str) -> pd.Timestamp:
 
 def main():
     # Define variables provided by snakemake workflow
-    META = snakemake.input["meta"]
+    META = snakemake.input["metadata"]
 
-    DATETIME_CUTOFF = snakemake.params["datetime_cutoff"]
     SUBSET_FRAC = snakemake.params["subset_frac"]
+    DATETIME_CUTOFF = snakemake.params.qc_filter_options["datetime_cutoff"]
     INVALID_DATE_RES = snakemake.params.qc_filter_options["invalid_date_resolutions"]
     MIN_DATE = snakemake.params.qc_filter_options["min_date"]
 

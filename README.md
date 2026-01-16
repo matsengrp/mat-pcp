@@ -1,23 +1,23 @@
 # `mat-pcp`
 
-A Snakemake pipeline for filtering, optimizing, and extracting parent-child pairs (PCPs) from a mutation-annotated tree (MAT). This pipeline processes SARS-CoV-2 genomic data to facilitate evolutionary analysis.
+A unified Snakemake pipeline for analyzing SARS-CoV-2 genomic evolution from mutation-annotated trees (MATs). This pipeline extracts parent-child pairs (PCPs), counts mutations, estimates mutation rates, and calculates fitness effects.
 
 ## Pipeline Overview
 
 The pipeline performs the following key steps:
 
-1. **Data Acquisition**: 
+1. **Data Acquisition**:
    - Obtains pre-built mutation-annotated trees and corresponding metadata
    - Downloads reference genome (FASTA) and annotation (GTF) files
 
 2. **Metadata Filtering**:
    - Filters sequences based on quality control parameters (valid dates, hosts, genome length)
-   - Allows subsetting data by a specified datetime cutoff (configurable in `config.yaml`)
+   - Allows subsetting data by a specified datetime cutoff
    - Supports random sampling of sequences with adjustable sampling fraction
 
 3. **Tree Processing**:
    - Extracts valid sequences from the MAT tree based on filtered metadata
-   - Optimizes the filtered tree for maximum parsimony using `matOptimize`
+   - Optionally optimizes the filtered tree for maximum parsimony using `matOptimize`
 
 4. **Reference Genome Processing**:
    - Processes reference genome and annotation files
@@ -32,29 +32,52 @@ The pipeline performs the following key steps:
 
 ## Configuration
 
-The pipeline is configured through `config/config.yaml`, which allows you to specify:
+The pipeline is configured through `config/config.yaml`, which contains comprehensive parameters organized into sections:
 
-- Input MAT trees and metadata
-- QC filter options (date resolution, host filtering, genome length)
-- Reference genome and annotation sources
-- Datetime cutoff for sample inclusion
-- Sampling fraction for metadata subsetting
-- Clade extraction parameters (minimum clade size, clades to exclude)
-- Thread allocation for parallel processing
+### Input/Output
+- `output_dir`: Directory for results
+- `mat`: Path to mutation-annotated tree (.pb.gz)
+- `metadata`: Path to metadata file (.tsv.gz)
 
-## Running the pipeline 
+### QC Filtering (`qc_filter_options`)
+- Date resolution filtering (exclude MISSING, MONTH, YEAR resolutions)
+- Date range filtering (`min_date`, `datetime_cutoff`)
+- Host species validation
+- Genome length constraints
 
-You must have an environment with `snakemake` and `conda` available. The pipeline uses conda environments defined in the `workflow/envs/` directory for each step, ensuring reproducibility.
+### Tree Processing
+- `optimize_tree`: Toggle tree optimization (default: false)
+- `mat_subset_kwargs`: Additional matUtils extract arguments
+
+### Clade Configuration
+- `clade_column`: Metadata column for clade assignment
+- `min_clade_size`: Minimum samples per clade
+- `clades_to_exclude`: List of clades to skip
+
+### Data Files
+The pipeline uses reference data files in `data/`:
+- `usher_masked_sites.yaml`: UShER masking information for problematic sites
+- `lan_2022/`: RNA secondary structure data from Lan et al. 2022
+
+## Running the Pipeline
+
+You must have an environment with `snakemake` and `conda` available. We recommend using `pixi`:
 
 ```bash
-snakemake -j 4 --use-conda
-```
+# Install dependencies
+pixi install
 
-Where `-j 4` specifies using 4 cores for parallel execution. Adjust based on your system capabilities.
+# Run pipeline with 4 cores
+pixi run snakemake -j 4 --use-conda
+
+# Run with custom input files
+pixi run snakemake -j 4 --use-conda \
+  --config output_dir="results" mat="path/to/tree.pb.gz" metadata="path/to/metadata.tsv.gz"
+```
 
 ## Output Structure
 
-Results are organized by input tree in directories named `results_{mat}`, where `{mat}` is the tree identifier. Each results directory contains:
+Results are organized in the output directory:
 
 - `mat/`: Filtered trees and extracted PCP data
   - `clades/`: Clade-specific trees and PCP files
@@ -65,20 +88,16 @@ Results are organized by input tree in directories named `results_{mat}`, where 
 
 The main output is `mat/all_pcps.csv`, containing the extracted parent-child pairs from all clades with clade annotations for evolutionary analysis.
 
-**NOTE**: Currently, this pipeline is focused on SARS-CoV-2 data but can be adapted for other organisms by modifying the configuration file.
-
 ## Testing and CI
 
 The pipeline includes automated testing via GitHub Actions that runs on every push and pull request. The CI workflow:
 
-1. Sets up the environment using pixi (providing snakemake and conda)
-2. Runs the pipeline on test data in `test_data/`
-3. Validates outputs against expected results
-4. Reports any differences in pipeline behavior
+1. Validates the configuration schema
+2. Verifies required data files exist
+3. Runs the pipeline on test data in `test_data/`
+4. Validates outputs against expected results
 
 ### Running Tests Locally
-
-To run the same tests that CI runs:
 
 ```bash
 # Install dependencies
@@ -86,11 +105,10 @@ pixi install
 
 # Run test pipeline
 pixi run snakemake -j 2 --use-conda \
-  --config mat_trees.test_data.mat=test_data/filtered_tree_raw.pb.gz \
-           mat_trees.test_data.metadata=test_data/filtered_metadata.tsv.gz
+  --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1
 
 # Validate results
-python workflow/scripts/validate_test.py
+pixi run python workflow/scripts/validate_test.py
 ```
 
 The validation checks:
@@ -98,6 +116,3 @@ The validation checks:
 - Number of clades processed
 - Total sequences across all clades
 - Presence of expected output files
-- Checksums of key output files
-
-
