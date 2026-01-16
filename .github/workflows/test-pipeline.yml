@@ -73,7 +73,17 @@ jobs:
         print('Core packages importable!')
         "
 
-    - name: Run test pipeline (existing functionality)
+    - name: Validate Snakefile syntax
+      run: |
+        pixi run snakemake --lint \
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
+
+    - name: Dry run pipeline
+      run: |
+        pixi run snakemake -n --use-conda \
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1
+
+    - name: Run test pipeline
       run: |
         pixi run snakemake -j 2 --use-conda \
           --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1
@@ -82,6 +92,16 @@ jobs:
       run: |
         # Check that snakemake created the conda environments
         ls -la .snakemake/conda/ || echo "Conda envs in default location"
+
+    - name: Verify clade_counts output
+      run: |
+        test -f results_test_data/mat/clade_counts.csv
+        pixi run python -c "
+        import pandas as pd
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        assert 'adequate_sample_counts' in df.columns
+        print(f'Found {len(df)} clades, {df.adequate_sample_counts.sum()} adequate')
+        "
 
     - name: Generate test summary
       run: |
