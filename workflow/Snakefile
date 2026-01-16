@@ -58,7 +58,6 @@ wildcard_constraints:
 default_resources = {
     "mem_mb": 4000,
     "runtime": 60,  # minutes
-    "tmpdir": "/tmp",
 }
 
 
@@ -121,11 +120,17 @@ rule get_mat_tree:
     output:
         mat=os.path.join(config["output_dir"], "mat/mat_tree.pb.gz"),
         metadata=os.path.join(config["output_dir"], "mat/tree_metadata.tsv.gz")
+    log:
+        os.path.join(config["output_dir"], "log/get_mat_tree.log")
+    conda:
+        "envs/default.yml"
     shell:
         """
-        mkdir -p $(dirname {output.mat})
-        ln -sf $(realpath {params.mat}) {output.mat}
-        ln -sf $(realpath {params.metadata}) {output.metadata}
+        (
+            mkdir -p $(dirname {output.mat})
+            ln -sf $(realpath {params.mat}) {output.mat}
+            ln -sf $(realpath {params.metadata}) {output.metadata}
+        ) > {log} 2>&1
         """
 
 
@@ -219,8 +224,12 @@ rule get_ref_fasta:
         url=config["ref_fasta"],
     output:
         ref_fasta=os.path.join(config["output_dir"], "ref/ref.fa"),
+    log:
+        os.path.join(config["output_dir"], "log/get_ref_fasta.log")
+    conda:
+        "envs/default.yml"
     shell:
-        "curl -L {params.url} | gunzip -c > {output.ref_fasta}"
+        "(curl -L {params.url} | gunzip -c > {output.ref_fasta}) 2> {log}"
 
 
 rule get_ref_gtf:
@@ -229,8 +238,12 @@ rule get_ref_gtf:
         url=config["ref_gtf"],
     output:
         ref_gtf=os.path.join(config["output_dir"], "ref/original_ref.gtf"),
+    log:
+        os.path.join(config["output_dir"], "log/get_ref_gtf.log")
+    conda:
+        "envs/default.yml"
     shell:
-        "curl -L {params.url} | gunzip -c > {output.ref_gtf}"
+        "(curl -L {params.url} | gunzip -c > {output.ref_gtf}) 2> {log}"
 
 
 rule edit_ref_gtf:
@@ -241,6 +254,8 @@ rule edit_ref_gtf:
         gtf=os.path.join(config["output_dir"], "ref/edited_ref.gtf"),
     params:
         edits=config.get("add_to_ref_gtf", {}),
+    log:
+        os.path.join(config["output_dir"], "log/edit_ref_gtf.log")
     conda:
         "envs/default.yml"
     script:
@@ -255,6 +270,8 @@ rule ref_coding_sites:
     output:
         csv=os.path.join(config["output_dir"], "ref/coding_sites.csv"),
     threads: get_threads("ref_coding_sites")
+    log:
+        os.path.join(config["output_dir"], "log/ref_coding_sites.log")
     conda:
         "envs/default.yml"
     script:
@@ -276,6 +293,8 @@ checkpoint get_clades:
     params:
         min_clade_size=config.get("min_clade_size", 100),
         clade_column=config.get("clade_column", "Nextstrain_clade")
+    conda:
+        "envs/default.yml"
     shell:
         """
         (
@@ -317,6 +336,8 @@ rule samples_by_clade:
     params:
         clade="{clade}",
         clade_column=config.get("clade_column", "Nextstrain_clade")
+    conda:
+        "envs/default.yml"
     shell:
         """
         (
