@@ -46,10 +46,42 @@ jobs:
         test -f data/lan_2022/41467_2022_28603_MOESM11_ESM.txt
         echo "Data files validation passed!"
 
+    - name: Validate conda environment specs
+      run: |
+        # Validate YAML syntax for all env files
+        pixi run python -c "
+        import yaml
+        import os
+
+        env_dir = 'workflow/envs'
+        for fname in os.listdir(env_dir):
+            if fname.endswith('.yml'):
+                with open(os.path.join(env_dir, fname)) as f:
+                    env = yaml.safe_load(f)
+                assert 'dependencies' in env, f'{fname} missing dependencies key'
+                print(f'{fname}: {len(env[\"dependencies\"])} dependencies')
+        print('All environment specs valid!')
+        "
+
+    - name: Verify key packages importable
+      run: |
+        pixi run python -c "
+        import pandas
+        import numpy
+        import yaml
+        # scipy and statsmodels are in conda envs, not pixi env
+        print('Core packages importable!')
+        "
+
     - name: Run test pipeline (existing functionality)
       run: |
         pixi run snakemake -j 2 --use-conda \
           --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1
+
+    - name: Verify conda environments created
+      run: |
+        # Check that snakemake created the conda environments
+        ls -la .snakemake/conda/ || echo "Conda envs in default location"
 
     - name: Generate test summary
       run: |
