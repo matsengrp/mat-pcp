@@ -1,8 +1,8 @@
+name: bte
 channels:
-  - https://prefix.dev/conda-forge
-  - https://prefix.dev/bioconda
-
+  - conda-forge
+  - bioconda
 dependencies:
-  - python=3.9
-  - bte
-  - pandas
+  - python>=3.9,<3.11  # bte compatibility - requires Python <3.11
+  - bte>=0.1
+  - pandas>=2.0,<3.0
