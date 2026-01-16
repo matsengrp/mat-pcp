@@ -112,22 +112,23 @@ rule all:
 # Stage 1: Data Acquisition and Filtering
 # =============================================================================
 
-rule get_mat_tree:
-    """Link input MAT tree and metadata files."""
+rule link_inputs:
+    """Create symlinks to input MAT tree and metadata files."""
     params:
         mat=config["mat"],
         metadata=config["metadata"],
+        output_dir=config["output_dir"],
     output:
         mat=os.path.join(config["output_dir"], "mat/mat_tree.pb.gz"),
-        metadata=os.path.join(config["output_dir"], "mat/tree_metadata.tsv.gz")
+        metadata=os.path.join(config["output_dir"], "mat/metadata.tsv.gz")
     log:
-        os.path.join(config["output_dir"], "log/get_mat_tree.log")
+        os.path.join(config["output_dir"], "log/link_inputs.log")
     conda:
         "envs/default.yml"
     shell:
         """
         (
-            mkdir -p $(dirname {output.mat})
+            mkdir -p {params.output_dir}/mat
             ln -sf $(realpath {params.mat}) {output.mat}
             ln -sf $(realpath {params.metadata}) {output.metadata}
         ) > {log} 2>&1
@@ -137,7 +138,7 @@ rule get_mat_tree:
 rule filter_metadata:
     """Filter the metadata to remove invalid sequences based on QC criteria."""
     input:
-        metadata=rules.get_mat_tree.output.metadata
+        metadata=rules.link_inputs.output.metadata
     output:
         filtered_metadata=os.path.join(config["output_dir"], "mat/filtered_metadata.tsv.gz")
     params:
@@ -155,7 +156,7 @@ rule filter_metadata:
 rule filter_mat_tree:
     """Extract valid sequences from the MAT tree based on filtered metadata."""
     input:
-        mat_tree=rules.get_mat_tree.output.mat,
+        mat_tree=rules.link_inputs.output.mat,
         filtered_metadata=rules.filter_metadata.output.filtered_metadata
     output:
         filtered_pb=os.path.join(config["output_dir"], "mat/filtered_tree_raw.pb")
