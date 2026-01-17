@@ -176,18 +176,29 @@ rule filter_mat_tree:
         mat_subset_kwargs=config.get("mat_subset_kwargs", "")
     shell:
         """
+        # Extract strain names from filtered metadata
         zcat {input.filtered_metadata} | cut -f1 | sed 1,1d > {log.valid_strains}
+
+        echo "Extracting $(wc -l < {log.valid_strains}) strains from MAT..." > {log.stdout}
+
         (
+            # First extraction: filter to valid strains
             matUtils extract \
                 -i {input.mat_tree} \
                 -s {log.valid_strains} \
                 -o {output.filtered_pb}
 
-            matUtils extract \
-                -i {output.filtered_pb} \
-                {params.mat_subset_kwargs} \
-                -o {output.filtered_pb}
-        ) > {log.stdout} 2> {log.stderr}
+            # Second extraction: apply any additional subset kwargs
+            # This addresses a known issue where double extraction is needed
+            if [ -n "{params.mat_subset_kwargs}" ]; then
+                matUtils extract \
+                    -i {output.filtered_pb} \
+                    {params.mat_subset_kwargs} \
+                    -o {output.filtered_pb}
+            fi
+        ) >> {log.stdout} 2>> {log.stderr}
+
+        echo "Filtered tree created: {output.filtered_pb}" >> {log.stdout}
         """
 
 
@@ -210,12 +221,15 @@ rule optimize_mat_tree:
         "envs/usher.yml"
     shell:
         """
+        echo "Optimizing tree with {threads} threads..." > {log.stdout}
         (
             matOptimize \
                 -i {input.tree} \
                 -o {output.optimized_tree} \
                 -T {threads}
-        ) > {log.stdout} 2> {log.stderr}
+        ) >> {log.stdout} 2>> {log.stderr}
+
+        echo "Optimized tree created: {output.optimized_tree}" >> {log.stdout}
         """
 
 
@@ -230,7 +244,12 @@ rule get_ref_fasta:
     conda:
         "envs/default.yml"
     shell:
-        "(curl -L {params.url} | gunzip -c > {output.ref_fasta}) 2> {log}"
+        """
+        echo "Downloading reference FASTA from {params.url}" > {log}
+        curl -L {params.url} 2>> {log} | gunzip -c > {output.ref_fasta}
+        echo "Reference FASTA saved to {output.ref_fasta}" >> {log}
+        echo "Sequence length: $(grep -v '>' {output.ref_fasta} | tr -d '\\n' | wc -c)" >> {log}
+        """
 
 
 rule get_ref_gtf:
@@ -244,7 +263,12 @@ rule get_ref_gtf:
     conda:
         "envs/default.yml"
     shell:
-        "(curl -L {params.url} | gunzip -c > {output.ref_gtf}) 2> {log}"
+        """
+        echo "Downloading reference GTF from {params.url}" > {log}
+        curl -L {params.url} 2>> {log} | gunzip -c > {output.ref_gtf}
+        echo "Reference GTF saved to {output.ref_gtf}" >> {log}
+        echo "Gene count: $(grep -c 'gene_id' {output.ref_gtf})" >> {log}
+        """
 
 
 rule edit_ref_gtf:
