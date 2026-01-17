@@ -138,12 +138,10 @@ jobs:
       run: |
         # Check FASTA
         test -f results_test_data/ref/ref.fa
-        pixi run python -c "
-        from Bio import SeqIO
-        rec = SeqIO.read('results_test_data/ref/ref.fa', 'fasta')
-        print(f'Reference: {rec.id}, length: {len(rec)} bp')
-        assert len(rec) > 29000, 'Reference too short!'
-        "
+        # Verify FASTA length without BioPython (which is only in conda envs)
+        SEQ_LEN=$(grep -v '>' results_test_data/ref/ref.fa | tr -d '\n' | wc -c)
+        echo "Reference sequence length: $SEQ_LEN bp"
+        [ "$SEQ_LEN" -gt 29000 ] || (echo "Reference too short!" && exit 1)
 
         # Check GTF files
         test -f results_test_data/ref/original_ref.gtf
