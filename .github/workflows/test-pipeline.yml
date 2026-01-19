@@ -329,6 +329,8 @@ jobs:
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
         for clade in adequate[:2]:
+            # Request both mutation translation and sample path outputs
+            print(f'results_test_data/mutations/{clade}_mutations.tsv')
             print(f'results_test_data/mutations/{clade}_nt_mutations.csv')
         " > /tmp/mutation_targets.txt
 
