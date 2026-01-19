@@ -508,6 +508,81 @@ rule clade_founder_fasta:
 
 
 # =============================================================================
+# Stage 3b: Mutation Counting - Setup
+# =============================================================================
+
+rule get_site_mask:
+    """Download and parse problematic sites VCF."""
+    params:
+        url=config["site_mask_vcf"]
+    output:
+        csv=os.path.join(config["output_dir"], "ref/site_mask.csv")
+    log:
+        os.path.join(config["output_dir"], "log/get_site_mask.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/site_mask.py"
+
+
+rule translate_mat:
+    """Get translated mutations from MAT for each clade."""
+    input:
+        mat=rules.mat_clade_subset.output.tree,
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta,
+        ref_gtf=rules.edit_ref_gtf.output.gtf
+    output:
+        tsv=os.path.join(config["output_dir"], "mutations/{clade}_mutations.tsv")
+    log:
+        os.path.join(config["output_dir"], "log/translate_mat_{clade}.log")
+    conda:
+        "envs/usher.yml"
+    shell:
+        """
+        echo "Translating mutations for clade {wildcards.clade}..." > {log}
+        matUtils summary \
+            -i {input.mat} \
+            -g {input.ref_gtf} \
+            -f {input.ref_fasta} \
+            -t {output.tsv} \
+            2>> {log}
+        echo "Output: $(wc -l < {output.tsv}) lines" >> {log}
+        """
+
+
+rule mat_sample_paths:
+    """Get nucleotide mutation paths for samples in each clade."""
+    input:
+        mat=rules.mat_clade_subset.output.tree
+    output:
+        tsv=os.path.join(config["output_dir"], "mutations/{clade}_sample_paths.tsv")
+    log:
+        os.path.join(config["output_dir"], "log/mat_sample_paths_{clade}.log")
+    conda:
+        "envs/usher.yml"
+    shell:
+        """
+        echo "Extracting sample paths for clade {wildcards.clade}..." > {log}
+        matUtils extract -i {input.mat} -S {output.tsv} 2>> {log}
+        echo "Output: $(wc -l < {output.tsv}) lines" >> {log}
+        """
+
+
+rule sample_path_to_nt_mutations:
+    """Convert sample paths to nucleotide mutation counts."""
+    input:
+        tsv=rules.mat_sample_paths.output.tsv
+    output:
+        csv=os.path.join(config["output_dir"], "mutations/{clade}_nt_mutations.csv")
+    log:
+        os.path.join(config["output_dir"], "log/sample_path_to_nt_mutations_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/sample_path_to_nt_mutations.py"
+
+
+# =============================================================================
 # Placeholder rules for future stages (to be implemented in later PRs)
 # =============================================================================
 
