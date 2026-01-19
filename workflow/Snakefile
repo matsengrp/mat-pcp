@@ -95,9 +95,8 @@ results_files = [
     "mat/clade_counts.csv",
     # PR 4.1-4.3: Clade Founders & Mutation Counting
     "mutation_counts/aggregated.csv",
-    "clade_founder_nts.csv",
-    # PR 5.1: Synonymous Rates & Expected Counts
-    "expected_vs_actual_mut_counts.csv",
+    # TODO (PR 5.1): "clade_founder_nts.csv",
+    # TODO (PR 5.1): "expected_vs_actual_mut_counts.csv",
     # TODO (PR 6.2): "spike_codon_sites_to_mask.txt",
     # TODO (PR 6.2): "rates_table.csv",
     # TODO (PR 7.2): "aamut_fitness/all_aamut_fitness.csv",
