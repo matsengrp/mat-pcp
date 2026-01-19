@@ -1,25 +1,36 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+"""Extract parent-child pairs from a mutation-annotated tree."""
+
 from pandas import DataFrame as DF
 from collections import defaultdict
 import bte
 from time import time
-import argparse
 
-parser = argparse.ArgumentParser(description="Write out PCPs from a tree.")
-parser.add_argument("tree_path", help="Path to the tree file")
-# parser.add_argument("coding_site_path", help="Path to the coding site file")
-parser.add_argument("fasta_path", help="Path to the fasta file")
-parser.add_argument("gtf_path", help="Path to the gtf file")
-parser.add_argument("all_pcps_path", help="Path to write out all pcps")
+# Get inputs from snakemake
+tree_path = snakemake.input.tree
+fasta_path = snakemake.input.fasta
+gtf_path = snakemake.input.gtf
+output_path = snakemake.output.pcps
+log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
+
+# Get params
+gene_region = snakemake.params.get("gene_region", None)
+max_nt_mutations = snakemake.params.get("max_nt_mutations", 4)
+max_reversions = snakemake.params.get("max_reversions_to_ref", 1)
+
+
+def log(msg):
+    """Write to log file if available, otherwise print."""
+    if log_file:
+        with open(log_file, "a") as f:
+            f.write(msg + "\n")
+    print(msg)
 
 
 def load_reference_from_fasta(reference_file):
-    """
-    Provided a path to a fasta file containing a single sequence, load that sequence
-    and return it as a string.
-    """
+    """Load single sequence from FASTA file."""
     with open(reference_file, "r") as fh:
-        next(fh)
+        next(fh)  # Skip header
         reference_seq = "".join(map(str.strip, fh))
     return reference_seq
 
@@ -29,13 +40,9 @@ def apply_muts(sequence, muts):
     Return the sequence after applying mutations.
 
     Args:
-        sequence (str): The sequence.
-        muts (dict): A dictionary of mutations. The keys are integers for the site of a
-            mutation (site indices start at 1); the values are strings for the resulting
-            nucleotide at the site. For example, muts[25] = 'G' indicates a mutation
-            resulting in 'G' at site 25 (which is at index 24 of sequence).
+        sequence: The sequence string.
+        muts: Dict of {site: nucleotide} mutations (1-indexed sites).
     """
-
     if len(muts) == 0:
         return sequence
     sites = sorted(muts.keys())
@@ -47,36 +54,51 @@ def apply_muts(sequence, muts):
         substrings.append(seq)
     substrings.append(muts[sites[-1]])
     substrings.append(sequence[sites[-1] :])
-
     return "".join(substrings)
 
 
 class PCPHelper:
-    """Helper class to write out PCP's passing a filter from a tree."""
+    """Helper class to extract PCPs from a tree with filtering."""
 
     def __init__(
-        self,
-        tree_path,
-        fasta_path,
-        gtf_path,
+        self, tree_path, fasta_path, gtf_path, max_nt_mutations=4, max_reversions=1
     ):
-
+        log(f"Loading tree from {tree_path}")
         self.tree = bte.MATree(tree_path)
+        log(f"Translating mutations using {gtf_path}")
         self.translations = defaultdict(list, self.tree.translate(gtf_path, fasta_path))
         self.nodes = self.tree.depth_first_expansion()
         self.int_nodes = [n for n in self.nodes if not n.is_leaf()]
         self.n_nodes = len(self.nodes)
         self.n_int_nodes = len(self.int_nodes)
         self.ref_seq = load_reference_from_fasta(fasta_path)
+        self.max_nt_mutations = max_nt_mutations
+        self.max_reversions = max_reversions
+
+        log(f"Tree has {self.n_nodes} total nodes, {self.n_int_nodes} internal nodes")
 
     def fails_filters(self, nt_muts, codon_muts):
-        fail = len(nt_muts) > 4
-        fail |= len(nt_muts) == 0
-        fail |= sum(self.ref_seq[int(mut[1:-1]) - 1] == mut[-1] for mut in nt_muts) > 1
-        fail |= len({(mut.gene, mut.aa_index) for mut in codon_muts}) < len(codon_muts)
-        return fail
+        """Check if a branch fails QC filters."""
+        # Too many mutations
+        if len(nt_muts) > self.max_nt_mutations:
+            return True
+        # No mutations
+        if len(nt_muts) == 0:
+            return True
+        # Too many reversions to reference
+        n_reversions = sum(
+            self.ref_seq[int(mut[1:-1]) - 1] == mut[-1] for mut in nt_muts
+        )
+        if n_reversions > self.max_reversions:
+            return True
+        # Multiple mutations at same codon position (ambiguous)
+        codon_positions = {(mut.gene, mut.aa_index) for mut in codon_muts}
+        if len(codon_positions) < len(codon_muts):
+            return True
+        return False
 
     def count_mutations_from_parent(self, parent):
+        """Extract PCPs from a parent node."""
         parent_node_haplotype = self.tree.get_haplotype(parent.id)
         p_muts = {int(mut[1:-1]): mut[-1] for mut in parent_node_haplotype}
         parent_seq = apply_muts(self.ref_seq, p_muts)
@@ -88,33 +110,29 @@ class PCPHelper:
             codon_muts = self.translations[node.id]
             if self.fails_filters(nt_muts, codon_muts):
                 continue
-
             n_filtered += 1
             pcps[2].append((node.id, nt_muts))
         return n_filtered, pcps
 
     def count_mutations_on_tree(self):
-        """
-        # Cycle over nodes and record codon mutation counts
-        ...returns int, Counter, Counter
-        """
-        # Use counters rather than a dataframe, since summing together many.
+        """Iterate over all nodes and extract PCPs."""
         n_filtered = 0
         all_pcps = []
-        t0 = -time()
+        t0 = time()
         for i, node in enumerate(self.int_nodes, 1):
             count, pcps = self.count_mutations_from_parent(node)
             n_filtered += count
             if count != 0:
                 all_pcps.append(pcps)
-
             if i % 1000 == 0:
-                print(f"{i} nodes processed in {t0 + time():0.1f} seconds")
+                elapsed = time() - t0
+                log(f"  {i}/{self.n_int_nodes} nodes processed in {elapsed:.1f}s")
         all_pcps_df = self.pcp_list_to_df(all_pcps)
         return n_filtered, all_pcps_df
 
-    # TODO, currently, this slices out only spike.
-    def pcp_list_to_df(self, pcps, gene_slice_boundaries=(21563, 25381)):
+    def pcp_list_to_df(self, pcps, gene_slice_boundaries=None):
+        """Convert PCP list to DataFrame with optional region slicing."""
+
         def mut_dict(muts):
             return {int(mut[1:-1]): mut[-1] for mut in muts}
 
@@ -122,59 +140,72 @@ class PCPHelper:
             return apply_muts(seq, mut_dict(muts))
 
         def slice_seq(seq):
-            """
-            Slice the sequence to get the region of interest.
-            Grab an extra base at the start and end to account for the fact that
-            we need sequence context when computing csp's.
-            """
-            return (
-                seq
-                if gene_slice_boundaries is None
-                else seq[gene_slice_boundaries[0] - 1 : gene_slice_boundaries[1]]
-            )
+            if gene_slice_boundaries is None:
+                return seq
+            return seq[gene_slice_boundaries[0] - 1 : gene_slice_boundaries[1]]
 
         cols = ["parent_name", "child_name", "parent", "child", "branch_length"]
         rows = (
-            (p_id, c_id, slice_seq(p_seq), slice_seq(child_seq(p_seq, c_muts)), len(c_muts))
+            (
+                p_id,
+                c_id,
+                slice_seq(p_seq),
+                slice_seq(child_seq(p_seq, c_muts)),
+                len(c_muts),
+            )
             for (p_id, p_seq, child_entries) in pcps
             for c_id, c_muts in child_entries
         )
-        # TODO, are we not wasting memory by converting to DF instead of writing out to the
-        # csv directly?
-        the_df = DF(rows, columns=cols)
-        return the_df
+        return DF(rows, columns=cols)
 
-    def make_and_write_pcps(
-        self,
-        all_pcps_path,
-    ):
-
-        print("Getting pcp's from tree ...")
+    def make_and_write_pcps(self, output_path, gene_slice_boundaries=None):
+        """Extract and write PCPs to file."""
+        log("Extracting PCPs from tree...")
         n_filtered, all_pcps_df = self.count_mutations_on_tree()
-        print(f"Number of nodes passing filter: {n_filtered}")
-        all_pcps_df.to_csv(all_pcps_path)
+        log(f"Found {n_filtered} branches passing filters")
+        log(f"Total PCPs: {len(all_pcps_df)}")
 
-        return None
+        if gene_slice_boundaries:
+            log(f"Slicing sequences to region {gene_slice_boundaries}")
+
+        all_pcps_df.to_csv(output_path, index=False)
+        log(f"Wrote PCPs to {output_path}")
 
 
-def write_pcps(
-    tree_path,
-    # coding_site_path,
-    fasta_path,
-    gtf_path,
-    all_pcps_path,
-):
-    p1 = tree_path, fasta_path, gtf_path
-    PCPHelper(*p1).make_and_write_pcps(all_pcps_path)
-    return None
+def main():
+    """Main entry point."""
+    log("=" * 60)
+    log("PCP Extraction")
+    log("=" * 60)
+
+    # Convert gene_region dict to tuple if provided
+    gene_slice = None
+    if gene_region is not None:
+        gene_slice = (gene_region["start"], gene_region["end"])
+        log(f"Gene region: {gene_slice[0]}-{gene_slice[1]}")
+
+    log(f"Max mutations: {max_nt_mutations}")
+    log(f"Max reversions: {max_reversions}")
+
+    helper = PCPHelper(
+        tree_path,
+        fasta_path,
+        gtf_path,
+        max_nt_mutations=max_nt_mutations,
+        max_reversions=max_reversions,
+    )
+
+    # Override pcp_list_to_df to use gene slicing
+    original_pcp_list_to_df = helper.pcp_list_to_df
+    helper.pcp_list_to_df = lambda pcps: original_pcp_list_to_df(
+        pcps, gene_slice_boundaries=gene_slice
+    )
+
+    helper.make_and_write_pcps(output_path, gene_slice_boundaries=gene_slice)
+
+    log("=" * 60)
+    log("Done!")
 
 
 if __name__ == "__main__":
-
-    args = parser.parse_args()
-    write_pcps(
-        args.tree_path,
-        args.fasta_path,
-        args.gtf_path,
-        args.all_pcps_path
-    )
+    main()

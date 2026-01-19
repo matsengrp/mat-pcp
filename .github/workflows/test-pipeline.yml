@@ -249,6 +249,73 @@ jobs:
             print('\nAll clade trees present!')
         "
 
+    - name: Verify per-clade PCP files
+      run: |
+        pixi run python -c "
+        import pandas as pd
+        import os
+
+        # Get adequate clades
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+
+        print(f'Checking {len(adequate)} clade PCP files...')
+
+        for clade in adequate:
+            pcp_file = f'results_test_data/mat/clades/{clade}_pcps.csv'
+            if os.path.exists(pcp_file):
+                pcp_df = pd.read_csv(pcp_file)
+                print(f'  {clade}: {len(pcp_df)} PCPs')
+
+                # Validate structure
+                assert 'parent' in pcp_df.columns
+                assert 'child' in pcp_df.columns
+                assert 'branch_length' in pcp_df.columns
+            else:
+                print(f'  {clade}: MISSING')
+        "
+
+    - name: Verify aggregated PCP file
+      run: |
+        test -f results_test_data/mat/all_pcps.csv
+        pixi run python -c "
+        import pandas as pd
+
+        df = pd.read_csv('results_test_data/mat/all_pcps.csv')
+        print(f'Total aggregated PCPs: {len(df)}')
+        print(f'Clades: {sorted(df.clade.unique())}')
+        print(f'PCPs per clade:')
+        print(df.groupby('clade').size())
+
+        # Validate structure
+        assert 'clade' in df.columns
+        assert 'parent' in df.columns
+        assert 'child' in df.columns
+        assert 'branch_length' in df.columns
+
+        # Check that parent and child are sequences
+        assert df['parent'].str.len().min() > 0
+        assert df['child'].str.len().min() > 0
+        "
+
+    - name: Verify PCP sequence lengths
+      run: |
+        pixi run python -c "
+        import pandas as pd
+
+        df = pd.read_csv('results_test_data/mat/all_pcps.csv')
+
+        # Check sequence lengths are consistent
+        parent_lens = df['parent'].str.len()
+        child_lens = df['child'].str.len()
+
+        assert (parent_lens == child_lens).all(), 'Parent/child length mismatch!'
+
+        print(f'Sequence length: {parent_lens.iloc[0]}')
+        print('Sequence lengths are consistent!')
+        "
+
     - name: Generate test summary
       run: |
         pixi run python workflow/scripts/test_summary.py results_test_data > test_summary.txt

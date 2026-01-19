@@ -429,7 +429,9 @@ rule extract_pcps_by_clade:
     output:
         pcps=os.path.join(config["output_dir"], "mat/clades/{clade}_pcps.csv")
     params:
-        gene_region=config.get("pcp_gene_region", None)
+        gene_region=config.get("pcp_gene_region", None),
+        max_nt_mutations=config.get("pcp_max_nt_mutations", 4),
+        max_reversions_to_ref=config.get("pcp_max_reversions_to_ref", 1)
     threads: get_threads("extract_pcps")
     resources:
         mem_mb=8000,
@@ -437,20 +439,11 @@ rule extract_pcps_by_clade:
     benchmark:
         os.path.join(config["output_dir"], "benchmarks/extract_pcps_{clade}.tsv")
     log:
-        stderr=os.path.join(config["output_dir"], "log/extract_pcps_{clade}.stderr"),
-        stdout=os.path.join(config["output_dir"], "log/extract_pcps_{clade}.stdout")
+        os.path.join(config["output_dir"], "log/extract_pcps_{clade}.log")
     conda:
         "envs/bte.yml"
-    shell:
-        """
-        (
-            python workflow/scripts/pcp_from_tree.py \
-                {input.tree} \
-                {input.fasta} \
-                {input.gtf} \
-                {output.pcps}
-        ) > {log.stdout} 2> {log.stderr}
-        """
+    script:
+        "scripts/pcp_from_tree.py"
 
 
 rule aggregate_clade_pcps:
