@@ -29,15 +29,14 @@
   "pcp_summary": {
     "total_pcps": 1924,
     "columns": [
-      "Unnamed: 0",
+      "clade",
       "parent_name",
       "child_name",
       "parent",
       "child",
-      "branch_length",
-      "clade"
+      "branch_length"
     ],
-    "num_columns": 7,
+    "num_columns": 6,
     "unique_child_clades": null,
     "unique_parent_clades": null,
     "first_5_child_nodes": null
