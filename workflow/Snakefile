@@ -95,8 +95,9 @@ results_files = [
     "mat/clade_counts.csv",
     # PR 4.1-4.3: Clade Founders & Mutation Counting
     "mutation_counts/aggregated.csv",
-    # TODO (PR 5.1): "clade_founder_nts.csv",
-    # TODO (PR 5.1): "expected_vs_actual_mut_counts.csv",
+    "clade_founder_nts.csv",
+    # PR 5.1: Synonymous Rates & Expected Counts
+    "expected_vs_actual_mut_counts.csv",
     # TODO (PR 6.2): "spike_codon_sites_to_mask.txt",
     # TODO (PR 6.2): "rates_table.csv",
     # TODO (PR 7.2): "aamut_fitness/all_aamut_fitness.csv",
@@ -633,8 +634,103 @@ rule aggregate_mutation_counts:
 
 
 # =============================================================================
+# Stage 3d: Clade Founder Aggregation
+# =============================================================================
+
+rule clade_founder_nts:
+    """Get nucleotide at each coding site for all clade founders."""
+    input:
+        coding_sites=rules.ref_coding_sites.output.csv,
+        fastas=lambda wc: expand(
+            os.path.join(config["output_dir"], "clade_founders/{clade}.fa"),
+            clade=clades_w_adequate_counts(wc)
+        )
+    output:
+        csv=os.path.join(config["output_dir"], "clade_founder_nts.csv")
+    log:
+        os.path.join(config["output_dir"], "log/clade_founder_nts.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/clade_founder_nts.py"
+
+
+rule aggregate_mutations_to_exclude:
+    """Compile comprehensive exclusion list from all sources."""
+    input:
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta,
+        site_mask=rules.get_site_mask.output.csv,
+        usher_masked_sites=config["usher_masked_sites"],
+        clade_counts=rules.get_clades.output.clade_counts
+    output:
+        csv=os.path.join(config["output_dir"], "mutations_to_exclude.csv")
+    params:
+        site_include_range=config["site_include_range"],
+        sites_to_exclude=config.get("sites_to_exclude", []),
+        clade_column=config.get("clade_column", "Nextstrain_clade")
+    log:
+        os.path.join(config["output_dir"], "log/aggregate_mutations_to_exclude.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/aggregate_mutations_to_exclude.py"
+
+
+# =============================================================================
+# Stage 4: Expected Mutation Counts
+# =============================================================================
+
+rule synonymous_mut_rates:
+    """Compute synonymous mutation rates and spectra by clade."""
+    input:
+        mutation_counts_csv=rules.aggregate_mutation_counts.output.csv,
+        clade_founder_nts_csv=rules.clade_founder_nts.output.csv
+    output:
+        rates_by_clade=os.path.join(config["output_dir"], "synonymous_mut_rates/rates_by_clade.csv")
+    params:
+        synonymous_spectra_min_counts=config.get("synonymous_spectra_min_counts", 5000)
+    log:
+        os.path.join(config["output_dir"], "log/synonymous_mut_rates.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/synonymous_mut_rates.py"
+
+
+rule expected_mut_counts:
+    """Compute expected mutation counts from synonymous rates."""
+    input:
+        rates_by_clade=rules.synonymous_mut_rates.output.rates_by_clade,
+        clade_founder_nts_csv=rules.clade_founder_nts.output.csv
+    output:
+        expected_counts=os.path.join(config["output_dir"], "expected_mut_counts/expected_counts.csv")
+    log:
+        os.path.join(config["output_dir"], "log/expected_mut_counts.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/expected_mut_counts.py"
+
+
+rule merge_expected_and_actual_counts:
+    """Merge expected and actual mutation counts with exclusion annotations."""
+    input:
+        expected=rules.expected_mut_counts.output.expected_counts,
+        actual=rules.aggregate_mutation_counts.output.csv,
+        muts_to_exclude=rules.aggregate_mutations_to_exclude.output.csv
+    output:
+        csv=os.path.join(config["output_dir"], "expected_vs_actual_mut_counts.csv")
+    log:
+        os.path.join(config["output_dir"], "log/merge_expected_and_actual_counts.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/merge_expected_and_actual_counts.py"
+
+
+# =============================================================================
 # Placeholder rules for future stages (to be implemented in later PRs)
 # =============================================================================
 
-# Stage 4-8 rules will be added in subsequent PRs
+# Stage 5-8 rules will be added in subsequent PRs
 # See unified-mat-pipeline-spec.md for full specification

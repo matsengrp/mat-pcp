@@ -512,6 +512,65 @@ jobs:
             print(f'  {mask_name}: {len(clades)} clades, {len(sites)} sites')
         "
 
+    - name: Verify clade founder nucleotides
+      run: |
+        test -f results_test_data/clade_founder_nts.csv
+        pixi run python -c "
+        import pandas as pd
+
+        nts = pd.read_csv('results_test_data/clade_founder_nts.csv')
+        print(f'Clade founder nucleotides: {len(nts)} entries')
+
+        # Check columns
+        assert 'clade' in nts.columns
+        assert 'site' in nts.columns
+        assert 'nt' in nts.columns
+
+        # Check clade distribution
+        print(f'Clades: {sorted(nts[\"clade\"].unique())}')
+        print(f'Sites per clade: {nts.groupby(\"clade\").size().mean():.0f} avg')
+        "
+
+    - name: Verify synonymous mutation rates
+      run: |
+        test -f results_test_data/synonymous_mut_rates/rates_by_clade.csv
+        pixi run python -c "
+        import pandas as pd
+
+        rates = pd.read_csv('results_test_data/synonymous_mut_rates/rates_by_clade.csv')
+        print(f'Synonymous rate entries: {len(rates)}')
+
+        # Check columns
+        assert 'clade' in rates.columns
+        assert 'mut_type' in rates.columns
+
+        # Check clade distribution
+        print(f'Clades with rates: {sorted(rates[\"clade\"].unique())}')
+
+        # Check rate is computed for entries with sufficient counts
+        has_rate = rates['rate'].notna()
+        print(f'Entries with computed rates: {has_rate.sum()}')
+        "
+
+    - name: Verify expected vs actual counts
+      run: |
+        test -f results_test_data/expected_vs_actual_mut_counts.csv
+        pixi run python -c "
+        import pandas as pd
+
+        df = pd.read_csv('results_test_data/expected_vs_actual_mut_counts.csv')
+        print(f'Expected vs actual entries: {len(df)}')
+
+        # Check columns
+        assert 'clade' in df.columns
+        assert 'nt_mutation' in df.columns
+        assert 'expected' in df.columns or 'actual_count' in df.columns
+
+        # Summary
+        print(f'Clades: {sorted(df[\"clade\"].unique())}')
+        print(f'Columns: {list(df.columns)}')
+        "
+
     - name: Generate test summary
       run: |
         pixi run python workflow/scripts/test_summary.py results_test_data > test_summary.txt
