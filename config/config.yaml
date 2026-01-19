@@ -73,6 +73,7 @@ roemer_nextstrain_to_pango:
 max_nt_mutations: 4
 max_reversions_to_ref: 1
 max_reversions_to_clade_founder: 1
+exclude_ref_to_founder_muts: true  # Exclude mutations from ref to clade founder
 
 site_include_range:
   start: 266   # Start of ORF1ab

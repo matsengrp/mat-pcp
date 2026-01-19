@@ -93,8 +93,10 @@ results_files = [
     "mat/filtered_metadata.tsv.gz",
     "mat/all_pcps.csv",
     "mat/clade_counts.csv",
+    # PR 4.1-4.3: Clade Founders & Mutation Counting
+    "mutation_counts/aggregated.csv",
+    # TODO (PR 5.1): "clade_founder_nts.csv",
     # TODO (PR 5.1): "expected_vs_actual_mut_counts.csv",
-    # TODO (PR 4.3): "clade_founder_nts.csv",
     # TODO (PR 6.2): "spike_codon_sites_to_mask.txt",
     # TODO (PR 6.2): "rates_table.csv",
     # TODO (PR 7.2): "aamut_fitness/all_aamut_fitness.csv",
@@ -580,6 +582,54 @@ rule sample_path_to_nt_mutations:
         "envs/default.yml"
     script:
         "scripts/sample_path_to_nt_mutations.py"
+
+
+# =============================================================================
+# Stage 3c: Mutation Counting - Counting
+# =============================================================================
+
+rule count_mutations_clade:
+    """Count mutations from matUtils translated mutations for a clade."""
+    input:
+        tsv=rules.translate_mat.output.tsv,
+        nt_mut_csv=rules.sample_path_to_nt_mutations.output.csv,
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta,
+        usher_masked_sites=config["usher_masked_sites"],
+        site_mask=rules.get_site_mask.output.csv,
+        clade_founder_fasta=rules.clade_founder_fasta.output.fasta,
+        ref_to_founder_muts=rules.clade_founder_fasta.output.muts
+    output:
+        csv=os.path.join(config["output_dir"], "mutation_counts/{clade}.csv")
+    params:
+        max_nt_mutations=config.get("max_nt_mutations", 4),
+        max_reversions_to_ref=config.get("max_reversions_to_ref", 1),
+        max_reversions_to_clade_founder=config.get("max_reversions_to_clade_founder", 1),
+        sites_to_exclude=config.get("sites_to_exclude", []),
+        site_include_range=config.get("site_include_range", {"start": 266, "end": 29674}),
+        exclude_ref_to_founder_muts=config.get("exclude_ref_to_founder_muts", True)
+    log:
+        os.path.join(config["output_dir"], "log/count_mutations_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/count_mutations.py"
+
+
+rule aggregate_mutation_counts:
+    """Aggregate mutation counts across all clades."""
+    input:
+        counts=lambda wc: expand(
+            os.path.join(config["output_dir"], "mutation_counts/{clade}.csv"),
+            clade=clades_w_adequate_counts(wc)
+        )
+    output:
+        csv=os.path.join(config["output_dir"], "mutation_counts/aggregated.csv")
+    log:
+        os.path.join(config["output_dir"], "log/aggregate_mutation_counts.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/aggregate_mutation_counts.py"
 
 
 # =============================================================================

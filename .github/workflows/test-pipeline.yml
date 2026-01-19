@@ -446,6 +446,72 @@ jobs:
         print('Sample paths verification passed!')
         "
 
+    - name: Verify mutation counting
+      run: |
+        pixi run python -c "
+        import pandas as pd
+        import os
+
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+
+        print(f'Checking mutation counts for {len(adequate)} clades...')
+
+        for clade in adequate[:3]:  # Check first 3
+            csv_file = f'results_test_data/mutation_counts/{clade}.csv'
+            if os.path.exists(csv_file):
+                counts_df = pd.read_csv(csv_file)
+                print(f'  {clade}: {len(counts_df)} unique mutations')
+
+                # Check expected columns
+                required_cols = ['nt_mutation', 'nt_site', 'count', 'synonymous', 'exclude']
+                for col in required_cols:
+                    assert col in counts_df.columns, f'Missing column: {col}'
+
+                # Check some mutations are counted
+                if len(counts_df) > 0:
+                    print(f'    Total count: {counts_df[\"count\"].sum()}')
+                    print(f'    Synonymous: {counts_df[\"synonymous\"].sum()}')
+            else:
+                print(f'  {clade}: MISSING')
+        "
+
+    - name: Verify aggregated mutation counts
+      run: |
+        test -f results_test_data/mutation_counts/aggregated.csv
+        pixi run python -c "
+        import pandas as pd
+
+        agg = pd.read_csv('results_test_data/mutation_counts/aggregated.csv')
+        print(f'Aggregated mutations: {len(agg)}')
+
+        # Check structure
+        assert 'clade' in agg.columns, 'Missing clade column'
+        assert 'nt_mutation' in agg.columns, 'Missing nt_mutation column'
+        assert 'count' in agg.columns, 'Missing count column'
+
+        # Check clade distribution
+        print(f'Clades in aggregated: {sorted(agg[\"clade\"].unique())}')
+        print(f'Total mutations across all clades: {agg[\"count\"].sum()}')
+        "
+
+    - name: Verify UShER masked sites
+      run: |
+        test -f data/usher_masked_sites.yaml
+        pixi run python -c "
+        import yaml
+
+        with open('data/usher_masked_sites.yaml') as f:
+            masks = yaml.safe_load(f)
+
+        print(f'UShER masks defined: {list(masks.keys())}')
+        for mask_name, mask_data in masks.items():
+            clades = mask_data.get('clades', [])
+            sites = mask_data.get('sites', [])
+            print(f'  {mask_name}: {len(clades)} clades, {len(sites)} sites')
+        "
+
     - name: Generate test summary
       run: |
         pixi run python workflow/scripts/test_summary.py results_test_data > test_summary.txt
