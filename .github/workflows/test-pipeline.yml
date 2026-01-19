@@ -316,8 +316,30 @@ jobs:
         print('Sequence lengths are consistent!')
         "
 
+    - name: Generate clade founder files
+      run: |
+        # Build clade founder JSONs and FASTA files for first 3 clades
+        pixi run python -c "
+        import pandas as pd
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+        # Print first 3 clades for snakemake targets
+        for clade in adequate[:3]:
+            print(f'results_test_data/clade_founders/{clade}.fa')
+        " > /tmp/founder_targets.txt
+
+        # Build founder files for first 3 clades
+        pixi run snakemake $(cat /tmp/founder_targets.txt | tr '\n' ' ') \
+          -j 2 --use-conda \
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
+
     - name: Verify clade founder files
       run: |
+        # Check JSON downloads
+        test -f results_test_data/clade_founders/clade_founders_neher.json
+        test -f results_test_data/clade_founders/clade_founders_roemer.json
+
         pixi run python -c "
         import pandas as pd
         import os
@@ -327,25 +349,44 @@ jobs:
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
-        print(f'Checking clade founders for {len(adequate)} clades...')
+        print(f'Checking founder files for first 3 of {len(adequate)} clades...')
 
-        for clade in adequate[:3]:  # Check first 3
-            fasta_file = f'results_test_data/founders/{clade}_founder.fa'
-            muts_file = f'results_test_data/founders/{clade}_founder_muts.csv'
+        for clade in adequate[:3]:  # Check first 3 clades (same as we built)
+            fasta_file = f'results_test_data/clade_founders/{clade}.fa'
+            muts_file = f'results_test_data/clade_founders/{clade}_ref_to_founder_muts.csv'
 
             if os.path.exists(fasta_file):
-                # Check FASTA has content
-                with open(fasta_file) as f:
-                    content = f.read()
-                lines = content.strip().split('\n')
-                assert lines[0].startswith('>'), f'{clade} FASTA missing header'
-                seq_len = sum(len(l) for l in lines[1:])
-                print(f'  {clade}: FASTA {seq_len} bp')
-
-            if os.path.exists(muts_file):
-                muts_df = pd.read_csv(muts_file)
-                print(f'  {clade}: {len(muts_df)} founder mutations')
+                # Check FASTA file size
+                size = os.path.getsize(fasta_file)
+                muts = pd.read_csv(muts_file)
+                print(f'  {clade}: {size} bytes, {len(muts)} mutations')
+            else:
+                print(f'  {clade}: MISSING - this is an error!')
+                exit(1)
+        print('Clade founder verification passed!')
         "
+
+    - name: Generate site mask and mutation files
+      run: |
+        # Build site mask
+        pixi run snakemake -j 1 --use-conda results_test_data/ref/site_mask.csv \
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
+
+        # Build mutation translation and sample paths for first 2 clades
+        pixi run python -c "
+        import pandas as pd
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+        for clade in adequate[:2]:
+            # Request both mutation translation and sample path outputs
+            print(f'results_test_data/mutations/{clade}_mutations.tsv')
+            print(f'results_test_data/mutations/{clade}_nt_mutations.csv')
+        " > /tmp/mutation_targets.txt
+
+        pixi run snakemake $(cat /tmp/mutation_targets.txt | tr '\n' ' ') \
+          -j 2 --use-conda \
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
 
     - name: Verify site mask
       run: |
@@ -356,6 +397,7 @@ jobs:
         print(f'Masked sites: {len(df)}')
         assert 'site' in df.columns
         assert len(df) > 0, 'No masked sites found!'
+        print('Site mask verification passed!')
         "
 
     - name: Verify mutation translation
@@ -368,11 +410,16 @@ jobs:
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
-        for clade in adequate[:3]:  # Check first 3
+        print('Checking mutation translation files...')
+        for clade in adequate[:2]:  # Check first 2
             tsv_file = f'results_test_data/mutations/{clade}_mutations.tsv'
             if os.path.exists(tsv_file):
                 mut_df = pd.read_csv(tsv_file, sep='\t')
-                print(f'{clade}: {len(mut_df)} translated mutations')
+                print(f'  {clade}: {len(mut_df)} translated mutations')
+            else:
+                print(f'  {clade}: MISSING - this is an error!')
+                exit(1)
+        print('Mutation translation verification passed!')
         "
 
     - name: Verify sample paths
@@ -385,11 +432,18 @@ jobs:
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
-        for clade in adequate[:3]:  # Check first 3
+        print('Checking sample path files...')
+        for clade in adequate[:2]:  # Check first 2
             csv_file = f'results_test_data/mutations/{clade}_nt_mutations.csv'
             if os.path.exists(csv_file):
                 nt_df = pd.read_csv(csv_file)
-                print(f'{clade}: {len(nt_df)} nodes with mutations')
+                print(f'  {clade}: {len(nt_df)} nodes with mutations')
+                assert 'node_id' in nt_df.columns, 'Missing node_id column'
+                assert 'nt_mutations' in nt_df.columns, 'Missing nt_mutations column'
+            else:
+                print(f'  {clade}: MISSING - this is an error!')
+                exit(1)
+        print('Sample paths verification passed!')
         "
 
     - name: Verify mutation counting
