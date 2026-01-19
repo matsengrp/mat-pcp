@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Parse problematic sites VCF to extract site positions."""
 
-import os
-import tempfile
-import urllib.request
-
 import pandas as pd
+import urllib.request
+import tempfile
+import os
 
 # Get params from snakemake
 url = snakemake.params.get("url")

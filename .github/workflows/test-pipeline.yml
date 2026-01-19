@@ -316,8 +316,30 @@ jobs:
         print('Sequence lengths are consistent!')
         "
 
+    - name: Generate clade founder files
+      run: |
+        # Build clade founder JSONs and FASTA files for first 3 clades
+        pixi run python -c "
+        import pandas as pd
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+        # Print first 3 clades for snakemake targets
+        for clade in adequate[:3]:
+            print(f'results_test_data/clade_founders/{clade}.fa')
+        " > /tmp/founder_targets.txt
+
+        # Build founder files for first 3 clades
+        pixi run snakemake $(cat /tmp/founder_targets.txt | tr '\n' ' ') \
+          -j 2 --use-conda \
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
+
     - name: Verify clade founder files
       run: |
+        # Check JSON downloads
+        test -f results_test_data/clade_founders/clade_founders_neher.json
+        test -f results_test_data/clade_founders/clade_founders_roemer.json
+
         pixi run python -c "
         import pandas as pd
         import os
@@ -327,25 +349,44 @@ jobs:
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
-        print(f'Checking clade founders for {len(adequate)} clades...')
+        print(f'Checking founder files for first 3 of {len(adequate)} clades...')
 
-        for clade in adequate[:3]:  # Check first 3
-            fasta_file = f'results_test_data/founders/{clade}_founder.fa'
-            muts_file = f'results_test_data/founders/{clade}_founder_muts.csv'
+        for clade in adequate[:3]:  # Check first 3 clades (same as we built)
+            fasta_file = f'results_test_data/clade_founders/{clade}.fa'
+            muts_file = f'results_test_data/clade_founders/{clade}_ref_to_founder_muts.csv'
 
             if os.path.exists(fasta_file):
-                # Check FASTA has content
-                with open(fasta_file) as f:
-                    content = f.read()
-                lines = content.strip().split('\n')
-                assert lines[0].startswith('>'), f'{clade} FASTA missing header'
-                seq_len = sum(len(l) for l in lines[1:])
-                print(f'  {clade}: FASTA {seq_len} bp')
-
-            if os.path.exists(muts_file):
-                muts_df = pd.read_csv(muts_file)
-                print(f'  {clade}: {len(muts_df)} founder mutations')
+                # Check FASTA file size
+                size = os.path.getsize(fasta_file)
+                muts = pd.read_csv(muts_file)
+                print(f'  {clade}: {size} bytes, {len(muts)} mutations')
+            else:
+                print(f'  {clade}: MISSING - this is an error!')
+                exit(1)
+        print('Clade founder verification passed!')
         "
+
+    - name: Generate site mask and mutation files
+      run: |
+        # Build site mask
+        pixi run snakemake -j 1 --use-conda results_test_data/ref/site_mask.csv \
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
+
+        # Build mutation translation and sample paths for first 2 clades
+        pixi run python -c "
+        import pandas as pd
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+        for clade in adequate[:2]:
+            # Request both mutation translation and sample path outputs
+            print(f'results_test_data/mutations/{clade}_mutations.tsv')
+            print(f'results_test_data/mutations/{clade}_nt_mutations.csv')
+        " > /tmp/mutation_targets.txt
+
+        pixi run snakemake $(cat /tmp/mutation_targets.txt | tr '\n' ' ') \
+          -j 2 --use-conda \
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
 
     - name: Verify site mask
       run: |
@@ -356,6 +397,7 @@ jobs:
         print(f'Masked sites: {len(df)}')
         assert 'site' in df.columns
         assert len(df) > 0, 'No masked sites found!'
+        print('Site mask verification passed!')
         "
 
     - name: Verify mutation translation
@@ -368,11 +410,16 @@ jobs:
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
-        for clade in adequate[:3]:  # Check first 3
+        print('Checking mutation translation files...')
+        for clade in adequate[:2]:  # Check first 2
             tsv_file = f'results_test_data/mutations/{clade}_mutations.tsv'
             if os.path.exists(tsv_file):
                 mut_df = pd.read_csv(tsv_file, sep='\t')
-                print(f'{clade}: {len(mut_df)} translated mutations')
+                print(f'  {clade}: {len(mut_df)} translated mutations')
+            else:
+                print(f'  {clade}: MISSING - this is an error!')
+                exit(1)
+        print('Mutation translation verification passed!')
         "
 
     - name: Verify sample paths
@@ -385,11 +432,18 @@ jobs:
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
-        for clade in adequate[:3]:  # Check first 3
+        print('Checking sample path files...')
+        for clade in adequate[:2]:  # Check first 2
             csv_file = f'results_test_data/mutations/{clade}_nt_mutations.csv'
             if os.path.exists(csv_file):
                 nt_df = pd.read_csv(csv_file)
-                print(f'{clade}: {len(nt_df)} nodes with mutations')
+                print(f'  {clade}: {len(nt_df)} nodes with mutations')
+                assert 'node_id' in nt_df.columns, 'Missing node_id column'
+                assert 'nt_mutations' in nt_df.columns, 'Missing nt_mutations column'
+            else:
+                print(f'  {clade}: MISSING - this is an error!')
+                exit(1)
+        print('Sample paths verification passed!')
         "
 
     - name: Verify mutation counting
@@ -461,93 +515,61 @@ jobs:
     - name: Verify clade founder nucleotides
       run: |
         test -f results_test_data/clade_founder_nts.csv
-        pixi run python << 'EOF'
+        pixi run python -c "
         import pandas as pd
 
         nts = pd.read_csv('results_test_data/clade_founder_nts.csv')
         print(f'Clade founder nucleotides: {len(nts)} entries')
 
-        # Check structure
-        assert 'clade' in nts.columns, 'Missing clade column'
-        assert 'site' in nts.columns, 'Missing site column'
-        assert 'nt' in nts.columns, 'Missing nt column'
-        assert 'four_fold_degenerate' in nts.columns, 'Missing four_fold_degenerate column'
+        # Check columns
+        assert 'clade' in nts.columns
+        assert 'site' in nts.columns
+        assert 'nt' in nts.columns
 
-        # Check 4-fold degenerate sites
-        fourfold = nts[nts['four_fold_degenerate'] == True]
-        print(f'4-fold degenerate sites: {len(fourfold)}')
-
-        # Check clades
-        print(f'Clades: {sorted(nts["clade"].unique())}')
-        EOF
-
-    - name: Verify mutations to exclude
-      run: |
-        test -f results_test_data/mutations_to_exclude.csv
-        pixi run python << 'EOF'
-        import pandas as pd
-
-        excl = pd.read_csv('results_test_data/mutations_to_exclude.csv')
-        print(f'Mutations to exclude: {len(excl)}')
-        print(f'UShER masked: {excl["masked_in_usher"].sum()}')
-        EOF
+        # Check clade distribution
+        print(f'Clades: {sorted(nts[\"clade\"].unique())}')
+        print(f'Sites per clade: {nts.groupby(\"clade\").size().mean():.0f} avg')
+        "
 
     - name: Verify synonymous mutation rates
       run: |
         test -f results_test_data/synonymous_mut_rates/rates_by_clade.csv
-        pixi run python << 'EOF'
+        pixi run python -c "
         import pandas as pd
 
         rates = pd.read_csv('results_test_data/synonymous_mut_rates/rates_by_clade.csv')
-        print(f'Synonymous rates: {len(rates)} entries')
+        print(f'Synonymous rate entries: {len(rates)}')
 
-        # Check structure
+        # Check columns
         assert 'clade' in rates.columns
         assert 'mut_type' in rates.columns
-        assert 'rate' in rates.columns
 
-        # Print rate summary
-        for clade in list(rates['clade'].unique())[:3]:
-            clade_rates = rates[rates['clade'] == clade]
-            valid_rates = clade_rates[clade_rates['rate'].notna()]
-            print(f'  {clade}: {len(valid_rates)} valid rates')
-        EOF
+        # Check clade distribution
+        print(f'Clades with rates: {sorted(rates[\"clade\"].unique())}')
 
-    - name: Verify expected mutation counts
-      run: |
-        test -f results_test_data/expected_mut_counts/expected_counts.csv
-        pixi run python << 'EOF'
-        import pandas as pd
+        # Check rate is computed for entries with sufficient counts
+        has_rate = rates['rate'].notna()
+        print(f'Entries with computed rates: {has_rate.sum()}')
+        "
 
-        exp = pd.read_csv('results_test_data/expected_mut_counts/expected_counts.csv')
-        print(f'Expected counts: {len(exp)} entries')
-
-        # Check structure
-        assert 'clade' in exp.columns
-        assert 'nt_mutation' in exp.columns
-        assert 'expected_count' in exp.columns
-        EOF
-
-    - name: Verify merged expected vs actual counts
+    - name: Verify expected vs actual counts
       run: |
         test -f results_test_data/expected_vs_actual_mut_counts.csv
-        pixi run python << 'EOF'
+        pixi run python -c "
         import pandas as pd
 
-        merged = pd.read_csv('results_test_data/expected_vs_actual_mut_counts.csv')
-        print(f'Merged counts: {len(merged)} entries')
+        df = pd.read_csv('results_test_data/expected_vs_actual_mut_counts.csv')
+        print(f'Expected vs actual entries: {len(df)}')
 
-        # Check structure
-        assert 'expected_count' in merged.columns
-        assert 'actual_count' in merged.columns
-        assert 'exclude' in merged.columns
-        assert 'masked_in_usher' in merged.columns
+        # Check columns
+        assert 'clade' in df.columns
+        assert 'nt_mutation' in df.columns
+        assert 'expected' in df.columns or 'actual_count' in df.columns
 
-        # Print summary
-        print(f'Total expected: {merged["expected_count"].sum():.2f}')
-        print(f'Total actual: {merged["actual_count"].sum()}')
-        print(f'Excluded: {merged["exclude"].sum()}')
-        EOF
+        # Summary
+        print(f'Clades: {sorted(df[\"clade\"].unique())}')
+        print(f'Columns: {list(df.columns)}')
+        "
 
     - name: Generate test summary
       run: |

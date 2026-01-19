@@ -586,7 +586,7 @@ rule sample_path_to_nt_mutations:
 
 
 # =============================================================================
-# Stage 3b: Mutation Counting - Counting
+# Stage 3c: Mutation Counting - Counting
 # =============================================================================
 
 rule count_mutations_clade:
@@ -634,7 +634,7 @@ rule aggregate_mutation_counts:
 
 
 # =============================================================================
-# Stage 3c: Clade Founder Aggregation
+# Stage 3d: Clade Founder Aggregation
 # =============================================================================
 
 rule clade_founder_nts:
