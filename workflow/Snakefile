@@ -323,6 +323,7 @@ checkpoint get_clades:
     shell:
         """
         (
+            echo "Extracting clade counts from metadata..."
             zcat {input.metadata} | \
             awk -F'\\t' 'NR==1 {{for(i=1;i<=NF;i++) if($i=="{params.clade_column}") col=i}}
                         NR>1 && col {{print $col}}' | \
@@ -331,6 +332,12 @@ checkpoint get_clades:
                  {{gsub(/^ +/, "", $0); split($0, a, " ");
                    adequate=(a[1]>=min?"true":"false");
                    print a[2]","a[1]","adequate}}' > {output.clade_counts}
+
+            echo "Clade counts summary:"
+            cat {output.clade_counts}
+            echo ""
+            echo "Clades with adequate counts (>= {params.min_clade_size}):"
+            grep ",true" {output.clade_counts} | wc -l
         ) > {log} 2>&1
         """
 
@@ -366,10 +373,13 @@ rule samples_by_clade:
     shell:
         """
         (
+            echo "Extracting samples for clade: {params.clade}"
             zcat {input.metadata} | \
             awk -F'\\t' -v clade="{params.clade}" \
             'NR==1 {{for(i=1;i<=NF;i++) {{if($i=="strain") strcol=i; if($i=="{params.clade_column}") cladecol=i}}}}
              NR>1 && $cladecol ~ "^"clade"( |$)" {{print $strcol}}' > {output.samples}
+
+            echo "Found $(wc -l < {output.samples}) samples for clade {params.clade}"
         ) > {log} 2>&1
         """
 
@@ -394,12 +404,19 @@ rule mat_clade_subset:
         "envs/usher.yml"
     shell:
         """
+        echo "Extracting clade subtree for {wildcards.clade}..." > {log.stdout}
+        echo "Input tree: {input.tree}" >> {log.stdout}
+        echo "Samples file: {input.samples}" >> {log.stdout}
+        echo "Sample count: $(wc -l < {input.samples})" >> {log.stdout}
+
         (
             matUtils extract \
                 -i {input.tree} \
                 -s {input.samples} \
                 -o {output.tree}
-        ) > {log.stdout} 2> {log.stderr}
+        ) >> {log.stdout} 2>> {log.stderr}
+
+        echo "Clade subtree created: {output.tree}" >> {log.stdout}
         """
 
 

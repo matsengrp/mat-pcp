@@ -180,14 +180,73 @@ jobs:
         # Check that snakemake created the conda environments
         ls -la .snakemake/conda/ || echo "Conda envs in default location"
 
-    - name: Verify clade_counts output
+    - name: Verify clade counts checkpoint
       run: |
         test -f results_test_data/mat/clade_counts.csv
         pixi run python -c "
         import pandas as pd
         df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        print(f'Total clades: {len(df)}')
+        print(f'Adequate clades: {df.adequate_sample_counts.sum()}')
+
+        # Check structure
+        assert 'count' in df.columns
         assert 'adequate_sample_counts' in df.columns
-        print(f'Found {len(df)} clades, {df.adequate_sample_counts.sum()} adequate')
+
+        # Print clade summary
+        print('\nClade counts:')
+        print(df.sort_values('count', ascending=False).head(10))
+        "
+
+    - name: Verify per-clade sample files
+      run: |
+        pixi run python -c "
+        import pandas as pd
+        import os
+
+        # Get adequate clades
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+
+        print(f'Checking {len(adequate)} adequate clades...')
+
+        for clade in adequate:
+            samples_file = f'results_test_data/mat/clades/{clade}_samples.txt'
+            if os.path.exists(samples_file):
+                with open(samples_file) as f:
+                    count = len(f.readlines())
+                print(f'  {clade}: {count} samples')
+            else:
+                print(f'  {clade}: MISSING')
+        "
+
+    - name: Verify per-clade tree files
+      run: |
+        pixi run python -c "
+        import pandas as pd
+        import os
+
+        # Get adequate clades
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+
+        print(f'Checking {len(adequate)} clade trees...')
+
+        missing = []
+        for clade in adequate:
+            tree_file = f'results_test_data/mat/clades/{clade}_tree.pb'
+            if os.path.exists(tree_file):
+                size = os.path.getsize(tree_file)
+                print(f'  {clade}: {size} bytes')
+            else:
+                missing.append(clade)
+
+        if missing:
+            print(f'\nMissing trees: {missing}')
+        else:
+            print('\nAll clade trees present!')
         "
 
     - name: Generate test summary
