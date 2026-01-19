@@ -464,6 +464,50 @@ rule aggregate_clade_pcps:
 
 
 # =============================================================================
+# Stage 3a: Clade Founders
+# =============================================================================
+
+rule clade_founder_jsons:
+    """Download clade founder JSON files from external sources."""
+    params:
+        neher_json=config["clade_founders"]["neher_json"],
+        roemer_json=config["clade_founders"]["roemer_json"]
+    output:
+        neher_json=os.path.join(config["output_dir"], "clade_founders/clade_founders_neher.json"),
+        roemer_json=os.path.join(config["output_dir"], "clade_founders/clade_founders_roemer.json")
+    log:
+        os.path.join(config["output_dir"], "log/clade_founder_jsons.log")
+    shell:
+        """
+        mkdir -p $(dirname {output.neher_json})
+        echo "Downloading Neher clade founders..." > {log}
+        curl -L {params.neher_json} > {output.neher_json} 2>> {log}
+        echo "Downloading Roemer clade founders..." >> {log}
+        curl -L {params.roemer_json} > {output.roemer_json} 2>> {log}
+        echo "Done!" >> {log}
+        """
+
+
+rule clade_founder_fasta:
+    """Generate FASTA and mutation list for each clade founder."""
+    input:
+        neher_json=rules.clade_founder_jsons.output.neher_json,
+        roemer_json=rules.clade_founder_jsons.output.roemer_json,
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta
+    output:
+        fasta=os.path.join(config["output_dir"], "clade_founders/{clade}.fa"),
+        muts=os.path.join(config["output_dir"], "clade_founders/{clade}_ref_to_founder_muts.csv")
+    params:
+        roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {})
+    log:
+        os.path.join(config["output_dir"], "log/clade_founder_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/clade_founder_fasta.py"
+
+
+# =============================================================================
 # Stage 3b: Mutation Counting - Setup
 # =============================================================================
 
