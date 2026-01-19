@@ -332,9 +332,9 @@ jobs:
             print(f'results_test_data/mutations/{clade}_nt_mutations.csv')
         " > /tmp/mutation_targets.txt
 
-        pixi run snakemake -j 2 --use-conda \
-          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" \
-          $(cat /tmp/mutation_targets.txt | tr '\n' ' ')
+        pixi run snakemake $(cat /tmp/mutation_targets.txt | tr '\n' ' ') \
+          -j 2 --use-conda \
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
 
     - name: Verify site mask
       run: |
