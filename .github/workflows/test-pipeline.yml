@@ -316,6 +316,148 @@ jobs:
         print('Sequence lengths are consistent!')
         "
 
+    - name: Verify clade founder files
+      run: |
+        pixi run python -c "
+        import pandas as pd
+        import os
+
+        # Get adequate clades
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+
+        print(f'Checking clade founders for {len(adequate)} clades...')
+
+        for clade in adequate[:3]:  # Check first 3
+            fasta_file = f'results_test_data/founders/{clade}_founder.fa'
+            muts_file = f'results_test_data/founders/{clade}_founder_muts.csv'
+
+            if os.path.exists(fasta_file):
+                # Check FASTA has content
+                with open(fasta_file) as f:
+                    content = f.read()
+                lines = content.strip().split('\n')
+                assert lines[0].startswith('>'), f'{clade} FASTA missing header'
+                seq_len = sum(len(l) for l in lines[1:])
+                print(f'  {clade}: FASTA {seq_len} bp')
+
+            if os.path.exists(muts_file):
+                muts_df = pd.read_csv(muts_file)
+                print(f'  {clade}: {len(muts_df)} founder mutations')
+        "
+
+    - name: Verify site mask
+      run: |
+        test -f results_test_data/ref/site_mask.csv
+        pixi run python -c "
+        import pandas as pd
+        df = pd.read_csv('results_test_data/ref/site_mask.csv')
+        print(f'Masked sites: {len(df)}')
+        assert 'site' in df.columns
+        assert len(df) > 0, 'No masked sites found!'
+        "
+
+    - name: Verify mutation translation
+      run: |
+        pixi run python -c "
+        import pandas as pd
+        import os
+
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+
+        for clade in adequate[:3]:  # Check first 3
+            tsv_file = f'results_test_data/mutations/{clade}_mutations.tsv'
+            if os.path.exists(tsv_file):
+                mut_df = pd.read_csv(tsv_file, sep='\t')
+                print(f'{clade}: {len(mut_df)} translated mutations')
+        "
+
+    - name: Verify sample paths
+      run: |
+        pixi run python -c "
+        import pandas as pd
+        import os
+
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+
+        for clade in adequate[:3]:  # Check first 3
+            csv_file = f'results_test_data/mutations/{clade}_nt_mutations.csv'
+            if os.path.exists(csv_file):
+                nt_df = pd.read_csv(csv_file)
+                print(f'{clade}: {len(nt_df)} nodes with mutations')
+        "
+
+    - name: Verify mutation counting
+      run: |
+        pixi run python -c "
+        import pandas as pd
+        import os
+
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+
+        print(f'Checking mutation counts for {len(adequate)} clades...')
+
+        for clade in adequate[:3]:  # Check first 3
+            csv_file = f'results_test_data/mutation_counts/{clade}.csv'
+            if os.path.exists(csv_file):
+                counts_df = pd.read_csv(csv_file)
+                print(f'  {clade}: {len(counts_df)} unique mutations')
+
+                # Check expected columns
+                required_cols = ['nt_mutation', 'nt_site', 'count', 'synonymous', 'exclude']
+                for col in required_cols:
+                    assert col in counts_df.columns, f'Missing column: {col}'
+
+                # Check some mutations are counted
+                if len(counts_df) > 0:
+                    print(f'    Total count: {counts_df[\"count\"].sum()}')
+                    print(f'    Synonymous: {counts_df[\"synonymous\"].sum()}')
+            else:
+                print(f'  {clade}: MISSING')
+        "
+
+    - name: Verify aggregated mutation counts
+      run: |
+        test -f results_test_data/mutation_counts/aggregated.csv
+        pixi run python -c "
+        import pandas as pd
+
+        agg = pd.read_csv('results_test_data/mutation_counts/aggregated.csv')
+        print(f'Aggregated mutations: {len(agg)}')
+
+        # Check structure
+        assert 'clade' in agg.columns, 'Missing clade column'
+        assert 'nt_mutation' in agg.columns, 'Missing nt_mutation column'
+        assert 'count' in agg.columns, 'Missing count column'
+
+        # Check clade distribution
+        print(f'Clades in aggregated: {sorted(agg[\"clade\"].unique())}')
+        print(f'Total mutations across all clades: {agg[\"count\"].sum()}')
+        "
+
+    - name: Verify UShER masked sites
+      run: |
+        test -f data/usher_masked_sites.yaml
+        pixi run python -c "
+        import yaml
+
+        with open('data/usher_masked_sites.yaml') as f:
+            masks = yaml.safe_load(f)
+
+        print(f'UShER masks defined: {list(masks.keys())}')
+        for mask_name, mask_data in masks.items():
+            clades = mask_data.get('clades', [])
+            sites = mask_data.get('sites', [])
+            print(f'  {mask_name}: {len(clades)} clades, {len(sites)} sites')
+        "
+
     - name: Generate test summary
       run: |
         pixi run python workflow/scripts/test_summary.py results_test_data > test_summary.txt

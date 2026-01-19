@@ -464,8 +464,175 @@ rule aggregate_clade_pcps:
 
 
 # =============================================================================
+# Stage 3a: Clade Founders
+# =============================================================================
+
+rule clade_founder_jsons:
+    """Download clade founder JSON files from external sources."""
+    params:
+        neher_json=config["clade_founders"]["neher_json"],
+        roemer_json=config["clade_founders"]["roemer_json"]
+    output:
+        neher_json=os.path.join(config["output_dir"], "clade_founders/clade_founders_neher.json"),
+        roemer_json=os.path.join(config["output_dir"], "clade_founders/clade_founders_roemer.json")
+    log:
+        os.path.join(config["output_dir"], "log/clade_founder_jsons.log")
+    shell:
+        """
+        mkdir -p $(dirname {output.neher_json})
+        echo "Downloading Neher clade founders..." > {log}
+        curl -L {params.neher_json} > {output.neher_json} 2>> {log}
+        echo "Downloading Roemer clade founders..." >> {log}
+        curl -L {params.roemer_json} > {output.roemer_json} 2>> {log}
+        echo "Done!" >> {log}
+        """
+
+
+rule clade_founder_fasta:
+    """Generate FASTA and mutation list for each clade founder."""
+    input:
+        neher_json=rules.clade_founder_jsons.output.neher_json,
+        roemer_json=rules.clade_founder_jsons.output.roemer_json,
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta
+    output:
+        fasta=os.path.join(config["output_dir"], "clade_founders/{clade}.fa"),
+        muts=os.path.join(config["output_dir"], "clade_founders/{clade}_ref_to_founder_muts.csv")
+    params:
+        roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {})
+    log:
+        os.path.join(config["output_dir"], "log/clade_founder_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/clade_founder_fasta.py"
+
+
+# =============================================================================
+# Stage 3b: Mutation Counting - Setup
+# =============================================================================
+
+rule get_site_mask:
+    """Download and parse problematic sites VCF."""
+    params:
+        url=config["site_mask_vcf"]
+    output:
+        csv=os.path.join(config["output_dir"], "ref/site_mask.csv")
+    log:
+        os.path.join(config["output_dir"], "log/get_site_mask.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/site_mask.py"
+
+
+rule translate_mat:
+    """Get translated mutations from MAT for each clade."""
+    input:
+        mat=rules.mat_clade_subset.output.tree,
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta,
+        ref_gtf=rules.edit_ref_gtf.output.gtf
+    output:
+        tsv=os.path.join(config["output_dir"], "mutations/{clade}_mutations.tsv")
+    log:
+        os.path.join(config["output_dir"], "log/translate_mat_{clade}.log")
+    conda:
+        "envs/usher.yml"
+    shell:
+        """
+        echo "Translating mutations for clade {wildcards.clade}..." > {log}
+        matUtils summary \
+            -i {input.mat} \
+            -g {input.ref_gtf} \
+            -f {input.ref_fasta} \
+            -t {output.tsv} \
+            2>> {log}
+        echo "Output: $(wc -l < {output.tsv}) lines" >> {log}
+        """
+
+
+rule mat_sample_paths:
+    """Get nucleotide mutation paths for samples in each clade."""
+    input:
+        mat=rules.mat_clade_subset.output.tree
+    output:
+        tsv=os.path.join(config["output_dir"], "mutations/{clade}_sample_paths.tsv")
+    log:
+        os.path.join(config["output_dir"], "log/mat_sample_paths_{clade}.log")
+    conda:
+        "envs/usher.yml"
+    shell:
+        """
+        echo "Extracting sample paths for clade {wildcards.clade}..." > {log}
+        matUtils extract -i {input.mat} -S {output.tsv} 2>> {log}
+        echo "Output: $(wc -l < {output.tsv}) lines" >> {log}
+        """
+
+
+rule sample_path_to_nt_mutations:
+    """Convert sample paths to nucleotide mutation counts."""
+    input:
+        tsv=rules.mat_sample_paths.output.tsv
+    output:
+        csv=os.path.join(config["output_dir"], "mutations/{clade}_nt_mutations.csv")
+    log:
+        os.path.join(config["output_dir"], "log/sample_path_to_nt_mutations_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/sample_path_to_nt_mutations.py"
+
+
+# =============================================================================
+# Stage 3b: Mutation Counting - Counting
+# =============================================================================
+
+rule count_mutations_clade:
+    """Count mutations from matUtils translated mutations for a clade."""
+    input:
+        tsv=rules.translate_mat.output.tsv,
+        nt_mut_csv=rules.sample_path_to_nt_mutations.output.csv,
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta,
+        usher_masked_sites=config["usher_masked_sites"],
+        site_mask=rules.get_site_mask.output.csv,
+        clade_founder_fasta=rules.clade_founder_fasta.output.fasta,
+        ref_to_founder_muts=rules.clade_founder_fasta.output.muts
+    output:
+        csv=os.path.join(config["output_dir"], "mutation_counts/{clade}.csv")
+    params:
+        max_nt_mutations=config.get("max_nt_mutations", 4),
+        max_reversions_to_ref=config.get("max_reversions_to_ref", 1),
+        max_reversions_to_clade_founder=config.get("max_reversions_to_clade_founder", 1),
+        sites_to_exclude=config.get("sites_to_exclude", []),
+        site_include_range=config.get("site_include_range", {"start": 266, "end": 29674}),
+        exclude_ref_to_founder_muts=config.get("exclude_ref_to_founder_muts", True)
+    log:
+        os.path.join(config["output_dir"], "log/count_mutations_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/count_mutations.py"
+
+
+rule aggregate_mutation_counts:
+    """Aggregate mutation counts across all clades."""
+    input:
+        counts=lambda wc: expand(
+            os.path.join(config["output_dir"], "mutation_counts/{clade}.csv"),
+            clade=clades_w_adequate_counts(wc)
+        )
+    output:
+        csv=os.path.join(config["output_dir"], "mutation_counts/aggregated.csv")
+    log:
+        os.path.join(config["output_dir"], "log/aggregate_mutation_counts.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/aggregate_mutation_counts.py"
+
+
+# =============================================================================
 # Placeholder rules for future stages (to be implemented in later PRs)
 # =============================================================================
 
-# Stage 3-8 rules will be added in subsequent PRs
+# Stage 4-8 rules will be added in subsequent PRs
 # See unified-mat-pipeline-spec.md for full specification
