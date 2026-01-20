@@ -11,9 +11,9 @@ This pipeline combines functionality from three previously separate projects:
 
 ## Pipeline DAG
 
-The following diagram shows the workflow structure when running with test data (`max_clades=3`):
+The following diagram shows the workflow structure when running with test data (`max_clades=1`):
 
-![Pipeline DAG](docs/dag.png)
+![Pipeline DAG](docs/dag.svg)
 
 ## Quick Start
 
