@@ -9,6 +9,12 @@ This pipeline combines functionality from three previously separate projects:
 2. **SARS2-mut-fitness** - Expected vs actual mutation count computation
 3. **SARS2-mut-fitness-v2** - Neutral mutation rate estimation via GLM
 
+## Pipeline DAG
+
+The following diagram shows the workflow structure when running with test data (`max_clades=3`):
+
+![Pipeline DAG](docs/dag.png)
+
 ## Quick Start
 
 ### Prerequisites
@@ -52,54 +58,124 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 
 | Stage | Description | Key Outputs |
 |-------|-------------|-------------|
-| 1. Input | Filter metadata and link input files | `filtered_metadata.tsv.gz` |
-| 2. Reference | Fetch reference genome and annotations | `ref.fa`, `coding_sites.csv` |
-| 3. Clades | Extract clade subtrees and PCPs | `clades/{clade}_pcps.csv`, `all_pcps.csv` |
-| 4. Mutations | Count mutations per clade | `mutation_counts/aggregated.csv` |
-| 5. Rates | Compute expected mutation counts | `expected_vs_actual_mut_counts.csv` |
-| 6. GLM | Estimate neutral mutation rates | `rates_table.csv`, `master_table.csv` |
-| 7. Fitness | Compute fitness estimates | `ntmut_fitness_aggregated.csv`, `all_aamut_fitness.csv` |
-| 8. Validation | Validate pipeline consistency | `pcp_vs_counts_report.txt` |
+| 1. Input & Reference | Filter metadata, link inputs, fetch reference genome and annotations | `filtered_metadata.tsv.gz`, `ref.fa`, `coding_sites.csv` |
+| 2. Clade Processing | Identify clades, extract clade subtrees and PCPs | `clade_counts.csv`, `clades/{clade}_tree.pb`, `all_pcps.csv` |
+| 3a. Clade Founders | Download and process clade founder sequences | `clade_founders/{clade}.fa`, `clade_founder_nts.csv` |
+| 3b. Mutation Counting | Translate mutations, count per-clade mutations | `mutations/{clade}_mutations.tsv`, `mutation_counts/aggregated.csv` |
+| 4. Expected Counts | Compute synonymous rates and expected mutation counts | `synonymous_mut_rates/`, `expected_vs_actual_mut_counts.csv` |
+| 5. GLM Annotation | Annotate counts with RNA structure and sequence context | `glm/annotated_counts.csv`, `glm/curated_counts.csv` |
+| 6. Rate Estimation | Estimate neutral mutation rates via GLM | `glm/master_table.csv`, `rates_table.csv` |
+| 7a. NT Fitness | Compute nucleotide-level fitness estimates | `fitness/ntmut_fitness_aggregated.csv` |
+| 7b. AA Fitness | Compute amino acid-level fitness estimates | `aamut_fitness/all_aamut_fitness.csv` |
+| 8. Validation | Cross-validate PCP vs matUtils mutation counts | `validation/pcp_vs_counts_report.txt` |
 
 ## Primary Outputs
 
 | Output | Description |
 |--------|-------------|
 | `mat/all_pcps.csv` | All parent-child pairs with clade annotations |
+| `mat/clade_counts.csv` | Sample counts per clade |
+| `clade_founder_nts.csv` | Nucleotide at each coding site for all clade founders |
+| `mutation_counts/aggregated.csv` | Aggregated mutation counts across all clades |
 | `expected_vs_actual_mut_counts.csv` | Expected and actual mutation counts |
-| `rates_table.csv` | Neutral mutation rates by context |
+| `glm/annotated_counts.csv` | Mutation counts annotated with RNA structure and context |
+| `glm/curated_counts.csv` | Curated counts for GLM training |
 | `glm/master_table.csv` | Full GLM rate table with light-switch boundaries |
+| `rates_table.csv` | Neutral mutation rates by context |
+| `spike_codon_sites_to_mask.txt` | Problematic codon sites in target gene |
+| `fitness/predicted_counts_by_clade.csv` | GLM-predicted counts per clade |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
 | `aamut_fitness/all_aamut_fitness.csv` | Amino acid-level fitness estimates |
-| `validation/pcp_vs_counts_report.txt` | Validation report |
+| `validation/pcp_vs_counts_report.txt` | PCP vs counts validation report |
 
 ## Configuration Options
 
-See `config/config.yaml` for all configuration options. Key parameters:
+See `config/config.yaml` for all configuration options. Key parameters are organized into sections:
+
+### Input/Output
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `output_dir` | Output directory | `results` |
+| `mat` | Path to input MAT tree (.pb or .pb.gz) | - |
+| `metadata` | Path to sample metadata (.tsv or .tsv.gz) | - |
+
+### Reference Genome
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `ref_fasta` | URL or path to reference FASTA | UCSC wuhCor1 |
+| `ref_gtf` | URL or path to reference GTF | UCSC ncbiGenes |
+| `add_to_ref_gtf` | Manual GTF additions (e.g., ORF9b) | `{ORF9b: [28284, 28577]}` |
+
+### QC Filtering
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
 | `qc_filter_options.min_date` | Earliest sample date | `2019-12-01` |
 | `qc_filter_options.datetime_cutoff` | Latest sample date | `2022-06-01` |
-| `min_clade_size` | Minimum samples per clade | `2` |
-| `max_nt_mutations` | Maximum mutations per branch | `4` |
+| `qc_filter_options.valid_hosts` | Allowed host species | `["Human", "Homo sapiens"]` |
+| `qc_filter_options.min_genome_length` | Minimum genome length | `28000` |
+| `subset_frac` | Random sampling fraction (1.0 = no sampling) | `1.0` |
+
+### Clade Configuration
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
 | `clade_column` | Metadata column for clades | `Nextstrain_clade` |
+| `min_clade_size` | Minimum samples per clade | `2` |
+| `clades_to_exclude` | List of clades to skip | `[]` |
 | `max_clades` | Limit number of clades (for testing) | `null` |
 
-### QC Filtering Options
+### PCP Extraction
 
-The `qc_filter_options` section controls metadata filtering:
-- Date resolution filtering (exclude MISSING, MONTH, YEAR resolutions)
-- Date range filtering
-- Host species validation
-- Genome length constraints
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `pcp_gene_region` | Genomic region for PCPs (null = full genome) | Spike (21563-25384) |
+| `pcp_max_nt_mutations` | Max nucleotide mutations per branch | `4` |
+| `pcp_max_reversions_to_ref` | Max reversions to reference | `1` |
+
+### Mutation Counting
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `max_nt_mutations` | Maximum mutations per branch | `4` |
+| `max_reversions_to_ref` | Max reversions to reference | `1` |
+| `max_reversions_to_clade_founder` | Max reversions to clade founder | `1` |
+| `exclude_ref_to_founder_muts` | Exclude ref→founder mutations | `true` |
+| `site_include_range` | Genomic range for mutation counting | `{start: 266, end: 29674}` |
+| `sites_to_exclude` | List of problematic sites | See config |
+
+### GLM Rate Estimation
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `rna_structure_data` | Path to RNA structure data | `data/lan_2022/...` |
+| `glm_lightswitch_boundaries` | Position-dependent rate boundaries | See config |
+
+### Fitness Estimation
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `fitness_pseudocount` | Pseudocount for fitness calculation | `0.5` |
+| `fitness_N_f` | Number of fitness grid points | `300` |
+| `fitness_N_n_exp` | Number of expected counts grid points | `300` |
 
 ### Data Files
 
 The pipeline uses reference data files in `data/`:
 - `usher_masked_sites.yaml`: UShER masking information for problematic sites by clade
 - `lan_2022/`: RNA secondary structure data from Lan et al. 2022
+
+### Conda Environments
+
+The pipeline uses three specialized conda environments in `workflow/envs/`:
+
+| Environment | Purpose | Key Packages |
+|-------------|---------|--------------|
+| `default.yml` | Python data processing and analysis | pandas, numpy, biopython, scipy, statsmodels |
+| `usher.yml` | MAT tree manipulation | matUtils (from UShER) |
+| `bte.yml` | Efficient tree traversal for PCP extraction | BTE library |
 
 ## Output Structure
 
@@ -108,18 +184,57 @@ Results are organized in the output directory:
 ```
 results/
 ├── mat/
-│   ├── clades/           # Per-clade trees and PCPs
-│   ├── all_pcps.csv      # Aggregated PCPs
-│   └── clade_counts.csv  # Clade sample counts
+│   ├── clades/                    # Per-clade subtrees and PCPs
+│   │   ├── {clade}_tree.pb        # Clade-specific MAT subtree
+│   │   ├── {clade}_pcps.csv       # Clade-specific parent-child pairs
+│   │   └── {clade}_samples.txt    # Sample names in each clade
+│   ├── mat_tree.pb.gz             # Symlink to input MAT
+│   ├── metadata.tsv.gz            # Symlink to input metadata
+│   ├── filtered_metadata.tsv.gz   # QC-filtered metadata
+│   ├── filtered_tree_raw.pb       # Filtered MAT tree
+│   ├── all_pcps.csv               # Aggregated PCPs across all clades
+│   └── clade_counts.csv           # Sample counts per clade
 ├── ref/
-│   ├── ref.fa            # Reference genome
-│   └── coding_sites.csv  # Coding site annotations
-├── mutation_counts/      # Per-clade and aggregated counts
-├── glm/                  # GLM rate estimation outputs
-├── fitness/              # Nucleotide fitness outputs
-├── aamut_fitness/        # Amino acid fitness outputs
-├── validation/           # Validation reports
-└── log/                  # Processing logs
+│   ├── ref.fa                     # Reference genome (FASTA)
+│   ├── original_ref.gtf           # Original GTF annotations
+│   ├── edited_ref.gtf             # GTF with manual additions
+│   ├── coding_sites.csv           # Coding site annotations
+│   └── site_mask.csv              # Problematic sites from VCF
+├── clade_founders/
+│   ├── {clade}.fa                 # Founder sequence for each clade
+│   ├── {clade}_ref_to_founder_muts.csv  # Mutations from ref to founder
+│   ├── clade_founders_neher.json  # Neher lab clade founder data
+│   └── clade_founders_roemer.json # Roemer clade founder data
+├── mutations/
+│   ├── {clade}_mutations.tsv      # Translated mutations (matUtils)
+│   ├── {clade}_sample_paths.tsv   # Sample mutation paths
+│   └── {clade}_nt_mutations.csv   # Nucleotide mutation counts
+├── mutation_counts/
+│   ├── {clade}.csv                # Per-clade mutation counts
+│   └── aggregated.csv             # Aggregated counts across clades
+├── synonymous_mut_rates/
+│   └── rates_by_clade.csv         # Synonymous mutation rates per clade
+├── expected_mut_counts/
+│   └── expected_counts.csv        # Expected mutation counts
+├── glm/
+│   ├── annotated_counts.csv       # Counts with RNA structure context
+│   ├── clade_founder_annotated.csv # Annotated clade founder data
+│   ├── curated_counts.csv         # Curated counts for GLM
+│   └── master_table.csv           # Full GLM rate predictions
+├── fitness/
+│   ├── predicted_counts_by_clade.csv    # GLM-predicted counts
+│   ├── ntmut_counts/              # Per-clade nucleotide counts
+│   ├── ntmut_fitness/             # Per-clade nucleotide fitness
+│   └── ntmut_fitness_aggregated.csv     # Aggregated NT fitness
+├── aamut_fitness/
+│   ├── {clade}_aamut_fitness.csv  # Per-clade amino acid fitness
+│   └── all_aamut_fitness.csv      # Aggregated AA fitness
+├── validation/
+│   ├── pcp_derived_counts.csv     # Mutation counts from PCPs
+│   ├── pcp_vs_counts_report.txt   # Validation report
+│   └── pcp_vs_counts_discrepancies.csv  # Any discrepancies found
+├── benchmarks/                    # Snakemake benchmark files
+└── log/                           # Processing logs per rule
 ```
 
 ## Testing
