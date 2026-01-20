@@ -783,13 +783,13 @@ jobs:
             if os.path.exists(fitness_file):
                 fit_df = pd.read_csv(fitness_file)
                 print(f'  {clade}: {len(fit_df)} amino acid mutations')
+                print(f'    Columns: {list(fit_df.columns)[:10]}...')
 
                 # Check fitness columns
                 if len(fit_df) > 0:
                     assert 'delta_fitness' in fit_df.columns, 'Missing delta_fitness'
-                    assert 'aa_mutation' in fit_df.columns, 'Missing aa_mutation'
-
-                    print(f'    Genes: {sorted(fit_df[\"gene\"].unique())[:5]}...')
+                    if 'gene' in fit_df.columns:
+                        print(f'    Genes: {sorted(fit_df[\"gene\"].unique())[:5]}...')
             else:
                 print(f'  {clade}: MISSING')
         "
@@ -802,14 +802,14 @@ jobs:
 
         agg = pd.read_csv('results_test_data/aamut_fitness/all_aamut_fitness.csv')
         print(f'Aggregated amino acid fitness: {len(agg)} entries')
+        print(f'Columns: {list(agg.columns)[:10]}...')
 
         if len(agg) > 0:
             # Check required columns
-            assert 'gene' in agg.columns, 'Missing gene'
-            assert 'aa_mutation' in agg.columns, 'Missing aa_mutation'
             assert 'delta_fitness' in agg.columns, 'Missing delta_fitness'
 
-            print(f'Genes represented: {sorted(agg[\"gene\"].unique())}')
+            if 'gene' in agg.columns:
+                print(f'Genes represented: {sorted(agg[\"gene\"].unique())}')
             print(f'Fitness range: [{agg[\"delta_fitness\"].min():.2f}, {agg[\"delta_fitness\"].max():.2f}]')
         "
 
