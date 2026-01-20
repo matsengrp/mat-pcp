@@ -571,6 +571,58 @@ jobs:
         print(f'Columns: {list(df.columns)}')
         "
 
+    - name: Verify annotated counts
+      run: |
+        test -f results_test_data/glm/annotated_counts.csv
+        test -f results_test_data/glm/clade_founder_annotated.csv
+        pixi run python -c "
+        import pandas as pd
+
+        counts = pd.read_csv('results_test_data/glm/annotated_counts.csv')
+        founder = pd.read_csv('results_test_data/glm/clade_founder_annotated.csv')
+
+        print(f'Annotated counts: {len(counts)} entries')
+        print(f'Annotated founder: {len(founder)} entries')
+
+        # Check required annotation columns
+        assert 'mut_type' in counts.columns, 'Missing mut_type column'
+        assert 'unpaired' in counts.columns, 'Missing unpaired column'
+        assert 'nt_site_before_boundary' in counts.columns, 'Missing boundary column'
+        assert 'ss_prediction' in counts.columns, 'Missing ss_prediction column'
+
+        # Print summary
+        print(f'Mutation types: {sorted(counts[\"mut_type\"].unique())}')
+        print(f'SS predictions: {counts[\"ss_prediction\"].value_counts().to_dict()}')
+        print(f'Before boundary: {counts[\"nt_site_before_boundary\"].sum()}')
+        "
+
+    - name: Verify curated counts
+      run: |
+        test -f results_test_data/glm/curated_counts.csv
+        pixi run python -c "
+        import pandas as pd
+
+        curated = pd.read_csv('results_test_data/glm/curated_counts.csv')
+        print(f'Curated counts: {len(curated)} entries')
+
+        # Check structure
+        if len(curated) > 0:
+            # Should not have exclusion columns
+            assert 'exclude' not in curated.columns or curated['exclude'].sum() == 0
+            assert 'masked_in_usher' not in curated.columns or curated['masked_in_usher'].sum() == 0
+
+            # Print summary
+            print(f'Total actual count: {curated[\"actual_count\"].sum() if \"actual_count\" in curated.columns else \"N/A\"}')
+        else:
+            print('WARNING: Curated dataset is empty (may be expected with small test data)')
+        "
+
+    - name: Verify RNA structure data exists
+      run: |
+        test -f data/lan_2022/41467_2022_28603_MOESM11_ESM.txt
+        wc -l data/lan_2022/41467_2022_28603_MOESM11_ESM.txt
+        echo "RNA structure file verified"
+
     - name: Generate test summary
       run: |
         pixi run python workflow/scripts/test_summary.py results_test_data > test_summary.txt
