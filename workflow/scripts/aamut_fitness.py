@@ -55,7 +55,9 @@ ntmut_fit = pd.read_csv(ntmut_fitness_csv)
 log(f"Loaded {len(ntmut_fit)} nucleotide fitness entries")
 
 # Columns to explode (semicolon-separated)
-explode_cols = ["gene", "clade_founder_aa", "mutant_aa", "codon_site", "aa_mutation"]
+# Note: clade_founder_aa, mutant_aa are created in get_coding() from aa_mutation,
+# so we only filter by what exists in input here, then add them after get_coding()
+explode_cols = ["gene", "codon_site", "aa_mutation"]
 explode_cols = [c for c in explode_cols if c in ntmut_fit.columns]
 
 if len(ntmut_fit) == 0 or len(explode_cols) == 0:
@@ -82,6 +84,11 @@ else:
     # Get coding mutations with gene overlaps handled
     ntmut_fit_coding = aamutfit.get_coding(ntmut_fit, gene_overlaps, explode_cols)
     log(f"Coding mutations after overlap handling: {len(ntmut_fit_coding)}")
+
+    # Add clade_founder_aa and mutant_aa to explode_cols if they were created by get_coding()
+    for col in ["clade_founder_aa", "mutant_aa"]:
+        if col in ntmut_fit_coding.columns and col not in explode_cols:
+            explode_cols.append(col)
 
     if len(ntmut_fit_coding) == 0:
         log("No coding mutations found")

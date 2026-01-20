@@ -65,11 +65,17 @@ def get_coding(df, gene_overlaps, explode_cols):
         )
 
     # Explode semicolon-separated columns
-    for col in explode_cols:
+    # Include clade_founder_aa and mutant_aa if they were just created
+    cols_to_explode = list(explode_cols)
+    for col in ["clade_founder_aa", "mutant_aa"]:
+        if col in df_coding.columns and col not in cols_to_explode:
+            cols_to_explode.append(col)
+
+    for col in cols_to_explode:
         if col in df_coding.columns:
             df_coding[col] = df_coding[col].astype(str).str.split(";")
 
-    df_coding_exp = df_coding.explode(explode_cols)
+    df_coding_exp = df_coding.explode(cols_to_explode)
 
     # Remove ORF1a (keep only ORF1ab)
     if "gene" in df_coding_exp.columns:
