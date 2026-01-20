@@ -240,11 +240,12 @@ results/
 ## Testing
 
 ```bash
-# Run pipeline on test data
+# Run pipeline on test data (uses subset_frac=0.1 for faster testing)
 pixi run snakemake -j 4 --use-conda \
   --config output_dir="results_test_data" \
            mat="test_data/filtered_tree_raw.pb.gz" \
            metadata="test_data/filtered_metadata.tsv.gz" \
+           subset_frac=0.1 \
            max_clades=3
 
 # Validate results against expected
