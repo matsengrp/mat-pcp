@@ -766,6 +766,14 @@ jobs:
         print('aamutfit module syntax valid!')
         "
 
+    - name: Rebuild amino acid fitness files
+      run: |
+        # Force rebuild by removing existing outputs
+        rm -rf results_test_data/aamut_fitness/
+        # Rebuild
+        pixi run snakemake -j 2 --use-conda results_test_data/aamut_fitness/all_aamut_fitness.csv \
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
+
     - name: Verify amino acid fitness by clade
       run: |
         pixi run python -c "
