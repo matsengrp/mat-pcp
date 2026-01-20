@@ -756,6 +756,65 @@ jobs:
             print(f'Clades: {sorted(agg[\"source_clade\"].unique())}')
         "
 
+    - name: Verify aamutfit module
+      run: |
+        test -f workflow/modules/aamutfit.py
+        # Note: Just verify syntax compiles (numpy in conda envs, not pixi)
+        pixi run python -c "
+        import py_compile
+        py_compile.compile('workflow/modules/aamutfit.py')
+        print('aamutfit module syntax valid!')
+        "
+
+    - name: Verify amino acid fitness by clade
+      run: |
+        pixi run python -c "
+        import pandas as pd
+        import os
+
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+
+        print(f'Checking amino acid fitness for clades...')
+
+        for clade in adequate[:3]:  # Check first 3
+            fitness_file = f'results_test_data/aamut_fitness/{clade}_aamut_fitness.csv'
+            if os.path.exists(fitness_file):
+                fit_df = pd.read_csv(fitness_file)
+                print(f'  {clade}: {len(fit_df)} amino acid mutations')
+                print(f'    Columns: {list(fit_df.columns)[:10]}...')
+
+                # Check fitness columns
+                if len(fit_df) > 0:
+                    assert 'delta_fitness' in fit_df.columns, 'Missing delta_fitness'
+                    if 'gene' in fit_df.columns:
+                        genes = fit_df['gene'].dropna().unique().tolist()
+                        print(f'    Genes: {sorted([str(g) for g in genes])[:5]}...')
+            else:
+                print(f'  {clade}: MISSING')
+        "
+
+    - name: Verify aggregated amino acid fitness
+      run: |
+        test -f results_test_data/aamut_fitness/all_aamut_fitness.csv
+        pixi run python -c "
+        import pandas as pd
+
+        agg = pd.read_csv('results_test_data/aamut_fitness/all_aamut_fitness.csv')
+        print(f'Aggregated amino acid fitness: {len(agg)} entries')
+        print(f'Columns: {list(agg.columns)[:10]}...')
+
+        if len(agg) > 0:
+            # Check required columns
+            assert 'delta_fitness' in agg.columns, 'Missing delta_fitness'
+
+            if 'gene' in agg.columns:
+                genes = agg['gene'].dropna().unique().tolist()
+                print(f'Genes represented: {sorted([str(g) for g in genes])}')
+            print(f'Fitness range: [{agg[\"delta_fitness\"].min():.2f}, {agg[\"delta_fitness\"].max():.2f}]')
+        "
+
     - name: Generate test summary
       run: |
         pixi run python workflow/scripts/test_summary.py results_test_data > test_summary.txt

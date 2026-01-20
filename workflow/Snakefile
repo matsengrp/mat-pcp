@@ -109,7 +109,8 @@ results_files = [
     # PR 7.1: Nucleotide Fitness
     "fitness/predicted_counts_by_clade.csv",
     "fitness/ntmut_fitness_aggregated.csv",
-    # TODO (PR 7.2): "aamut_fitness/all_aamut_fitness.csv",
+    # PR 7.2: Amino Acid Fitness
+    "aamut_fitness/all_aamut_fitness.csv",
     # TODO (PR 8.1): "validation/pcp_vs_counts_report.txt",
 ]
 
@@ -918,8 +919,53 @@ rule aggregate_ntmut_fitness:
 
 
 # =============================================================================
+# Stage 7b: Amino Acid Fitness Estimation
+# =============================================================================
+
+rule aamut_fitness_by_clade:
+    """Compute amino acid mutation fitness estimates per clade."""
+    input:
+        ntmut_fitness=rules.ntmut_fitness_by_clade.output.csv
+    output:
+        csv=os.path.join(config["output_dir"], "aamut_fitness/{clade}_aamut_fitness.csv")
+    params:
+        orf1ab_to_nsps=config.get("orf1ab_to_nsps", {}),
+        gene_overlaps=config.get("gene_overlaps", {"retain": [], "exclude": []}),
+        genes=config.get("genes", []),
+        fitness_pseudocount=config.get("fitness_pseudocount", 0.5)
+    resources:
+        mem_mb=2000,
+        runtime=30
+    benchmark:
+        os.path.join(config["output_dir"], "benchmarks/aamut_fitness_{clade}.tsv")
+    log:
+        os.path.join(config["output_dir"], "log/aamut_fitness_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/aamut_fitness.py"
+
+
+rule aggregate_aamut_fitness:
+    """Aggregate amino acid fitness across all clades."""
+    input:
+        fitness_files=lambda wc: expand(
+            os.path.join(config["output_dir"], "aamut_fitness/{clade}_aamut_fitness.csv"),
+            clade=clades_w_adequate_counts(wc)
+        )
+    output:
+        csv=os.path.join(config["output_dir"], "aamut_fitness/all_aamut_fitness.csv")
+    log:
+        os.path.join(config["output_dir"], "log/aggregate_aamut_fitness.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/aggregate_aamut_fitness.py"
+
+
+# =============================================================================
 # Placeholder rules for future stages (to be implemented in later PRs)
 # =============================================================================
 
-# Stage 7b (AA Fitness), Stage 8, Stage 9 rules will be added in subsequent PRs
+# Stage 8, Stage 9 rules will be added in subsequent PRs
 # See unified-mat-pipeline-spec.md for full specification
