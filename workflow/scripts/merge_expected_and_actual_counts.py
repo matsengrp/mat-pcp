@@ -56,22 +56,21 @@ if "count_non_terminal" in merged.columns:
 
 log(f"Merged data: {len(merged)} entries")
 
-# Add exclusion annotations
-exclusion_lookup = muts_to_exclude.set_index(["clade", "mutation"])[
-    ["masked_in_usher"]
-].to_dict("index")
-
-
-def get_exclusion_info(row):
-    key = (row["clade"], row["nt_mutation"])
-    if key in exclusion_lookup:
-        return True, exclusion_lookup[key]["masked_in_usher"]
-    return False, False
-
-
-merged[["exclude", "masked_in_usher"]] = merged.apply(
-    lambda row: pd.Series(get_exclusion_info(row)), axis=1
+# Add exclusion annotations using vectorized merge instead of apply
+# Prepare exclusion data with renamed column for merge
+exclusion_df = muts_to_exclude[["clade", "mutation", "masked_in_usher"]].rename(
+    columns={"mutation": "nt_mutation"}
 )
+
+# Merge to get exclusion info
+merged = merged.merge(
+    exclusion_df, on=["clade", "nt_mutation"], how="left", suffixes=("", "_excl")
+)
+
+# Set exclude flag based on whether the mutation was found in exclusion list
+merged["exclude"] = merged["masked_in_usher"].notna()
+merged["masked_in_usher"] = merged["masked_in_usher"].fillna(False)
+merged["masked_in_usher"] = merged["masked_in_usher"].infer_objects(copy=False).astype(bool)
 
 # Save merged data
 merged.to_csv(output_csv, index=False)
