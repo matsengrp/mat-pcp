@@ -789,7 +789,8 @@ jobs:
                 if len(fit_df) > 0:
                     assert 'delta_fitness' in fit_df.columns, 'Missing delta_fitness'
                     if 'gene' in fit_df.columns:
-                        print(f'    Genes: {sorted(fit_df[\"gene\"].unique())[:5]}...')
+                        genes = fit_df['gene'].dropna().unique().tolist()
+                        print(f'    Genes: {sorted([str(g) for g in genes])[:5]}...')
             else:
                 print(f'  {clade}: MISSING')
         "
@@ -809,7 +810,8 @@ jobs:
             assert 'delta_fitness' in agg.columns, 'Missing delta_fitness'
 
             if 'gene' in agg.columns:
-                print(f'Genes represented: {sorted(agg[\"gene\"].unique())}')
+                genes = agg['gene'].dropna().unique().tolist()
+                print(f'Genes represented: {sorted([str(g) for g in genes])}')
             print(f'Fitness range: [{agg[\"delta_fitness\"].min():.2f}, {agg[\"delta_fitness\"].max():.2f}]')
         "
 
