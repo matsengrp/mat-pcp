@@ -109,6 +109,19 @@ def aggregate_counts(df, explode_cols):
             pd.to_numeric(df_agg["aa_site"], errors="coerce").fillna(0).astype(int)
         )
 
+    # Rebuild aa_mutation from components if not already present
+    if (
+        "aa_mutation" not in df_agg.columns
+        and "clade_founder_aa" in df_agg.columns
+        and "mutant_aa" in df_agg.columns
+        and "aa_site" in df_agg.columns
+    ):
+        df_agg["aa_mutation"] = (
+            df_agg["clade_founder_aa"].astype(str)
+            + df_agg["aa_site"].astype(str)
+            + df_agg["mutant_aa"].astype(str)
+        )
+
     return df_agg
 
 
@@ -241,6 +254,19 @@ def aa_fitness(df, explode_cols):
         aa_fit = aa_fit.rename(columns={"codon_site": "aa_site"})
         aa_fit["aa_site"] = (
             pd.to_numeric(aa_fit["aa_site"], errors="coerce").fillna(0).astype(int)
+        )
+
+    # Rebuild aa_mutation from components if not already present
+    if (
+        "aa_mutation" not in aa_fit.columns
+        and "clade_founder_aa" in aa_fit.columns
+        and "mutant_aa" in aa_fit.columns
+        and "aa_site" in aa_fit.columns
+    ):
+        aa_fit["aa_mutation"] = (
+            aa_fit["clade_founder_aa"].astype(str)
+            + aa_fit["aa_site"].astype(str)
+            + aa_fit["mutant_aa"].astype(str)
         )
 
     return aa_fit
