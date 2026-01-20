@@ -102,8 +102,10 @@ results_files = [
     "glm/annotated_counts.csv",
     "glm/clade_founder_annotated.csv",
     "glm/curated_counts.csv",
-    # TODO (PR 6.2): "spike_codon_sites_to_mask.txt",
-    # TODO (PR 6.2): "rates_table.csv",
+    # PR 6.2: GLM & Master Table
+    "glm/master_table.csv",
+    "rates_table.csv",
+    "spike_codon_sites_to_mask.txt",
     # TODO (PR 7.2): "aamut_fitness/all_aamut_fitness.csv",
     # TODO (PR 8.1): "validation/pcp_vs_counts_report.txt",
 ]
@@ -775,8 +777,67 @@ rule curate_counts:
 
 
 # =============================================================================
+# Stage 6: GLM Rate Estimation & Master Table
+# =============================================================================
+
+rule master_table:
+    """Create master table with predicted mutation rates via GLM."""
+    input:
+        curated_counts=rules.curate_counts.output.curated
+    output:
+        master_table=os.path.join(config["output_dir"], "glm/master_table.csv")
+    params:
+        lightswitch_boundaries=config.get("glm_lightswitch_boundaries", {
+            "CT": 13467, "AT": 21562, "CG": 21562, "GC": 21562
+        })
+    threads: get_threads("master_table")
+    resources:
+        mem_mb=8000,
+        runtime=60
+    benchmark:
+        os.path.join(config["output_dir"], "benchmarks/master_table.tsv")
+    log:
+        os.path.join(config["output_dir"], "log/master_table.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/master_table.py"
+
+
+rule get_rates_table:
+    """Extract final rates table for sites after boundary."""
+    input:
+        master_table=rules.master_table.output.master_table
+    output:
+        rates_table=os.path.join(config["output_dir"], "rates_table.csv")
+    log:
+        os.path.join(config["output_dir"], "log/get_rates_table.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/get_rates_table.py"
+
+
+rule get_problematic_sites:
+    """Identify problematic codon sites in target gene for masking."""
+    input:
+        expected_vs_actual=rules.merge_expected_and_actual_counts.output.csv
+    output:
+        sites_to_mask=os.path.join(config["output_dir"], "spike_codon_sites_to_mask.txt")
+    params:
+        masking_gene=config.get("masking_gene", "S"),
+        additional_sites_to_ignore=config.get("additional_sites_to_ignore", [])
+    log:
+        os.path.join(config["output_dir"], "log/get_problematic_sites.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/get_problematic_sites.py"
+
+
+# =============================================================================
 # Placeholder rules for future stages (to be implemented in later PRs)
 # =============================================================================
 
-# Stage 6-8 rules will be added in subsequent PRs
+# Stage 7-9 rules will be added in subsequent PRs
 # See unified-mat-pipeline-spec.md for full specification

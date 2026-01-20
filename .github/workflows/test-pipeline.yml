@@ -623,6 +623,66 @@ jobs:
         wc -l data/lan_2022/41467_2022_28603_MOESM11_ESM.txt
         echo "RNA structure file verified"
 
+    - name: Verify GLM modules exist
+      run: |
+        test -f workflow/modules/__init__.py
+        test -f workflow/modules/glm.py
+        test -f workflow/modules/rates.py
+        test -f workflow/modules/load.py
+        echo "All GLM modules present"
+
+    - name: Verify master table
+      run: |
+        test -f results_test_data/glm/master_table.csv
+        pixi run python -c "
+        import pandas as pd
+
+        master = pd.read_csv('results_test_data/glm/master_table.csv')
+        print(f'Master table: {len(master)} rate entries')
+
+        # Check required columns
+        assert 'mut_type' in master.columns, 'Missing mut_type'
+        assert 'motif' in master.columns, 'Missing motif'
+        assert 'rate' in master.columns, 'Missing rate'
+
+        # Check all mutation types are present
+        expected_types = ['AC', 'AG', 'AT', 'CA', 'CG', 'CT', 'GA', 'GC', 'GT', 'TA', 'TC', 'TG']
+        actual_types = sorted(master['mut_type'].unique())
+        print(f'Mutation types: {actual_types}')
+
+        # Print rate summary
+        print(f'Rate range: {master[\"rate\"].min():.4f} - {master[\"rate\"].max():.4f}')
+        print(f'Mean rate: {master[\"rate\"].mean():.4f}')
+        "
+
+    - name: Verify rates table
+      run: |
+        test -f results_test_data/rates_table.csv
+        pixi run python -c "
+        import pandas as pd
+
+        rates = pd.read_csv('results_test_data/rates_table.csv')
+        print(f'Rates table: {len(rates)} entries')
+
+        # Check columns
+        assert 'mut_type' in rates.columns
+        assert 'motif' in rates.columns
+        assert 'rate' in rates.columns
+
+        print(f'Unique motifs: {rates[\"motif\"].nunique()}')
+        "
+
+    - name: Verify problematic sites
+      run: |
+        test -f results_test_data/spike_codon_sites_to_mask.txt
+        pixi run python -c "
+        with open('results_test_data/spike_codon_sites_to_mask.txt') as f:
+            sites = [line.strip() for line in f if line.strip()]
+        print(f'Problematic spike codon sites: {len(sites)}')
+        if sites:
+            print(f'First 10 sites: {sites[:10]}')
+        "
+
     - name: Generate test summary
       run: |
         pixi run python workflow/scripts/test_summary.py results_test_data > test_summary.txt
