@@ -98,6 +98,10 @@ results_files = [
     "clade_founder_nts.csv",
     # PR 5.1: Synonymous Rates & Expected Counts
     "expected_vs_actual_mut_counts.csv",
+    # PR 6.1: Count Annotation & Curation
+    "glm/annotated_counts.csv",
+    "glm/clade_founder_annotated.csv",
+    "glm/curated_counts.csv",
     # TODO (PR 6.2): "spike_codon_sites_to_mask.txt",
     # TODO (PR 6.2): "rates_table.csv",
     # TODO (PR 7.2): "aamut_fitness/all_aamut_fitness.csv",
@@ -729,8 +733,50 @@ rule merge_expected_and_actual_counts:
 
 
 # =============================================================================
+# Stage 5: Count Annotation and Curation for GLM
+# =============================================================================
+
+rule annotate_counts:
+    """Annotate counts with RNA structure, sequence context, and other features."""
+    input:
+        counts=rules.merge_expected_and_actual_counts.output.csv,
+        clade_founder=rules.clade_founder_nts.output.csv,
+        rna_struct=config["rna_structure_data"]
+    output:
+        counts_csv=os.path.join(config["output_dir"], "glm/annotated_counts.csv"),
+        founder_csv=os.path.join(config["output_dir"], "glm/clade_founder_annotated.csv")
+    params:
+        lightswitch_boundaries=config.get("glm_lightswitch_boundaries", {
+            "CT": 13467, "AT": 21562, "CG": 21562, "GC": 21562
+        })
+    log:
+        os.path.join(config["output_dir"], "log/annotate_counts.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/annotate_counts.py"
+
+
+rule curate_counts:
+    """Curate counts for GLM training (filter to conserved sites, exclude problematic sites)."""
+    input:
+        counts=rules.annotate_counts.output.counts_csv,
+        clade_founder=rules.annotate_counts.output.founder_csv
+    output:
+        curated=os.path.join(config["output_dir"], "glm/curated_counts.csv")
+    params:
+        additional_sites_to_ignore=config.get("additional_sites_to_ignore", [])
+    log:
+        os.path.join(config["output_dir"], "log/curate_counts.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/curate_counts.py"
+
+
+# =============================================================================
 # Placeholder rules for future stages (to be implemented in later PRs)
 # =============================================================================
 
-# Stage 5-8 rules will be added in subsequent PRs
+# Stage 6-8 rules will be added in subsequent PRs
 # See unified-mat-pipeline-spec.md for full specification

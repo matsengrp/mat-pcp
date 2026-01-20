@@ -28,49 +28,56 @@ clade_founder_nts = pd.read_csv(clade_founder_nts_csv)
 log(f"Loaded {len(rates_by_clade)} rate entries")
 log(f"Loaded {len(clade_founder_nts)} clade founder entries")
 
-expected_counts = []
+# Create all possible mutations for each site using vectorized operations
+# Expand each site to 3 mutations (to each other nucleotide)
+nts = ["A", "C", "G", "T"]
+mutation_dfs = []
 
-for clade in clade_founder_nts["clade"].unique():
-    founder = clade_founder_nts[clade_founder_nts["clade"] == clade]
-    clade_rates = rates_by_clade[rates_by_clade["clade"] == clade]
+for to_nt in nts:
+    # Filter to sites where the founder nt differs from to_nt
+    subset = clade_founder_nts[clade_founder_nts["nt"] != to_nt].copy()
+    subset["to_nt"] = to_nt
+    subset["mut_type"] = subset["nt"] + to_nt
+    subset["nt_mutation"] = subset["nt"] + subset["site"].astype(str) + to_nt
+    mutation_dfs.append(subset)
 
-    # Build rate lookup
-    rate_lookup = {}
-    for _, row in clade_rates.iterrows():
-        if pd.notna(row["rate"]):
-            rate_lookup[row["mut_type"]] = row["rate"]
+# Combine all mutations
+all_mutations = pd.concat(mutation_dfs, ignore_index=True)
+log(f"Generated {len(all_mutations)} mutation possibilities")
 
-    log(f"  {clade}: {len(rate_lookup)} valid rates, {len(founder)} sites")
+# Merge with rates to get expected counts
+# Create rate lookup as a dataframe for efficient merge
+rate_lookup = rates_by_clade[rates_by_clade["rate"].notna()][
+    ["clade", "mut_type", "rate"]
+].copy()
 
-    # Calculate expected counts for each possible mutation at each site
-    for _, site_row in founder.iterrows():
-        site = site_row["site"]
-        from_nt = site_row["nt"]
+all_mutations = all_mutations.merge(
+    rate_lookup, on=["clade", "mut_type"], how="left"
+)
 
-        for to_nt in ["A", "C", "G", "T"]:
-            if to_nt == from_nt:
-                continue
+# Fill missing rates with 0
+all_mutations["expected_count"] = all_mutations["rate"].fillna(0)
 
-            mut_type = from_nt + to_nt
-            nt_mutation = f"{from_nt}{site}{to_nt}"
+# Select and rename columns for output
+expected_df = all_mutations[
+    [
+        "clade",
+        "site",
+        "nt_mutation",
+        "mut_type",
+        "expected_count",
+        "gene",
+        "codon_site",
+        "codon_position",
+    ]
+].rename(columns={"site": "nt_site"})
 
-            # Get rate for this mutation type
-            rate = rate_lookup.get(mut_type, np.nan)
+# Log summary per clade
+for clade in expected_df["clade"].unique():
+    clade_data = expected_df[expected_df["clade"] == clade]
+    n_with_rate = (clade_data["expected_count"] > 0).sum()
+    log(f"  {clade}: {len(clade_data)} mutations, {n_with_rate} with rates")
 
-            expected_counts.append(
-                {
-                    "clade": clade,
-                    "nt_site": site,
-                    "nt_mutation": nt_mutation,
-                    "mut_type": mut_type,
-                    "expected_count": rate if pd.notna(rate) else 0,
-                    "gene": site_row["gene"],
-                    "codon_site": site_row.get("codon_site", ""),
-                    "codon_position": site_row.get("codon_position", ""),
-                }
-            )
-
-expected_df = pd.DataFrame(expected_counts)
 expected_df.to_csv(output_csv, index=False)
 
 log(f"Computed expected counts for {len(expected_df)} mutation possibilities")
