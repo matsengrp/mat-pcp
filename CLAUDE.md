@@ -4,104 +4,134 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`mat-pcp` is a unified Snakemake-based bioinformatics pipeline for analyzing SARS-CoV-2 genomic evolution. The pipeline extracts parent-child pairs (PCPs) from mutation-annotated trees (MATs), counts mutations, estimates mutation rates, and calculates fitness effects. It processes pre-built MAT trees, filters sequences based on quality criteria, optionally optimizes trees for maximum parsimony, and performs comprehensive evolutionary analysis.
+`mat-pcp` is a unified Snakemake pipeline for analyzing SARS-CoV-2 genomic evolution from mutation-annotated trees (MATs). The pipeline combines three previously separate analysis workflows into a single coherent pipeline:
+
+1. **mat-pcp** - Parent-child pair extraction from MATs
+2. **SARS2-mut-fitness** - Expected vs actual mutation count computation
+3. **SARS2-mut-fitness-v2** - Neutral mutation rate estimation via GLM
+
+### Pipeline Stages
+
+| Stage | Description | Key Rules |
+|-------|-------------|-----------|
+| 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `get_ref_fasta`, `ref_coding_sites` |
+| 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade` |
+| 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
+| 5 | Expected Counts | `synonymous_mut_rates`, `expected_mut_counts`, `merge_expected_and_actual_counts` |
+| 6 | GLM Rate Estimation | `annotate_counts`, `curate_counts`, `master_table`, `get_rates_table` |
+| 7 | Fitness Estimation | `ntmut_fitness_by_clade`, `aamut_fitness_by_clade`, `aggregate_*_fitness` |
+| 8 | Validation | `extract_mutations_from_pcps`, `validate_pcp_vs_counts` |
 
 ## Development Commands
 
 ### Running the Pipeline
 ```bash
-# Run with 4 cores (adjust -j based on available cores)
+# Run with pixi (recommended)
 pixi run snakemake -j 4 --use-conda
 
-# Dry run to see what would be executed
+# Dry run
 pixi run snakemake -n
 
 # Run specific target
-pixi run snakemake -j 4 --use-conda results/mat/all_pcps.csv
+pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 
 # Clean all outputs
 pixi run snakemake --delete-all-output
-
-# Run with custom config overrides
-pixi run snakemake -j 4 --use-conda \
-  --config output_dir="results_test" mat="test_data/tree.pb.gz" metadata="test_data/metadata.tsv.gz"
 ```
 
-### Development and Testing
+### Testing
 ```bash
-# Check workflow syntax
-pixi run snakemake --lint
-
-# Generate workflow visualization
-pixi run snakemake --dag | dot -Tpdf > workflow.pdf
-
-# Run with detailed output
-pixi run snakemake -j 4 --use-conda --verbose
-
-# Run test pipeline
+# Run on test data (fast, uses max_clades=3)
 pixi run snakemake -j 2 --use-conda \
-  --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
+  --config output_dir="results_test_data" \
+           mat="test_data/filtered_tree_raw.pb.gz" \
+           metadata="test_data/filtered_metadata.tsv.gz" \
+           max_clades=3
+
+# Validate results
+pixi run python workflow/scripts/validate_test.py
 ```
 
-## Architecture and Key Components
+## Architecture
 
-### Pipeline Structure
-- **Configuration**: `config/config.yaml` - comprehensive configuration with all pipeline parameters
-- **Workflow**: `workflow/Snakefile` - defines processing rules and dependencies
-- **Environments**: `workflow/envs/` - conda environment specifications for reproducibility
-- **Scripts**: `workflow/scripts/` - Python scripts for specific processing tasks
-- **Data**: `data/` - reference data files (masking sites, RNA structure data)
+### Directory Structure
+```
+mat-pcp/
+├── config/
+│   └── config.yaml          # Pipeline configuration
+├── workflow/
+│   ├── Snakefile            # Main workflow definition
+│   ├── envs/                # Conda environments
+│   │   ├── default.yml      # Python/pandas/biopython
+│   │   ├── usher.yml        # UShER tools (matUtils)
+│   │   └── bte.yml          # BTE library for tree traversal
+│   ├── modules/             # Python modules
+│   │   ├── glm.py           # General Linear Model for rate estimation
+│   │   ├── rates.py         # Rate calculations
+│   │   ├── probfit.py       # Probabilistic fitness estimation
+│   │   ├── aamutfit.py      # Amino acid fitness aggregation
+│   │   └── load.py          # Data loading utilities
+│   └── scripts/             # Snakemake scripts
+├── test_data/               # Test data files
+├── data/                    # Static data files
+│   ├── usher_masked_sites.yaml
+│   └── lan_2022/            # RNA structure data
+└── results*/                # Output directories
+```
+
+### Key Technologies
+- **Snakemake**: Workflow management with checkpoints for dynamic clade processing
+- **UShER/matUtils**: MAT tree manipulation and filtering
+- **BTE**: Efficient tree traversal for PCP extraction
+- **Pandas/NumPy**: Data processing and analysis
+- **BioPython**: Sequence handling
+- **SciPy/Statsmodels**: GLM rate estimation (in conda envs)
+
+### Important Patterns
+
+1. **Checkpoint pattern**: The `get_clades` rule is a checkpoint that determines the list of clades to process at runtime. All downstream per-clade rules depend on this checkpoint.
+
+2. **Three conda environments**:
+   - `default.yml` - Python, pandas, numpy, biopython
+   - `usher.yml` - matUtils for tree manipulation
+   - `bte.yml` - BTE library for tree traversal
+
+3. **max_clades parameter**: Set `max_clades` in config to limit the number of clades processed. Useful for testing (CI uses `max_clades=3` for ~4 minute runs).
+
+4. **Validation stage**: Cross-validates two independent mutation counting approaches (PCP-derived vs matUtils-derived) to ensure pipeline consistency.
 
 ### Configuration Sections
 
-The unified configuration (`config/config.yaml`) is organized into these sections:
+The configuration (`config/config.yaml`) is organized into:
 
 1. **Input/Output**: `output_dir`, `mat`, `metadata`
 2. **Reference Genome**: `ref_fasta`, `ref_gtf`, `add_to_ref_gtf`
-3. **Metadata QC Filtering**: `qc_filter_options` (date filtering, host validation, genome length)
+3. **Metadata QC**: `qc_filter_options` (date filtering, host validation, genome length)
 4. **Tree Processing**: `optimize_tree`, `mat_subset_kwargs`
-5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`
+5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
 6. **PCP Extraction**: `pcp_gene_region`, `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`
 7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources)
-8. **Mutation Counting**: `max_nt_mutations`, `max_reversions_*`, `site_include_range`, `sites_to_exclude`
-9. **Synonymous Rate Estimation**: `synonymous_spectra_min_counts`
-10. **GLM Rate Estimation**: `rna_structure_data`, `glm_lightswitch_boundaries`
-11. **Fitness Estimation**: `fitness_pseudocount`, `fitness_N_f`, `fitness_N_n_exp`
+8. **Mutation Counting**: `max_nt_mutations`, `max_reversions_*`, `site_include_range`
+9. **Synonymous Rates**: `synonymous_spectra_min_counts`
+10. **GLM**: `rna_structure_data`, `glm_lightswitch_boundaries`
+11. **Fitness**: `fitness_pseudocount`, `fitness_N_f`, `fitness_N_n_exp`
 12. **Gene Configuration**: `orf1ab_to_nsps`, `gene_overlaps`, `genes`
-13. **Site Masking**: `masking_gene`, `additional_sites_to_ignore`
-14. **Thread Configuration**: Per-rule thread allocation
+13. **Site Masking**: `masking_gene`, `sites_to_exclude`, `additional_sites_to_ignore`
+14. **Threads**: Per-rule thread allocation
 
-### Key Processing Steps
-1. **get_mat_tree**: Links input MAT trees and metadata
-2. **filter_metadata**: QC-based filtering (invalid dates, hosts, genome length)
-3. **filter_mat_tree**: Extracts valid sequences using matUtils
-4. **optimize_mat_tree**: Optional optimization for maximum parsimony using matOptimize
-5. **get_ref_fasta/gtf**: Downloads reference genome and annotations
-6. **edit_ref_gtf**: Adds missing gene annotations (e.g., ORF9b)
-7. **ref_coding_sites**: Identifies coding regions in the genome
-8. **get_clades**: Checkpoint to identify clades with adequate sample counts
-9. **samples_by_clade**: Extract sample names per clade
-10. **mat_clade_subset**: Extract clade-specific MAT subtrees
-11. **extract_pcps_by_clade**: Extract parent-child pairs per clade using BTE
-12. **aggregate_clade_pcps**: Combine all clade PCPs into single output
+### Output Organization
+
+Results are stored in `{output_dir}/`:
+- `mat/`: Filtered trees, clade subtrees, PCPs
+- `ref/`: Reference genome, coding sites
+- `mutation_counts/`: Per-clade and aggregated counts
+- `clade_founders/`: Founder sequences and mutations
+- `glm/`: Annotated counts, curated counts, master table
+- `fitness/`: Predicted counts, nucleotide fitness
+- `aamut_fitness/`: Amino acid fitness
+- `validation/`: PCP vs counts validation report
+- `log/`: Processing logs
 
 ### Data Files
 - `data/usher_masked_sites.yaml`: UShER masking information for problematic sites by clade
-- `data/lan_2022/41467_2022_28603_MOESM11_ESM.txt`: RNA secondary structure data from Lan et al. 2022
-
-### Output Organization
-Results are stored in `{output_dir}/` directories:
-- `mat/`: Filtered trees and extracted PCPs
-  - `clades/`: Clade-specific trees and PCP files
-  - `all_pcps.csv`: Aggregated PCPs from all clades with clade annotations
-  - `clade_counts.csv`: Summary of samples per clade
-- `ref/`: Reference genome files and coding site information
-- `log/`: Processing logs for each step
-
-### Important Implementation Details
-- Uses UCSC genome browser for SARS-CoV-2 reference data
-- Handles compressed files (.gz) throughout
-- Implements double extraction in `filter_mat_tree` to address matUtils behavior
-- Tree optimization can be toggled via `optimize_tree` config parameter
-- Thread allocation is configurable per rule with fallback to default
-- Clade-level processing uses Snakemake checkpoints for dynamic workflow
+- `data/lan_2022/41467_2022_28603_MOESM11_ESM.txt`: RNA secondary structure data

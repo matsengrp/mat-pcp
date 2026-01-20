@@ -86,38 +86,37 @@ def get_final_tree():
 # Output Targets
 # =============================================================================
 
-# Primary output files - start with existing outputs, expand in future PRs
-# Files marked with # TODO will be implemented in later PRs
+# Primary output files for the unified pipeline
 results_files = [
+    # Stage 1-2: Input Processing & Reference
     "ref/coding_sites.csv",
     "mat/filtered_metadata.tsv.gz",
-    "mat/all_pcps.csv",
     "mat/clade_counts.csv",
-    # PR 4.1-4.3: Clade Founders & Mutation Counting
+    # Stage 3: Clade Processing & PCP Extraction
+    "mat/all_pcps.csv",
+    # Stage 4: Mutation Counting
     "mutation_counts/aggregated.csv",
     "clade_founder_nts.csv",
-    # PR 5.1: Synonymous Rates & Expected Counts
+    # Stage 5: Expected Counts
     "expected_vs_actual_mut_counts.csv",
-    # PR 6.1: Count Annotation & Curation
+    # Stage 6: GLM Rate Estimation
     "glm/annotated_counts.csv",
     "glm/clade_founder_annotated.csv",
     "glm/curated_counts.csv",
-    # PR 6.2: GLM & Master Table
     "glm/master_table.csv",
     "rates_table.csv",
     "spike_codon_sites_to_mask.txt",
-    # PR 7.1: Nucleotide Fitness
+    # Stage 7: Fitness Estimation
     "fitness/predicted_counts_by_clade.csv",
     "fitness/ntmut_fitness_aggregated.csv",
-    # PR 7.2: Amino Acid Fitness
     "aamut_fitness/all_aamut_fitness.csv",
-    # PR 8.1: Validation
+    # Stage 8: Validation
     "validation/pcp_vs_counts_report.txt",
 ]
 
 
 rule all:
-    """Target rule with desired output files."""
+    """Default target: produce all primary pipeline outputs."""
     input:
         [os.path.join(config["output_dir"], f) for f in results_files]
 
@@ -1009,11 +1008,3 @@ rule validate_pcp_vs_counts:
         "envs/default.yml"
     script:
         "scripts/validate_pcp_vs_counts.py"
-
-
-# =============================================================================
-# Placeholder rules for future stages (to be implemented in later PRs)
-# =============================================================================
-
-# Stage 9 rules will be added in subsequent PRs
-# See unified-mat-pipeline-spec.md for full specification
