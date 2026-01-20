@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Compute amino acid mutation fitness estimates per clade."""
+
+import sys
+import os
+import pandas as pd
+from importlib import util as importlib_util
+
+# Get snakemake variables
+ntmut_fitness_csv = snakemake.input.ntmut_fitness
+output_csv = snakemake.output.csv
+orf1ab_to_nsps = snakemake.params.get("orf1ab_to_nsps", {})
+gene_overlaps = snakemake.params.get("gene_overlaps", {"retain": [], "exclude": []})
+genes = snakemake.params.get("genes", [])
+fitness_pseudocount = snakemake.params.get("fitness_pseudocount", 0.5)
+log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
+
+
+def log(msg):
+    """Write to log file if available, otherwise print."""
+    if log_file:
+        with open(log_file, "a") as f:
+            f.write(msg + "\n")
+    print(msg)
+
+
+def load_workflow_module(module_name, workflow_dir=None):
+    """Load a module from the workflow's modules directory."""
+    if workflow_dir is None:
+        workflow_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    module_path = os.path.join(workflow_dir, "modules", f"{module_name}.py")
+
+    if not os.path.exists(module_path):
+        raise ImportError(f"Cannot find module '{module_name}' at {module_path}")
+
+    spec = importlib_util.spec_from_file_location(module_name, module_path)
+    module = importlib_util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+log("Computing amino acid mutation fitness")
+
+# Determine workflow directory
+script_dir = os.path.dirname(os.path.abspath(__file__))
+workflow_dir = os.path.dirname(script_dir)
+
+# Load workflow modules
+aamutfit = load_workflow_module("aamutfit", workflow_dir)
+
+# Load nucleotide fitness data
+ntmut_fit = pd.read_csv(ntmut_fitness_csv)
+log(f"Loaded {len(ntmut_fit)} nucleotide fitness entries")
+
+# Columns to explode (semicolon-separated)
+explode_cols = ["gene", "clade_founder_aa", "mutant_aa", "codon_site", "aa_mutation"]
+explode_cols = [c for c in explode_cols if c in ntmut_fit.columns]
+
+if len(ntmut_fit) == 0 or len(explode_cols) == 0:
+    log("No data to process, creating empty output")
+    aamut_fitness = pd.DataFrame(
+        columns=[
+            "cluster",
+            "gene",
+            "clade_founder_aa",
+            "mutant_aa",
+            "aa_site",
+            "aa_mutation",
+            "expected_count",
+            "predicted_count",
+            "actual_count",
+            "tau_squared",
+            "naive_delta_fitness",
+            "subset_of_ORF1ab",
+            "delta_fitness",
+            "uncertainty",
+        ]
+    )
+else:
+    # Get coding mutations with gene overlaps handled
+    ntmut_fit_coding = aamutfit.get_coding(ntmut_fit, gene_overlaps, explode_cols)
+    log(f"Coding mutations after overlap handling: {len(ntmut_fit_coding)}")
+
+    if len(ntmut_fit_coding) == 0:
+        log("No coding mutations found")
+        aamut_fitness = pd.DataFrame()
+    else:
+        # Aggregate counts for amino acid mutations
+        aa_counts = aamutfit.aggregate_counts(ntmut_fit_coding, explode_cols)
+        log(f"Aggregated to {len(aa_counts)} amino acid mutations")
+
+        # Add naive fitness estimates
+        aamutfit.naive_fitness(aa_counts, fitness_pseudocount=fitness_pseudocount)
+
+        # Get refined fitness estimates (weighted average)
+        aa_fit = aamutfit.aa_fitness(ntmut_fit_coding, explode_cols)
+        log(f"Computed refined fitness for {len(aa_fit)} mutations")
+
+        # Map ORF1ab to NSPs
+        orf1ab_to_nsps_df = aamutfit.map_orf1ab_to_nsps(orf1ab_to_nsps)
+        log(f"ORF1ab to NSP mapping: {len(orf1ab_to_nsps_df)} entries")
+
+        # Add NSP entries
+        aa_counts = aamutfit.add_nsps(aa_counts, orf1ab_to_nsps_df)
+        aa_fit = aamutfit.add_nsps(aa_fit, orf1ab_to_nsps_df)
+
+        # Merge counts and fitness
+        aamut_fitness = aamutfit.merge_aa_df(aa_fit, aa_counts, explode_cols)
+
+        # Order by gene and site if possible
+        if genes and "gene" in aamut_fitness.columns:
+            aamut_fitness["gene"] = pd.Categorical(
+                aamut_fitness["gene"], categories=genes, ordered=True
+            )
+            if "aa_site" in aamut_fitness.columns:
+                aamut_fitness = aamut_fitness.sort_values(
+                    ["gene", "aa_site"]
+                ).reset_index(drop=True)
+
+aamut_fitness.to_csv(output_csv, index=False)
+
+log(f"Computed fitness for {len(aamut_fitness)} amino acid mutations")
+log(f"Wrote output to {output_csv}")
+log("Done!")
