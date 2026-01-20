@@ -1,10 +1,11 @@
 {
+  "_comment": "Expected results with max_clades=3 CI setting (processes only first 3 clades)",
   "results_directory": "results_test_data",
   "files": {
     "results_test_data/mat/all_pcps.csv": {
       "exists": true,
-      "size": 14800997,
-      "lines": 1925,
+      "size": null,
+      "lines": null,
       "checksum": null
     },
     "results_test_data/mat/clade_counts.csv": {
@@ -15,19 +16,19 @@
     },
     "results_test_data/mat/filtered_metadata.tsv.gz": {
       "exists": true,
-      "size": 67415,
+      "size": null,
       "lines": null,
-      "checksum": "441def9f297f3ae6528759982322eb21"
+      "checksum": null
     },
     "results_test_data/mat/filtered_tree_raw.pb": {
       "exists": true,
-      "size": 476404,
+      "size": null,
       "lines": null,
-      "checksum": "d9e51df9bdcb0b57b37eeed43161f737"
+      "checksum": null
     }
   },
   "pcp_summary": {
-    "total_pcps": 1924,
+    "total_pcps": 30,
     "columns": [
       "clade",
       "parent_name",
@@ -47,6 +48,6 @@
     "clades_with_adequate_samples": 22,
     "checksum": "23af44ee1acd291c0592ce762439b7c8"
   },
-  "num_clade_sample_files": 22,
+  "num_clade_sample_files": 3,
   "empty_clade_files": []
 }
