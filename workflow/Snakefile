@@ -106,6 +106,9 @@ results_files = [
     "glm/master_table.csv",
     "rates_table.csv",
     "spike_codon_sites_to_mask.txt",
+    # PR 7.1: Nucleotide Fitness
+    "fitness/predicted_counts_by_clade.csv",
+    "fitness/ntmut_fitness_aggregated.csv",
     # TODO (PR 7.2): "aamut_fitness/all_aamut_fitness.csv",
     # TODO (PR 8.1): "validation/pcp_vs_counts_report.txt",
 ]
@@ -836,8 +839,87 @@ rule get_problematic_sites:
 
 
 # =============================================================================
+# Stage 7: Nucleotide Fitness Estimation
+# =============================================================================
+
+rule predicted_counts_by_clade:
+    """Add GLM-predicted counts to mutation counts for each clade."""
+    input:
+        counts=rules.annotate_counts.output.counts_csv,
+        curated=rules.curate_counts.output.curated
+    output:
+        csv=os.path.join(config["output_dir"], "fitness/predicted_counts_by_clade.csv")
+    params:
+        lightswitch_boundaries=config.get("glm_lightswitch_boundaries", {
+            "CT": 13467, "AT": 21562, "CG": 21562, "GC": 21562
+        })
+    log:
+        os.path.join(config["output_dir"], "log/predicted_counts_by_clade.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/predicted_counts_by_clade.py"
+
+
+rule ntmut_counts_by_clade:
+    """Extract nucleotide mutation counts for a specific clade."""
+    input:
+        counts=rules.predicted_counts_by_clade.output.csv
+    output:
+        csv=os.path.join(config["output_dir"], "fitness/ntmut_counts/{clade}_ntmut_counts.csv")
+    params:
+        clade="{clade}"
+    log:
+        os.path.join(config["output_dir"], "log/ntmut_counts_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/ntmut_counts_by_clade.py"
+
+
+rule ntmut_fitness_by_clade:
+    """Compute probabilistic fitness estimates for nucleotide mutations per clade."""
+    input:
+        counts=rules.ntmut_counts_by_clade.output.csv
+    output:
+        csv=os.path.join(config["output_dir"], "fitness/ntmut_fitness/{clade}_ntmut_fitness.csv")
+    params:
+        N_f=config.get("fitness_N_f", 300),
+        N_n_exp=config.get("fitness_N_n_exp", 300)
+    threads: get_threads("ntmut_fitness")
+    resources:
+        mem_mb=2000,
+        runtime=30
+    benchmark:
+        os.path.join(config["output_dir"], "benchmarks/ntmut_fitness_{clade}.tsv")
+    log:
+        os.path.join(config["output_dir"], "log/ntmut_fitness_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/ntmut_fitness.py"
+
+
+rule aggregate_ntmut_fitness:
+    """Aggregate nucleotide fitness across all clades."""
+    input:
+        fitness_files=lambda wc: expand(
+            os.path.join(config["output_dir"], "fitness/ntmut_fitness/{clade}_ntmut_fitness.csv"),
+            clade=clades_w_adequate_counts(wc) + ["all"]
+        )
+    output:
+        csv=os.path.join(config["output_dir"], "fitness/ntmut_fitness_aggregated.csv")
+    log:
+        os.path.join(config["output_dir"], "log/aggregate_ntmut_fitness.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/aggregate_ntmut_fitness.py"
+
+
+# =============================================================================
 # Placeholder rules for future stages (to be implemented in later PRs)
 # =============================================================================
 
-# Stage 7-9 rules will be added in subsequent PRs
+# Stage 7b (AA Fitness), Stage 8, Stage 9 rules will be added in subsequent PRs
 # See unified-mat-pipeline-spec.md for full specification

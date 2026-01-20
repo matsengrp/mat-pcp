@@ -683,6 +683,80 @@ jobs:
             print(f'First 10 sites: {sites[:10]}')
         "
 
+    - name: Verify probfit module
+      run: |
+        test -f workflow/modules/probfit.py
+        pixi run python -c "
+        import sys
+        sys.path.insert(0, 'workflow/modules')
+        import probfit
+
+        # Test basic functionality
+        result = probfit.get_probabilistic_estimate(10, 5, 0.5)
+        print(f'Test estimate: f_hat={result[0]:.2f}, f_mean={result[3]:.2f}')
+        "
+
+    - name: Verify predicted counts by clade
+      run: |
+        test -f results_test_data/fitness/predicted_counts_by_clade.csv
+        pixi run python -c "
+        import pandas as pd
+
+        pred = pd.read_csv('results_test_data/fitness/predicted_counts_by_clade.csv')
+        print(f'Predicted counts: {len(pred)} entries')
+
+        # Check required columns
+        assert 'predicted_count' in pred.columns, 'Missing predicted_count'
+        assert 'tau_squared' in pred.columns, 'Missing tau_squared'
+
+        print(f'Predicted count range: {pred[\"predicted_count\"].min():.2f} - {pred[\"predicted_count\"].max():.2f}')
+        print(f'Tau squared range: {pred[\"tau_squared\"].min():.4f} - {pred[\"tau_squared\"].max():.4f}')
+        "
+
+    - name: Verify nucleotide mutation fitness
+      run: |
+        pixi run python -c "
+        import pandas as pd
+        import os
+
+        df = pd.read_csv('results_test_data/mat/clade_counts.csv')
+        clade_col = df.columns[0]
+        adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
+
+        print(f'Checking nucleotide fitness for clades...')
+
+        for clade in adequate[:3]:  # Check first 3
+            fitness_file = f'results_test_data/fitness/ntmut_fitness/{clade}_ntmut_fitness.csv'
+            if os.path.exists(fitness_file):
+                fit_df = pd.read_csv(fitness_file)
+                print(f'  {clade}: {len(fit_df)} mutations')
+
+                # Check fitness columns
+                assert 'f_mean' in fit_df.columns, 'Missing f_mean'
+                assert 'f_st_dev' in fit_df.columns, 'Missing f_st_dev'
+
+                print(f'    f_mean range: [{fit_df[\"f_mean\"].min():.2f}, {fit_df[\"f_mean\"].max():.2f}]')
+            else:
+                print(f'  {clade}: MISSING')
+        "
+
+    - name: Verify aggregated nucleotide fitness
+      run: |
+        test -f results_test_data/fitness/ntmut_fitness_aggregated.csv
+        pixi run python -c "
+        import pandas as pd
+
+        agg = pd.read_csv('results_test_data/fitness/ntmut_fitness_aggregated.csv')
+        print(f'Aggregated nucleotide fitness: {len(agg)} entries')
+
+        if len(agg) > 0:
+            # Check fitness columns
+            assert 'f_mean' in agg.columns, 'Missing f_mean'
+            assert 'source_clade' in agg.columns, 'Missing source_clade'
+
+            print(f'Clades: {sorted(agg[\"source_clade\"].unique())}')
+        "
+
     - name: Generate test summary
       run: |
         pixi run python workflow/scripts/test_summary.py results_test_data > test_summary.txt
