@@ -1,8 +1,29 @@
 """Computing mutation rates from GLM predictions."""
 
+import os
+import sys
 import pandas as pd
 import numpy as np
-from . import glm
+from importlib import util as importlib_util
+
+
+def _load_glm_module():
+    """Load the glm module from the same directory."""
+    # Get the directory containing this file
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    glm_path = os.path.join(module_dir, "glm.py")
+
+    if "glm" in sys.modules:
+        return sys.modules["glm"]
+
+    spec = importlib_util.spec_from_file_location("glm", glm_path)
+    glm_module = importlib_util.module_from_spec(spec)
+    sys.modules["glm"] = glm_module
+    spec.loader.exec_module(glm_module)
+    return glm_module
+
+
+glm = _load_glm_module()
 
 letters = ["A", "C", "G", "T"]
 mut_types = ["AC", "AG", "AT", "CA", "CG", "CT", "GA", "GC", "GT", "TA", "TC", "TG"]
