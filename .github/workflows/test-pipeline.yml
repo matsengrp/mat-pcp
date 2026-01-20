@@ -826,6 +826,55 @@ jobs:
             print(f'Fitness range: [{agg[\"delta_fitness\"].min():.2f}, {agg[\"delta_fitness\"].max():.2f}]')
         "
 
+    - name: Verify PCP-derived counts
+      run: |
+        test -f results_test_data/validation/pcp_derived_counts.csv
+        pixi run python -c "
+        import pandas as pd
+
+        pcp_counts = pd.read_csv('results_test_data/validation/pcp_derived_counts.csv')
+        print(f'PCP-derived counts: {len(pcp_counts)} entries')
+
+        if len(pcp_counts) > 0:
+            # Check structure
+            assert 'clade' in pcp_counts.columns, 'Missing clade column'
+            assert 'nt_mutation' in pcp_counts.columns, 'Missing nt_mutation column'
+            assert 'pcp_count' in pcp_counts.columns, 'Missing pcp_count column'
+
+            # Print summary
+            print(f'Unique mutations: {pcp_counts[\"nt_mutation\"].nunique()}')
+            print(f'Clades: {sorted(pcp_counts[\"clade\"].unique())}')
+        "
+
+    - name: Verify validation report
+      run: |
+        test -f results_test_data/validation/pcp_vs_counts_report.txt
+        test -f results_test_data/validation/pcp_vs_counts_discrepancies.csv
+        cat results_test_data/validation/pcp_vs_counts_report.txt
+
+    - name: Check validation results
+      run: |
+        pixi run python -c "
+        import pandas as pd
+
+        # Load discrepancies
+        disc = pd.read_csv('results_test_data/validation/pcp_vs_counts_discrepancies.csv')
+        print(f'Validation discrepancies: {len(disc)}')
+
+        # Check if validation passed
+        if len(disc) == 0:
+            print('SUCCESS: PCP and aggregated counts match exactly!')
+        else:
+            print(f'WARNING: {len(disc)} discrepancies found')
+            # Analyze discrepancy types
+            only_pcp = len(disc[disc['aggregated_count'] == 0])
+            only_agg = len(disc[disc['pcp_count'] == 0])
+            mismatch = len(disc) - only_pcp - only_agg
+            print(f'  Only in PCPs: {only_pcp}')
+            print(f'  Only in aggregated: {only_agg}')
+            print(f'  Count mismatches: {mismatch}')
+        "
+
     - name: Generate test summary
       run: |
         pixi run python workflow/scripts/test_summary.py results_test_data > test_summary.txt

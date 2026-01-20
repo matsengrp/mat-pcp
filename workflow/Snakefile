@@ -111,7 +111,8 @@ results_files = [
     "fitness/ntmut_fitness_aggregated.csv",
     # PR 7.2: Amino Acid Fitness
     "aamut_fitness/all_aamut_fitness.csv",
-    # TODO (PR 8.1): "validation/pcp_vs_counts_report.txt",
+    # PR 8.1: Validation
+    "validation/pcp_vs_counts_report.txt",
 ]
 
 
@@ -969,8 +970,50 @@ rule aggregate_aamut_fitness:
 
 
 # =============================================================================
+# Stage 8: Validation - PCP vs Mutation Count Consistency
+# =============================================================================
+
+rule extract_mutations_from_pcps:
+    """Extract mutation counts from PCPs for validation."""
+    input:
+        pcps=rules.aggregate_clade_pcps.output.all_pcps,
+        coding_sites=rules.ref_coding_sites.output.csv,
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta
+    output:
+        csv=os.path.join(config["output_dir"], "validation/pcp_derived_counts.csv")
+    params:
+        pcp_gene_region=config.get("pcp_gene_region", None),
+        max_nt_mutations=config["max_nt_mutations"],
+        max_reversions_to_ref=config["max_reversions_to_ref"]
+    log:
+        os.path.join(config["output_dir"], "log/extract_mutations_from_pcps.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/extract_mutations_from_pcps.py"
+
+
+rule validate_pcp_vs_counts:
+    """Validate that PCP-derived counts match aggregated mutation counts."""
+    input:
+        pcp_counts=rules.extract_mutations_from_pcps.output.csv,
+        mutation_counts=rules.aggregate_mutation_counts.output.csv
+    output:
+        report=os.path.join(config["output_dir"], "validation/pcp_vs_counts_report.txt"),
+        discrepancies=os.path.join(config["output_dir"], "validation/pcp_vs_counts_discrepancies.csv")
+    params:
+        pcp_gene_region=config.get("pcp_gene_region", None)
+    log:
+        os.path.join(config["output_dir"], "log/validate_pcp_vs_counts.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/validate_pcp_vs_counts.py"
+
+
+# =============================================================================
 # Placeholder rules for future stages (to be implemented in later PRs)
 # =============================================================================
 
-# Stage 8, Stage 9 rules will be added in subsequent PRs
+# Stage 9 rules will be added in subsequent PRs
 # See unified-mat-pipeline-spec.md for full specification
