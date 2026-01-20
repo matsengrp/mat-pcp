@@ -86,31 +86,13 @@ def get_final_tree():
 # Output Targets
 # =============================================================================
 
-# Primary output files for the unified pipeline
+# Terminal output files for the unified pipeline
+# (intermediate files are created automatically as dependencies)
 results_files = [
-    # Stage 1-2: Input Processing & Reference
-    "ref/coding_sites.csv",
-    "mat/filtered_metadata.tsv.gz",
-    "mat/clade_counts.csv",
-    # Stage 3: Clade Processing & PCP Extraction
-    "mat/all_pcps.csv",
-    # Stage 4: Mutation Counting
-    "mutation_counts/aggregated.csv",
-    "clade_founder_nts.csv",
-    # Stage 5: Expected Counts
-    "expected_vs_actual_mut_counts.csv",
-    # Stage 6: GLM Rate Estimation
-    "glm/annotated_counts.csv",
-    "glm/clade_founder_annotated.csv",
-    "glm/curated_counts.csv",
-    "glm/master_table.csv",
     "rates_table.csv",
     "spike_codon_sites_to_mask.txt",
-    # Stage 7: Fitness Estimation
-    "fitness/predicted_counts_by_clade.csv",
     "fitness/ntmut_fitness_aggregated.csv",
     "aamut_fitness/all_aamut_fitness.csv",
-    # Stage 8: Validation
     "validation/pcp_vs_counts_report.txt",
 ]
 
