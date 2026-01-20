@@ -83,12 +83,12 @@ jobs:
     - name: Dry run pipeline
       run: |
         pixi run snakemake -n --use-conda \
-          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1 max_clades=3
 
     - name: Run test pipeline
       run: |
         pixi run snakemake -j 2 --use-conda \
-          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1 max_clades=3
 
     - name: Verify input linking
       run: |
@@ -332,7 +332,7 @@ jobs:
         # Build founder files for first 3 clades
         pixi run snakemake $(cat /tmp/founder_targets.txt | tr '\n' ' ') \
           -j 2 --use-conda \
-          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" max_clades=3
 
     - name: Verify clade founder files
       run: |
@@ -370,7 +370,7 @@ jobs:
       run: |
         # Build site mask
         pixi run snakemake -j 1 --use-conda results_test_data/ref/site_mask.csv \
-          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" max_clades=3
 
         # Build mutation translation and sample paths for first 2 clades
         pixi run python -c "
@@ -386,7 +386,7 @@ jobs:
 
         pixi run snakemake $(cat /tmp/mutation_targets.txt | tr '\n' ' ') \
           -j 2 --use-conda \
-          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" max_clades=3
 
     - name: Verify site mask
       run: |
@@ -772,7 +772,7 @@ jobs:
         rm -rf results_test_data/aamut_fitness/
         # Rebuild
         pixi run snakemake -j 2 --use-conda results_test_data/aamut_fitness/all_aamut_fitness.csv \
-          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz"
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" max_clades=3
 
     - name: Verify amino acid fitness by clade
       run: |

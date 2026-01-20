@@ -41,6 +41,7 @@ mat_subset_kwargs: ""  # Additional matUtils extract arguments
 clade_column: "Nextstrain_clade"
 min_clade_size: 2
 clades_to_exclude: []
+# max_clades: null  # Set to limit number of clades processed (useful for testing)
 
 # =============================================================================
 # PCP Extraction Configuration

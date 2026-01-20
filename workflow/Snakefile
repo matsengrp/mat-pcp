@@ -367,7 +367,12 @@ def clades_w_adequate_counts(wildcards=None):
     clade_col = config.get("clade_column", "Nextstrain_clade")
     clades = clades_df[clades_df['adequate_sample_counts'] == True][clade_col].tolist()
     clades_to_exclude = config.get("clades_to_exclude", [])
-    return [clade for clade in clades if clade not in clades_to_exclude and pd.notna(clade)]
+    clades = [clade for clade in clades if clade not in clades_to_exclude and pd.notna(clade)]
+    # Limit number of clades for faster testing (set max_clades in config)
+    max_clades = config.get("max_clades", None)
+    if max_clades is not None and max_clades > 0:
+        clades = clades[:max_clades]
+    return clades
 
 
 rule samples_by_clade:
