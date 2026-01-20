@@ -32,7 +32,11 @@ def get_coding(df, gene_overlaps, explode_cols):
             return True
 
     # Filter to coding mutations
-    df_coding = df[df.get("noncoding", False) == False].copy()
+    if "noncoding" in df.columns:
+        df_coding = df[df["noncoding"] == False].copy()
+    else:
+        # If no noncoding column, assume all are coding
+        df_coding = df.copy()
 
     if len(df_coding) == 0:
         return df_coding
