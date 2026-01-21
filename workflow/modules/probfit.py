@@ -100,7 +100,7 @@ def get_probabilistic_estimate(
         integrand_values = p_n_exp_given_n_pred(n_exp_values) * p_n_obs_given_f_n_exp(
             n_exp_values, f
         )
-        return max(offset, np.trapezoid(y=integrand_values, x=n_exp_values))
+        return max(offset, np.trapz(y=integrand_values, x=n_exp_values))
 
     def p_f_given_n_obs_n_pred(f):
         """Posterior on fitness (unnormalized)."""
@@ -175,17 +175,17 @@ def get_probabilistic_estimate(
             * p_n_obs_given_f_n_exp(n_exp_mesh, f_mesh)
             * p_f(f_mesh)
         )
-        n_exp_integral = np.trapezoid(integrand_values, x=n_exp_values, axis=0)
-        p_n_obs_given_n_pred = np.trapezoid(n_exp_integral, x=f_values)
+        n_exp_integral = np.trapz(integrand_values, x=n_exp_values, axis=0)
+        p_n_obs_given_n_pred = np.trapz(n_exp_integral, x=f_values)
 
         if p_n_obs_given_n_pred <= 0:
             return f_max, 0.1, 0.1, 0.5
 
         f_mean = (
-            np.trapezoid(f_values * n_exp_integral, x=f_values) / p_n_obs_given_n_pred
+            np.trapz(f_values * n_exp_integral, x=f_values) / p_n_obs_given_n_pred
         )
         f_std = np.sqrt(
-            np.trapezoid((f_values - f_mean) ** 2 * n_exp_integral, x=f_values)
+            np.trapz((f_values - f_mean) ** 2 * n_exp_integral, x=f_values)
             / p_n_obs_given_n_pred
         )
         left_interval, right_interval = get_hdi(

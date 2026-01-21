@@ -28,6 +28,7 @@ qc_filter_options:
   max_genome_length: 32000
 
 subset_frac: 1.0  # Random sampling fraction (1.0 = no sampling)
+skip_qc_filtering: false  # Set to true to skip all QC filtering (for SARS2-mut-fitness comparison)
 
 # =============================================================================
 # Tree Processing
