@@ -75,6 +75,7 @@ def main():
     # Get parameters from snakemake
     META = snakemake.input["metadata"]
     SUBSET_FRAC = snakemake.params["subset_frac"]
+    SKIP_QC_FILTERING = snakemake.params.get("skip_qc_filtering", False)
 
     qc_opts = snakemake.params["qc_filter_options"]
     DATETIME_CUTOFF = qc_opts["datetime_cutoff"]
@@ -92,6 +93,24 @@ def main():
     print("Loading metadata...")
     meta_df = pd.read_csv(META, compression="gzip", sep="\t", low_memory=False)
     print(f"Original dataset size: {len(meta_df)}")
+
+    # Skip QC filtering if requested (to match SARS2-mut-fitness behavior)
+    if SKIP_QC_FILTERING:
+        print("Skipping ALL QC filtering (skip_qc_filtering=true)")
+
+        # Save outputs with no filtering at all
+        print(f"Final dataset size: {len(meta_df)}")
+        if FILTERED_META_OUT.endswith(".gz"):
+            meta_df.to_csv(FILTERED_META_OUT, sep="\t", index=False, compression="gzip")
+        else:
+            meta_df.to_csv(FILTERED_META_OUT, sep="\t", index=False)
+
+        with open(INVALID_STRAINS_OUT, "w") as f:
+            f.write("# QC filtering skipped (skip_qc_filtering=true)\n")
+            f.write("# No filtering applied\n")
+
+        print("Filtering complete (all QC skipped)!")
+        return
 
     # Apply random subsetting
     if SUBSET_FRAC < 1.0:

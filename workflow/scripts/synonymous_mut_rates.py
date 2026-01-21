@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Compute synonymous mutation rates and spectra by clade."""
+"""Compute synonymous mutation rates and spectra by clade.
+
+Uses the same normalization approach as SARS2-mut-fitness:
+- rate = fraction / parent_nt_frac
+- where fraction = count / total_count (fraction of all synonymous mutations)
+- and parent_nt_frac = n_sites / total_sites (fraction of 4-fold sites with parent nt)
+"""
 
 import numpy as np
 import pandas as pd
@@ -20,7 +26,7 @@ def log(msg):
     print(msg)
 
 
-log("Computing synonymous mutation rates by clade")
+log("Computing synonymous mutation rates by clade (SARS2-mut-fitness compatible)")
 
 # Load inputs
 mutation_counts = pd.read_csv(mutation_counts_csv)
@@ -29,81 +35,110 @@ clade_founder_nts = pd.read_csv(clade_founder_nts_csv)
 log(f"Loaded {len(mutation_counts)} mutation counts")
 log(f"Loaded {len(clade_founder_nts)} clade founder nucleotide entries")
 
-# Filter to synonymous mutations
-synonymous = mutation_counts.query("synonymous == True").copy()
-log(f"Synonymous mutations: {len(synonymous)}")
+# Get 4-fold degenerate sites from clade_founder_nts
+fourfold_sites = clade_founder_nts.query("four_fold_degenerate == True")[
+    ["clade", "site"]
+].drop_duplicates()
+fourfold_sites["is_4fold"] = True
+log(f"Total 4-fold degenerate sites across clades: {len(fourfold_sites)}")
+
+# Filter to synonymous mutations and merge with 4-fold info
+synonymous = mutation_counts.query("synonymous == True and exclude == False").copy()
+synonymous = synonymous.merge(
+    fourfold_sites,
+    left_on=["clade", "nt_site"],
+    right_on=["clade", "site"],
+    how="inner",
+)
+log(f"Synonymous 4-fold degenerate non-excluded mutations: {len(synonymous)}")
 
 if len(synonymous) == 0:
     log("No synonymous mutations found, creating empty output")
     rates_df = pd.DataFrame(
-        columns=["clade", "mut_type", "actual_count", "n_sites", "rate"]
+        columns=[
+            "clade",
+            "mut_type",
+            "count",
+            "total_count",
+            "fraction",
+            "parent_nt",
+            "parent_nt_frac",
+            "rate",
+        ]
     )
     rates_df.to_csv(output_csv, index=False)
     log("Done!")
     exit()
 
-# Calculate mutation rates by clade and mutation type
-rates_by_clade = []
+# Add mutation type column (e.g., "AtoC" format to match SARS2-mut-fitness)
+synonymous["mut_type"] = synonymous["nt_mutation"].apply(
+    lambda x: f"{x[0]}to{x[-1]}"
+)
 
-for clade in synonymous["clade"].unique():
-    clade_data = synonymous[synonymous["clade"] == clade]
+# Get count column name
+count_col = "count" if "count" in synonymous.columns else "actual_count"
 
-    # Get founder info for this clade
-    founder = clade_founder_nts[clade_founder_nts["clade"] == clade]
+# Tally mutation type counts for each clade
+mut_type_counts = (
+    synonymous.groupby(["clade", "mut_type"], as_index=False)
+    .agg({count_col: "sum"})
+    .rename(columns={count_col: "count"})
+)
 
-    # Count 4-fold degenerate sites by nucleotide
-    fourfold = founder[founder["four_fold_degenerate"] == True]
-    nt_counts = fourfold["nt"].value_counts().to_dict()
+# Calculate parent nucleotide composition at 4-fold degenerate sites
+parent_composition = (
+    clade_founder_nts.query("four_fold_degenerate == True")
+    .groupby(["clade", "nt"], as_index=False)
+    .agg(parent_nt_count=pd.NamedAgg("site", "nunique"))
+    .assign(
+        parent_nt_frac=lambda x: (
+            x["parent_nt_count"]
+            / x.groupby("clade")["parent_nt_count"].transform("sum")
+        ),
+    )
+    .rename(columns={"nt": "parent_nt"})
+)
 
-    log(f"  {clade}: {len(fourfold)} 4-fold degenerate sites")
+# Add parent_nt column to mut_type_counts
+mut_type_counts["parent_nt"] = mut_type_counts["mut_type"].str[0]
 
-    # Calculate rates for each mutation type
-    for mut_type in [
-        "AC",
-        "AG",
-        "AT",
-        "CA",
-        "CG",
-        "CT",
-        "GA",
-        "GC",
-        "GT",
-        "TA",
-        "TC",
-        "TG",
-    ]:
-        from_nt = mut_type[0]
-        to_nt = mut_type[1]
+# Calculate total counts per clade and filter by minimum count threshold
+mut_type_counts["total_count"] = mut_type_counts.groupby("clade")["count"].transform(
+    "sum"
+)
 
-        # Count mutations of this type
-        # Handle column name variations
-        count_col = "count" if "count" in clade_data.columns else "actual_count"
-        type_muts = clade_data[
-            (clade_data["nt_mutation"].str[0] == from_nt)
-            & (clade_data["nt_mutation"].str[-1] == to_nt)
-        ]
-        mut_count = type_muts[count_col].sum() if len(type_muts) > 0 else 0
+# Filter to clades with adequate counts
+mut_type_counts = mut_type_counts.query("total_count >= @min_counts").copy()
 
-        # Get number of possible sites
-        n_sites = nt_counts.get(from_nt, 0)
+# Calculate fraction of all mutations that are this type
+mut_type_counts["fraction"] = (
+    mut_type_counts["count"] / mut_type_counts["total_count"]
+)
 
-        # Calculate rate (with minimum count threshold)
-        if n_sites > 0 and mut_count >= min_counts:
-            rate = mut_count / n_sites
-        else:
-            rate = np.nan
+# Merge with parent nucleotide composition
+rates_df = mut_type_counts.merge(
+    parent_composition[["clade", "parent_nt", "parent_nt_frac"]],
+    on=["clade", "parent_nt"],
+    how="left",
+)
 
-        rates_by_clade.append(
-            {
-                "clade": clade,
-                "mut_type": mut_type,
-                "actual_count": mut_count,
-                "n_sites": n_sites,
-                "rate": rate,
-            }
-        )
+# Calculate rate = fraction / parent_nt_frac (same as SARS2-mut-fitness)
+rates_df["rate"] = rates_df["fraction"] / rates_df["parent_nt_frac"]
 
-rates_df = pd.DataFrame(rates_by_clade)
+# Select and order columns to match SARS2-mut-fitness format
+rates_df = rates_df[
+    [
+        "clade",
+        "mut_type",
+        "count",
+        "total_count",
+        "fraction",
+        "parent_nt",
+        "parent_nt_frac",
+        "rate",
+    ]
+].sort_values(["clade", "mut_type"])
+
 rates_df.to_csv(output_csv, index=False)
 
 log(f"Computed rates for {len(rates_df['clade'].unique())} clades")
