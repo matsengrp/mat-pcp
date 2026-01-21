@@ -49,6 +49,7 @@ clades_to_exclude: []
 # =============================================================================
 # Set to null for full genome, or specify region
 pcp_gene_region:
+  gene: S       # Gene name for validation filtering
   start: 21563  # Spike start
   end: 25384    # Spike end
 
