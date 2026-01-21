@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Validate that PCP-derived AA counts match aamut_fitness actual_count."""
+"""Validate that PCP-derived AA mutation counts match aamut_fitness actual_count.
+
+Compares amino acid mutations (e.g., D614G) between:
+1. PCP-derived counts: Mutations from translating parent-child pairs
+2. aamut_fitness actual_count: Aggregated from mutation counting pipeline
+"""
 
 import pandas as pd
 
@@ -21,11 +26,11 @@ def log(msg):
     print(msg)
 
 
-log("Validating PCP-derived AA counts against aamut_fitness actual_count")
+log("Validating PCP-derived AA mutation counts against aamut_fitness actual_count")
 
 # Load PCP-derived counts
 pcp_counts = pd.read_csv(pcp_counts_csv)
-log(f"PCP-derived AA counts: {len(pcp_counts)} entries")
+log(f"PCP-derived AA mutation counts: {len(pcp_counts)} entries")
 
 # Load per-clade aamut_fitness files
 aamut_per_clade = []
@@ -57,35 +62,35 @@ if pcp_gene_name and len(aamut_all) > 0:
     log(f"Filtered aggregate to {pcp_gene_name}: {len(aamut_all)} entries")
 
 # Also filter PCP counts to the gene
-if pcp_gene_name and len(pcp_counts) > 0:
+if pcp_gene_name and len(pcp_counts) > 0 and "gene" in pcp_counts.columns:
     pcp_counts = pcp_counts[pcp_counts["gene"] == pcp_gene_name]
     log(f"Filtered PCP counts to {pcp_gene_name}: {len(pcp_counts)} entries")
 
 
 def compare_counts(pcp_df, aamut_df, clade_col="clade", is_aggregate=False):
     """
-    Compare PCP-derived counts with aamut_fitness actual_count.
+    Compare PCP-derived counts with aamut_fitness actual_count by aa_mutation.
 
     Returns: (n_matches, n_discrepancies, discrepancies_df)
     """
     if len(pcp_df) == 0 and len(aamut_df) == 0:
         return 0, 0, pd.DataFrame()
 
-    # Get sites with actual_count > 0 from aamut_fitness
+    # Get mutations with actual_count > 0 from aamut_fitness
     if "actual_count" in aamut_df.columns:
         aamut_with_counts = aamut_df[aamut_df["actual_count"] > 0].copy()
     else:
         aamut_with_counts = pd.DataFrame()
 
-    # Prepare merge keys
+    # Prepare merge keys - now using aa_mutation instead of just aa_site
     if is_aggregate:
         # For aggregate, we don't have clade column
         pcp_agg = pcp_df[pcp_df["clade"] == "all"].copy()
-        merge_keys = ["gene", "aa_site"]
+        merge_keys = ["gene", "aa_mutation"]
 
         if len(pcp_agg) > 0 and len(aamut_with_counts) > 0:
             merged = pcp_agg.merge(
-                aamut_with_counts[["gene", "aa_site", "actual_count"]],
+                aamut_with_counts[["gene", "aa_mutation", "actual_count"]],
                 on=merge_keys,
                 how="outer",
             )
@@ -93,18 +98,18 @@ def compare_counts(pcp_df, aamut_df, clade_col="clade", is_aggregate=False):
             merged = pcp_agg.copy()
             merged["actual_count"] = 0
         elif len(aamut_with_counts) > 0:
-            merged = aamut_with_counts[["gene", "aa_site", "actual_count"]].copy()
+            merged = aamut_with_counts[["gene", "aa_mutation", "actual_count"]].copy()
             merged["pcp_count"] = 0
         else:
             return 0, 0, pd.DataFrame()
     else:
         # For per-clade comparison
         pcp_per_clade = pcp_df[pcp_df["clade"] != "all"].copy()
-        merge_keys = [clade_col, "gene", "aa_site"]
+        merge_keys = [clade_col, "gene", "aa_mutation"]
 
         if len(pcp_per_clade) > 0 and len(aamut_with_counts) > 0:
             merged = pcp_per_clade.merge(
-                aamut_with_counts[[clade_col, "gene", "aa_site", "actual_count"]],
+                aamut_with_counts[[clade_col, "gene", "aa_mutation", "actual_count"]],
                 on=merge_keys,
                 how="outer",
             )
@@ -113,7 +118,7 @@ def compare_counts(pcp_df, aamut_df, clade_col="clade", is_aggregate=False):
             merged["actual_count"] = 0
         elif len(aamut_with_counts) > 0:
             merged = aamut_with_counts[
-                [clade_col, "gene", "aa_site", "actual_count"]
+                [clade_col, "gene", "aa_mutation", "actual_count"]
             ].copy()
             merged["pcp_count"] = 0
         else:
@@ -186,29 +191,29 @@ with open(output_report, "w") as f:
             "The PCP extraction and aamut_fitness pipelines are consistent.\n"
         )
     else:
-        f.write("VALIDATION FAILED\n")
+        f.write("DISCREPANCY BREAKDOWN\n")
         f.write("-" * 40 + "\n")
         f.write(f"Only in PCPs (not in aamut_fitness): {len(only_in_pcp)}\n")
         f.write(f"Only in aamut_fitness (not in PCPs): {len(only_in_aamut)}\n")
         f.write(f"Count mismatches (both have counts): {len(count_mismatch)}\n\n")
 
         if len(only_in_pcp) > 0:
-            f.write("\nAA sites only in PCPs (first 10):\n")
-            cols = ["clade", "gene", "aa_site", "pcp_count"] if "clade" in only_in_pcp.columns else ["gene", "aa_site", "pcp_count"]
+            f.write("\nAA mutations only in PCPs (first 10):\n")
+            cols = ["clade", "gene", "aa_mutation", "pcp_count"] if "clade" in only_in_pcp.columns else ["gene", "aa_mutation", "pcp_count"]
             cols = [c for c in cols if c in only_in_pcp.columns]
             f.write(only_in_pcp.head(10)[cols].to_string())
             f.write("\n")
 
         if len(only_in_aamut) > 0:
-            f.write("\nAA sites only in aamut_fitness (first 10):\n")
-            cols = ["clade", "gene", "aa_site", "actual_count"] if "clade" in only_in_aamut.columns else ["gene", "aa_site", "actual_count"]
+            f.write("\nAA mutations only in aamut_fitness (first 10):\n")
+            cols = ["clade", "gene", "aa_mutation", "actual_count"] if "clade" in only_in_aamut.columns else ["gene", "aa_mutation", "actual_count"]
             cols = [c for c in cols if c in only_in_aamut.columns]
             f.write(only_in_aamut.head(10)[cols].to_string())
             f.write("\n")
 
         if len(count_mismatch) > 0:
             f.write("\nCount mismatches (first 10):\n")
-            cols = ["clade", "gene", "aa_site", "pcp_count", "actual_count", "difference"] if "clade" in count_mismatch.columns else ["gene", "aa_site", "pcp_count", "actual_count", "difference"]
+            cols = ["clade", "gene", "aa_mutation", "pcp_count", "actual_count", "difference"] if "clade" in count_mismatch.columns else ["gene", "aa_mutation", "pcp_count", "actual_count", "difference"]
             cols = [c for c in cols if c in count_mismatch.columns]
             f.write(count_mismatch.head(10)[cols].to_string())
             f.write("\n")

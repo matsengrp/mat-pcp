@@ -956,13 +956,11 @@ rule aggregate_aamut_fitness:
 # =============================================================================
 
 rule extract_mutations_from_pcps:
-    """Extract mutation counts from PCPs for validation."""
+    """Extract AA mutation counts from PCPs by translating sequences."""
     input:
         pcps=rules.aggregate_clade_pcps.output.all_pcps,
-        coding_sites=rules.ref_coding_sites.output.csv,
         ref_fasta=rules.get_ref_fasta.output.ref_fasta
     output:
-        nt_counts=os.path.join(config["output_dir"], "validation/pcp_nt_counts.csv"),
         aa_counts=os.path.join(config["output_dir"], "validation/pcp_aa_counts.csv")
     params:
         pcp_gene_region=config.get("pcp_gene_region", None),
