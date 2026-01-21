@@ -976,16 +976,19 @@ rule extract_mutations_from_pcps:
 
 
 rule validate_pcp_vs_counts:
-    """Validate PCP-derived AA counts match aamut_fitness actual_count (S gene)."""
+    """Validate PCP-derived counts match aamut_fitness actual_count (S gene)."""
     input:
-        all_pcps=rules.aggregate_clade_pcps.output.all_pcps,
+        pcp_derived_counts=rules.extract_mutations_from_pcps.output.csv,
         aamut_fitness_files=lambda wc: expand(
             os.path.join(config["output_dir"], "aamut_fitness/{clade}_aamut_fitness.csv"),
             clade=clades_w_adequate_counts(wc)
-        )
+        ),
+        coding_sites=rules.ref_coding_sites.output.csv
     output:
         report=os.path.join(config["output_dir"], "validation/pcp_vs_counts_report.txt"),
         discrepancies=os.path.join(config["output_dir"], "validation/pcp_vs_counts_discrepancies.csv")
+    params:
+        pcp_gene_region=config.get("pcp_gene_region", None)
     log:
         os.path.join(config["output_dir"], "log/validate_pcp_vs_counts.log")
     conda:
