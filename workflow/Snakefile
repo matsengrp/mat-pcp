@@ -139,6 +139,7 @@ rule filter_metadata:
     params:
         qc_filter_options=config["qc_filter_options"],
         subset_frac=config.get("subset_frac", 1.0),
+        skip_qc_filtering=config.get("skip_qc_filtering", False),
     threads: get_threads("filter_metadata")
     log:
         invalid_strains=os.path.join(config["output_dir"], "log/invalid_strains.txt")
@@ -955,13 +956,12 @@ rule aggregate_aamut_fitness:
 # =============================================================================
 
 rule extract_mutations_from_pcps:
-    """Extract mutation counts from PCPs for validation."""
+    """Extract AA mutation counts from PCPs by translating sequences."""
     input:
         pcps=rules.aggregate_clade_pcps.output.all_pcps,
-        coding_sites=rules.ref_coding_sites.output.csv,
         ref_fasta=rules.get_ref_fasta.output.ref_fasta
     output:
-        csv=os.path.join(config["output_dir"], "validation/pcp_derived_counts.csv")
+        aa_counts=os.path.join(config["output_dir"], "validation/pcp_aa_counts.csv")
     params:
         pcp_gene_region=config.get("pcp_gene_region", None),
         max_nt_mutations=config["max_nt_mutations"],
@@ -975,18 +975,22 @@ rule extract_mutations_from_pcps:
 
 
 rule validate_pcp_vs_counts:
-    """Validate that PCP-derived counts match aggregated mutation counts."""
+    """Validate PCP-derived AA counts match aamut_fitness actual_count."""
     input:
-        pcp_counts=rules.extract_mutations_from_pcps.output.csv,
-        mutation_counts=rules.aggregate_mutation_counts.output.csv
+        pcp_counts=rules.extract_mutations_from_pcps.output.aa_counts,
+        aamut_fitness_files=lambda wc: expand(
+            os.path.join(config["output_dir"], "aamut_fitness/{clade}_aamut_fitness.csv"),
+            clade=clades_w_adequate_counts(wc)
+        ),
+        all_aamut_fitness=rules.aggregate_aamut_fitness.output.csv
     output:
         report=os.path.join(config["output_dir"], "validation/pcp_vs_counts_report.txt"),
         discrepancies=os.path.join(config["output_dir"], "validation/pcp_vs_counts_discrepancies.csv")
     params:
-        pcp_gene_region=config.get("pcp_gene_region", None)
+        pcp_gene_name=config.get("pcp_gene_region", {}).get("gene", None) if config.get("pcp_gene_region") else None
     log:
         os.path.join(config["output_dir"], "log/validate_pcp_vs_counts.log")
     conda:
         "envs/default.yml"
     script:
-        "scripts/validate_pcp_vs_counts.py"
+        "scripts/validate_pcp_vs_aamut.py"

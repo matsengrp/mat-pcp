@@ -83,12 +83,12 @@ jobs:
     - name: Dry run pipeline
       run: |
         pixi run snakemake -n --use-conda \
-          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1 max_clades=3
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1 max_clades=3 fitness_N_f=10 fitness_N_n_exp=10
 
     - name: Run test pipeline
       run: |
-        pixi run snakemake -j 2 --use-conda \
-          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1 max_clades=3
+        pixi run snakemake -j $(nproc) --use-conda \
+          --config output_dir="results_test_data" mat="test_data/filtered_tree_raw.pb.gz" metadata="test_data/filtered_metadata.tsv.gz" subset_frac=0.1 max_clades=3 fitness_N_f=10 fitness_N_n_exp=10
 
     - name: Verify input linking
       run: |
@@ -826,23 +826,23 @@ jobs:
             print(f'Fitness range: [{agg[\"delta_fitness\"].min():.2f}, {agg[\"delta_fitness\"].max():.2f}]')
         "
 
-    - name: Verify PCP-derived counts
+    - name: Verify PCP-derived AA counts
       run: |
-        test -f results_test_data/validation/pcp_derived_counts.csv
+        test -f results_test_data/validation/pcp_aa_counts.csv
         pixi run python -c "
         import pandas as pd
 
-        pcp_counts = pd.read_csv('results_test_data/validation/pcp_derived_counts.csv')
-        print(f'PCP-derived counts: {len(pcp_counts)} entries')
+        pcp_counts = pd.read_csv('results_test_data/validation/pcp_aa_counts.csv')
+        print(f'PCP-derived AA counts: {len(pcp_counts)} entries')
 
         if len(pcp_counts) > 0:
             # Check structure
             assert 'clade' in pcp_counts.columns, 'Missing clade column'
-            assert 'nt_mutation' in pcp_counts.columns, 'Missing nt_mutation column'
+            assert 'aa_mutation' in pcp_counts.columns, 'Missing aa_mutation column'
             assert 'pcp_count' in pcp_counts.columns, 'Missing pcp_count column'
 
             # Print summary
-            print(f'Unique mutations: {pcp_counts[\"nt_mutation\"].nunique()}')
+            print(f'Unique AA mutations: {pcp_counts[\"aa_mutation\"].nunique()}')
             print(f'Clades: {sorted(pcp_counts[\"clade\"].unique())}')
         "
 
@@ -863,15 +863,15 @@ jobs:
 
         # Check if validation passed
         if len(disc) == 0:
-            print('SUCCESS: PCP and aggregated counts match exactly!')
+            print('SUCCESS: PCP and aamut_fitness counts match exactly!')
         else:
             print(f'WARNING: {len(disc)} discrepancies found')
             # Analyze discrepancy types
-            only_pcp = len(disc[disc['aggregated_count'] == 0])
-            only_agg = len(disc[disc['pcp_count'] == 0])
-            mismatch = len(disc) - only_pcp - only_agg
+            only_pcp = len(disc[disc['actual_count'] == 0])
+            only_aamut = len(disc[disc['pcp_count'] == 0])
+            mismatch = len(disc) - only_pcp - only_aamut
             print(f'  Only in PCPs: {only_pcp}')
-            print(f'  Only in aggregated: {only_agg}')
+            print(f'  Only in aamut_fitness: {only_aamut}')
             print(f'  Count mismatches: {mismatch}')
         "
 
