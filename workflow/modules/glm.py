@@ -1,11 +1,17 @@
-"""General Linear Model for mutation rate estimation."""
+"""General Linear Model for mutation rate estimation.
+
+Synchronized with SARS2-mut-fitness-v2/modules/glm.py to ensure consistent
+fitness estimates between pipelines.
+"""
 
 import numpy as np
 import pandas as pd
-from scipy import linalg
 
 letters = ["A", "C", "G", "T"]
 mut_types = ["AC", "AG", "AT", "CA", "CG", "CT", "GA", "GC", "GT", "TA", "TC", "TG"]
+
+# L2 regularization strength (matches SARS2-mut-fitness-v2)
+REGULARIZATION_STRENGTH = 0.1
 
 
 class GeneralLinearModel:
@@ -28,13 +34,23 @@ class GeneralLinearModel:
 
     def train(self, df_train, lightswitch_boundaries=None):
         """
-        Train GLM on mutation counts.
+        Train GLM on mutation counts using L2-regularized linear regression.
+
+        Uses the same approach as SARS2-mut-fitness-v2:
+        - L2 regularization with strength 0.1
+        - Intercept term is NOT regularized
+        - Tau squared computed as mean squared error on log scale
 
         Args:
             df_train: DataFrame with training data
             lightswitch_boundaries: Dict mapping mutation types to position boundaries
         """
-        for mut_type in mut_types:
+        # Check which mutation types are present in training data
+        present_mut_types = (
+            df_train["nt_mutation"].apply(lambda x: x[0] + x[-1]).unique()
+        )
+
+        for mut_type in present_mut_types:
             nt1, nt2 = mut_type[0], mut_type[1]
             mask = df_train["nt_mutation"].str.match(f"^{nt1}.*{nt2}$").values
             df_mut_type = df_train[mask].copy()
@@ -47,19 +63,24 @@ class GeneralLinearModel:
             # Create design matrix
             X = self.create_data_matrix(df_mut_type, mut_type)
 
-            # Get response variable (log counts with offset)
-            y = np.log(df_mut_type["actual_count"].values + 0.5)
+            # Get response variable (log counts with offset) - shape (n, 1)
+            log_counts = np.log(df_mut_type["actual_count"].values + 0.5).reshape(-1, 1)
 
-            # Fit linear regression
+            # Fit L2-regularized linear regression (matches v2 exactly)
             try:
-                self.W[mut_type] = linalg.lstsq(X, y)[0]
+                regularization_matrix = REGULARIZATION_STRENGTH * np.identity(
+                    X.shape[1]
+                )
+                regularization_matrix[0, 0] = 0  # Don't regularize intercept
+                w = (
+                    np.linalg.inv(X.T @ X + regularization_matrix) @ X.T @ log_counts
+                )
+                self.W[mut_type] = w
 
-                # Compute residual variance
-                y_pred = X @ self.W[mut_type]
-                residuals = y - y_pred
-                self.tau_squared[mut_type] = np.var(residuals)
-            except (linalg.LinAlgError, ValueError):
-                self.W[mut_type] = np.zeros(X.shape[1])
+                # Compute residual variance as mean squared error (matches v2)
+                self.tau_squared[mut_type] = np.mean((log_counts - X @ w) ** 2)
+            except np.linalg.LinAlgError:
+                self.W[mut_type] = np.zeros((X.shape[1], 1))
                 self.tau_squared[mut_type] = 1.0
 
     def create_data_matrix(self, df, mut_type):
@@ -99,10 +120,13 @@ class GeneralLinearModel:
         Args:
             df: DataFrame with mutation data (modified in place)
         """
+        # Check which mutation types are present in the data
+        present_mut_types = df["nt_mutation"].apply(lambda x: x[0] + x[-1]).unique()
+
         predicted_counts = np.zeros(len(df))
         remaining_variance = np.zeros(len(df))
 
-        for mut_type in mut_types:
+        for mut_type in present_mut_types:
             nt1, nt2 = mut_type[0], mut_type[1]
             mask_mut_type = (
                 df["nt_mutation"].str.match("^" + nt1 + ".*" + nt2 + "$").values
@@ -114,9 +138,19 @@ class GeneralLinearModel:
 
             X = self.create_data_matrix(df_mut_type.copy(), mut_type)
 
-            if mut_type in self.W and len(self.W[mut_type]) == X.shape[1]:
-                predicted_counts[mask_mut_type] = (X @ self.W[mut_type]).flatten()
-                remaining_variance[mask_mut_type] = self.tau_squared.get(mut_type, 1.0)
+            if mut_type in self.W:
+                w = self.W[mut_type]
+                # Handle both column vector (n, 1) and 1D array (n,) formats
+                if w.ndim == 2:
+                    w = w.flatten()
+                if len(w) == X.shape[1]:
+                    predicted_counts[mask_mut_type] = (X @ w).flatten()
+                    remaining_variance[mask_mut_type] = self.tau_squared.get(
+                        mut_type, 1.0
+                    )
+                else:
+                    predicted_counts[mask_mut_type] = 0
+                    remaining_variance[mask_mut_type] = 1.0
             else:
                 predicted_counts[mask_mut_type] = 0
                 remaining_variance[mask_mut_type] = 1.0

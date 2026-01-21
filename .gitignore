@@ -10,3 +10,13 @@ data/
 !data/lan_2022/41467_2022_28603_MOESM11_ESM.txt
 results*
 !results_test_data
+
+config/config-public-2022-06-01.yaml
+docs/dag_max1_wide.svg
+docs/dag_max2_wide.svg
+docs/issues/
+results_test_data/
+**/__pycache__/
+
+# One-off test scripts
+workflow/scripts/test_v2_regression.py

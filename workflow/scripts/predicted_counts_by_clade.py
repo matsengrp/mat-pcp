@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Add GLM-predicted counts to mutation counts for each clade."""
+"""Add GLM-predicted counts to mutation counts for each clade.
+
+Synchronized with SARS2-mut-fitness-v2 approach:
+1. Train GLM on curated training data with L2 regularization
+2. For each clade, compute clade-specific normalization factor T
+3. Apply normalized predictions to all mutations in the clade
+"""
 
 import sys
 import os
@@ -39,7 +45,7 @@ def load_workflow_module(module_name, workflow_dir=None):
     return module
 
 
-log("Adding GLM-predicted counts to mutation counts")
+log("Adding GLM-predicted counts to mutation counts (v2-synchronized)")
 
 # Determine workflow directory
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -56,14 +62,8 @@ counts_curated = load_module.load_curated_muts(curated_csv)
 log(f"Loaded {len(counts_df)} count entries")
 log(f"Loaded {len(counts_curated)} curated mutations for training")
 
-# Initialize and train rates model
-rate = rates_module.Rates(lightswitch_boundaries)
-rate.populate_rates(counts_curated)
-
-log("Trained GLM on curated mutations")
-
 # Ensure counts_df has required columns for prediction
-required_cols = ["nt_mutation", "motif", "unpaired", "nt_site_before_boundary"]
+required_cols = ["mut_type", "motif", "unpaired", "nt_site_before_boundary", "clade"]
 missing_cols = [col for col in required_cols if col not in counts_df.columns]
 if missing_cols:
     log(f"WARNING: Missing columns for prediction: {missing_cols}")
@@ -71,32 +71,18 @@ if missing_cols:
     if "nt_site_before_boundary" not in counts_df.columns:
         counts_df["nt_site_before_boundary"] = False
 
-# Calculate predicted counts for each row in counts_df
-rate.predicted_counts_by_clade(counts_df)
+# Get list of clades
+clades = counts_df["clade"].unique()
+log(f"Processing {len(clades)} clades: {list(clades)}")
 
-# Add tau_squared from rate table lookup
-rate_lookup = {}
-for _, row in rate.rates.iterrows():
-    key = (
-        row["mut_type"],
-        row["motif"],
-        row["unpaired"],
-        row["nt_site_before_boundary"],
-    )
-    rate_lookup[key] = row.get("residual", 0.1) if pd.notna(row.get("residual")) else 0.1
-
-
-def get_tau_squared(row):
-    key = (
-        row.get("mut_type", ""),
-        row.get("motif", ""),
-        int(row.get("unpaired", 0)),
-        bool(row.get("nt_site_before_boundary", False)),
-    )
-    return rate_lookup.get(key, 0.1)
-
-
-counts_df["tau_squared"] = counts_df.apply(get_tau_squared, axis=1)
+# Use the v2-synchronized add_predicted_count function
+# This applies clade-specific normalization factor T
+rates_module.add_predicted_count(
+    train_df=counts_curated,
+    count_df=counts_df,
+    clades=clades,
+    lightswitch_boundaries=lightswitch_boundaries,
+)
 
 log(f"Added predicted counts and tau_squared to {len(counts_df)} entries")
 log(

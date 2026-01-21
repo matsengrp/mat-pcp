@@ -1,4 +1,8 @@
-"""Computing mutation rates from GLM predictions."""
+"""Computing mutation rates from GLM predictions.
+
+Synchronized with SARS2-mut-fitness-v2/modules/rates.py to ensure consistent
+fitness estimates between pipelines.
+"""
 
 import os
 import sys
@@ -84,10 +88,15 @@ class Rates:
         """
         Train GLM and populate rate table with predictions.
 
+        Matches SARS2-mut-fitness-v2 approach:
+        1. Train GLM on training data
+        2. Predict rates for all conditions
+        3. Rescale by total mutations / number of sites
+
         Args:
             df_train: Training DataFrame with curated synonymous mutations
         """
-        # Initialize and train GLM
+        # Initialize and train GLM (uses L2 regularization matching v2)
         self.glm = glm.GeneralLinearModel(
             included_factors=["motif", "unpaired", "nt_site_before_boundary"]
         )
@@ -96,87 +105,263 @@ class Rates:
         # Predict counts for rate table conditions
         self.glm.predict(self.rates)
 
-        # Compute rate from predicted count
+        # Store raw predicted count as rate
         self.rates["rate"] = self.rates["predicted_count"]
+
+        # Rescale rates by total number of mutations and number of sites
+        # (matches v2 populate_rates normalization)
+        tot_mut = df_train["actual_count"].sum()
+        n_sites = df_train.shape[0]
+
+        if tot_mut > 0:
+            self.rates["rate"] = self.rates["rate"] * n_sites / tot_mut
+
+        # Add condition tuple column for lookup
+        cond_cols = ["mut_type", "motif", "unpaired", "nt_site_before_boundary"]
+        self.rates["condition"] = self.rates[cond_cols].apply(tuple, axis=1)
 
     def genome_composition(self, df):
         """
         Calculate genome composition (count of each condition in data).
 
+        Matches SARS2-mut-fitness-v2 approach - returns array of counts
+        aligned with self.rates rows.
+
         Args:
             df: DataFrame with mutation data
 
         Returns:
-            Series of condition counts
+            np.array of condition counts aligned with self.rates
         """
-        condition_cols = ["mut_type", "motif", "unpaired", "nt_site_before_boundary"]
-        counts = df.groupby(condition_cols).size().reset_index(name="cond_count")
-
-        self.rates = self.rates.merge(
-            counts, on=condition_cols, how="left", suffixes=("", "_new")
-        )
-        if "cond_count_new" in self.rates.columns:
-            self.rates["cond_count"] = (
-                self.rates["cond_count_new"].fillna(0).astype(int)
+        gen_comp = np.array(
+            self.rates.apply(
+                lambda x: sum(
+                    (x.mut_type == df.mut_type)
+                    & (x.motif == df.motif)
+                    & (x.unpaired == df.unpaired)
+                    & (x.nt_site_before_boundary == df.nt_site_before_boundary)
+                ),
+                axis=1,
             )
-            self.rates.drop(columns=["cond_count_new"], inplace=True)
+        )
+        return gen_comp
 
-        return self.rates["cond_count"]
+    def evol_time(self, df_syn):
+        """
+        Compute evolutionary time normalization factor T.
+
+        This is the key clade-specific normalization that ensures predicted
+        counts are scaled appropriately for each clade's mutation count.
+
+        T = N_mutations / (genome_composition @ rates)
+
+        Args:
+            df_syn: DataFrame with synonymous mutations for a clade
+
+        Returns:
+            float: Normalization factor T
+        """
+        gen_comp = self.genome_composition(df_syn)
+        N_mut = df_syn["actual_count"].sum()
+
+        denominator = gen_comp @ np.array(self.rates["rate"])
+        if denominator > 0:
+            T = N_mut / denominator
+        else:
+            T = 1.0
+
+        return T
+
+    def predicted_counts_for_clade(self, df_syn):
+        """
+        Update rates with clade-specific predicted counts and genome composition.
+
+        Matches SARS2-mut-fitness-v2 predicted_counts() method.
+
+        Args:
+            df_syn: DataFrame with synonymous mutations for a clade
+        """
+        T = self.evol_time(df_syn)
+        gen_comp = self.genome_composition(df_syn)
+
+        assert self.rates.shape[0] == len(gen_comp)
+
+        self.rates["predicted_count"] = T * self.rates["rate"]
+        self.rates["cond_count"] = gen_comp
 
     def predicted_counts_by_clade(self, df):
         """
-        Get predicted counts for mutations in a DataFrame.
+        Get predicted counts for mutations in a DataFrame using rate lookup.
+
+        Matches SARS2-mut-fitness-v2 approach - looks up predicted counts
+        from the rate table by condition tuple.
 
         Args:
             df: DataFrame with mutations (must have required columns)
 
         Returns:
-            Series of predicted counts
+            np.array of predicted counts
         """
-        self.glm.predict(df)
-        return df["predicted_count"]
+        # Look-up dictionary: condition -> predicted count
+        count_dict = self.rates.set_index("condition")["predicted_count"].to_dict()
+
+        # List of row-wise conditions
+        cond_list = np.column_stack(
+            [
+                df["mut_type"],
+                df["motif"],
+                df["unpaired"],
+                df["nt_site_before_boundary"],
+            ]
+        )
+
+        # Vector of predicted counts via lookup
+        pred_count = np.array(
+            list(map(lambda x: count_dict.get(tuple(x), 0.0), cond_list))
+        )
+
+        return pred_count
 
     def residual_variance(self, df, tau):
         """
         Compute residual variance using empirical Bayes shrinkage.
 
+        Matches SARS2-mut-fitness-v2 implementation exactly:
+        1. Initialize residuals to 0 (not NaN)
+        2. Compute empirical residuals for conditions with data
+        3. Apply shrinkage: when cond_count=0, shrinkage=1, so residual=tau
+
         Args:
             df: DataFrame with mutation data
             tau: Dict of global residual variance by mutation type
         """
-        condition_cols = ["mut_type", "motif", "unpaired", "nt_site_before_boundary"]
+        # Initialize residuals to 0 (matches v2)
+        self.rates["residual"] = np.zeros(self.rates.shape[0], float)
 
-        # Get empirical residuals per condition
-        grouped = df.groupby(condition_cols).apply(
-            lambda x: x.actual_count.to_numpy(), include_groups=False
+        # Get indices of conditions with data
+        idx = self.rates[self.rates["cond_count"] != 0].index
+
+        # Group by condition to get actual counts
+        emp_counts = (
+            df.groupby(["mut_type", "motif", "unpaired", "nt_site_before_boundary"])
+            .apply(lambda x: x.actual_count.to_numpy(), include_groups=False)
+            .to_list()
         )
-        if len(grouped) == 0:
+
+        if len(idx) != len(emp_counts):
             return
 
-        idx, emp_counts = zip(*grouped.items())
-
-        idx = pd.MultiIndex.from_tuples(idx, names=condition_cols)
-        self.rates = self.rates.set_index(condition_cols)
-
-        emp_residuals = [
-            np.mean((np.log(counts + 0.5) - np.log(pred + 0.5)) ** 2)
-            for counts, pred in zip(
-                emp_counts, self.rates.loc[idx, "predicted_count"].values
+        # Compute empirical residuals
+        self.rates.loc[idx, "residual"] = list(
+            map(
+                lambda x, y: np.mean((np.log(x + 0.5) - np.log(y + 0.5)) ** 2),
+                emp_counts,
+                self.rates.loc[idx, "predicted_count"].to_numpy(),
             )
-        ]
-        self.rates.loc[idx, "residual"] = emp_residuals
+        )
 
-        # Apply empirical Bayes shrinkage
+        # Apply empirical Bayes shrinkage (matches v2)
         av_n_cond = np.mean(self.rates["cond_count"])
 
-        for mut_type in mut_types:
-            mask = self.rates.index.get_level_values("mut_type") == mut_type
-            n_cond = self.rates.loc[mask, "cond_count"].values
-            emp_res = self.rates.loc[mask, "residual"].values
+        self.rates["residual"] = (
+            self.rates.groupby("mut_type")
+            .apply(
+                lambda x: np.exp(-x.cond_count / av_n_cond) * tau[x.name]
+                + (1 - np.exp(-x.cond_count / av_n_cond)) * x.residual,
+                include_groups=False,
+            )
+            .explode()
+            .values
+        )
 
-            shrinkage = np.exp(-n_cond / av_n_cond) if av_n_cond > 0 else 1.0
-            self.rates.loc[mask, "residual"] = shrinkage * tau.get(
-                mut_type, 1.0
-            ) + (1 - shrinkage) * emp_res
+    def residual_by_clade(self, df):
+        """
+        Get residuals for mutations in a DataFrame using rate lookup.
 
-        self.rates = self.rates.reset_index()
+        Matches SARS2-mut-fitness-v2 approach.
+
+        Args:
+            df: DataFrame with mutations (must have required columns)
+
+        Returns:
+            np.array of residuals (tau_squared values)
+        """
+        # Look-up dictionary: condition -> residual
+        res_dict = self.rates.set_index("condition")["residual"].to_dict()
+
+        # List of row-wise conditions
+        cond_list = np.column_stack(
+            [
+                df["mut_type"],
+                df["motif"],
+                df["unpaired"],
+                df["nt_site_before_boundary"],
+            ]
+        )
+
+        # Vector of residuals via lookup
+        res = np.array(
+            list(map(lambda x: res_dict.get(tuple(x), 0.1), cond_list))
+        )
+
+        return res
+
+
+def add_predicted_count(train_df, count_df, clades, lightswitch_boundaries=None):
+    """
+    Add predicted counts to count_df for all clades.
+
+    This function matches the SARS2-mut-fitness-v2 add_predicted_count function:
+    1. Train GLM on training data
+    2. For each clade, compute clade-specific normalization factor T
+    3. Apply normalized predictions to all mutations in the clade
+
+    Args:
+        train_df: Training DataFrame with curated synonymous mutations
+        count_df: DataFrame with mutation counts for all clades
+        clades: List of clade names to process
+        lightswitch_boundaries: Dict mapping mutation types to position boundaries
+    """
+    rate = Rates(lightswitch_boundaries)
+
+    sites = train_df["nt_site"].unique()
+
+    # Train GLM on training data
+    rate.populate_rates(train_df)
+
+    # Compute initial predicted counts for training data
+    train_df["predicted_count"] = rate.predicted_counts_by_clade(train_df)
+
+    # Compute tau (residual variance) per mutation type from training data
+    tau = train_df.groupby("mut_type").apply(
+        lambda x: np.mean(
+            (np.log(x.actual_count + 0.5) - np.log(x.predicted_count + 0.5)) ** 2
+        ),
+        include_groups=False,
+    )
+
+    # Update genome composition from training data
+    rate.rates["cond_count"] = rate.genome_composition(train_df)
+
+    # Compute residual variance with empirical Bayes shrinkage
+    rate.residual_variance(train_df, tau.to_dict())
+
+    # Process each clade
+    for c in clades:
+        count_clade = count_df.loc[count_df["clade"] == c, :].copy()
+        count_clade_syn = count_clade.loc[
+            count_clade["mut_class"] == "synonymous"
+        ].copy()
+        # Retain only sites present in training data
+        count_clade_syn = count_clade_syn.loc[count_clade_syn["nt_site"].isin(sites)]
+
+        # Compute clade-specific normalization
+        rate.predicted_counts_for_clade(count_clade_syn)
+
+        # Get predicted counts and residuals for all mutations in clade
+        pred_count_clade = rate.predicted_counts_by_clade(count_clade)
+        residual_clade = rate.residual_by_clade(count_clade)
+
+        # Update count_df with predicted counts and tau_squared
+        count_df.loc[count_clade.index, "predicted_count"] = pred_count_clade
+        count_df.loc[count_clade.index, "tau_squared"] = residual_clade
