@@ -863,15 +863,15 @@ jobs:
 
         # Check if validation passed
         if len(disc) == 0:
-            print('SUCCESS: PCP and aggregated counts match exactly!')
+            print('SUCCESS: PCP and aamut_fitness counts match exactly!')
         else:
             print(f'WARNING: {len(disc)} discrepancies found')
             # Analyze discrepancy types
-            only_pcp = len(disc[disc['aggregated_count'] == 0])
-            only_agg = len(disc[disc['pcp_count'] == 0])
-            mismatch = len(disc) - only_pcp - only_agg
+            only_pcp = len(disc[disc['actual_count'] == 0])
+            only_aamut = len(disc[disc['pcp_count'] == 0])
+            mismatch = len(disc) - only_pcp - only_aamut
             print(f'  Only in PCPs: {only_pcp}')
-            print(f'  Only in aggregated: {only_agg}')
+            print(f'  Only in aamut_fitness: {only_aamut}')
             print(f'  Count mismatches: {mismatch}')
         "
 
