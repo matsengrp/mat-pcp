@@ -1,5 +1,5 @@
 {
-  "_comment": "Expected results with config_test_data.yaml (max_clades=3, subset_frac=0.1)",
+  "_comment": "Expected results with config_test_data.yaml (max_clades=3, subset_frac=0.1). PCPs are curated to remove identical sequences and those with stop codons.",
   "results_directory": "results_test_data",
   "files": {
     "results_test_data/mat/all_pcps.csv": {
@@ -28,7 +28,7 @@
     }
   },
   "pcp_summary": {
-    "total_pcps": 29,
+    "total_pcps": 5,
     "columns": [
       "clade",
       "parent_name",
@@ -71,8 +71,8 @@
       "TG"
     ],
     "num_motifs": 64,
-    "rate_sum": 225.66489594032254,
-    "checksum": "dc0e69d1e5262e86c6a098c2148060e8"
+    "rate_sum": 267.48630425259506,
+    "checksum": "89ca94b2ca58117d25497fdb746c8e9c"
   },
   "clade_founder_nts_summary": {
     "num_rows": 89709,
@@ -119,10 +119,10 @@
     ],
     "num_clade_files": 3,
     "expected_count_sum": 0.0,
-    "actual_count_sum": 82.0,
-    "predicted_count_sum": 129.84898383637366,
-    "delta_fitness_sum": -1945.2602752102798,
-    "checksum": "fa7f6b8c59e77e6f97f3c97e5e69321b"
+    "actual_count_sum": 14.0,
+    "predicted_count_sum": 46.090473238972734,
+    "delta_fitness_sum": -190.84103785076914,
+    "checksum": "f784493d465c7eec43035589ab2ba25f"
   },
   "num_clade_sample_files": 3,
   "empty_clade_files": []

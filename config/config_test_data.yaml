@@ -51,7 +51,7 @@ max_clades: 3  # Set to limit number of clades processed (useful for testing)
 pcp_gene_region:
   gene: S       # Gene name for validation filtering
   start: 21563  # Spike start
-  end: 25384    # Spike end
+  end: 25381    # Spike end (excludes stop codon)
 
 # PCP filtering parameters
 pcp_max_nt_mutations: 4
