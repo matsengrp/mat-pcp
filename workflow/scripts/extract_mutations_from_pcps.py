@@ -16,7 +16,9 @@ output_aa_csv = snakemake.output.aa_counts
 pcp_gene_region = snakemake.params.pcp_gene_region
 max_nt_mutations = snakemake.params.max_nt_mutations
 max_reversions_to_ref = snakemake.params.max_reversions_to_ref
+max_reversions_to_founder = snakemake.params.get("max_reversions_to_clade_founder", 1)
 ref_fasta = snakemake.input.ref_fasta
+clade_founder_fasta = snakemake.input.get("clade_founder_fasta", None)
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -34,8 +36,15 @@ log("Extracting AA mutations from PCPs by translating sequences")
 pcps = pd.read_csv(pcps_csv)
 ref_seq = str(Bio.SeqIO.read(ref_fasta, "fasta").seq)
 
+# Load clade founder sequence if provided
+founder_seq = None
+if clade_founder_fasta:
+    founder_seq = str(Bio.SeqIO.read(clade_founder_fasta, "fasta").seq)
+
 log(f"Loaded {len(pcps)} PCPs")
 log(f"Reference sequence length: {len(ref_seq)}")
+if founder_seq:
+    log(f"Founder sequence length: {len(founder_seq)}")
 
 # Get gene info from pcp_gene_region
 gene_name = None
@@ -100,6 +109,19 @@ def count_reversions_to_ref(parent_nt, child_nt, ref_nt, offset):
     return count
 
 
+def count_reversions_to_founder(parent_nt, child_nt, founder_nt, offset):
+    """Count mutations that revert to clade founder."""
+    if founder_nt is None:
+        return 0
+    count = 0
+    for i, (p, c) in enumerate(zip(parent_nt, child_nt)):
+        if p != c and p in "ACGT" and c in "ACGT":
+            founder_pos = offset - 1 + i  # 0-indexed position in founder
+            if founder_pos < len(founder_nt) and founder_nt[founder_pos] == c:
+                count += 1
+    return count
+
+
 # Extract AA mutations from each PCP
 all_aa_mutations = []
 filtered_count = 0
@@ -117,11 +139,17 @@ for _, row in pcps.iterrows():
     # Apply filtering based on nucleotide mutations
     n_nt_mutations = count_nt_mutations(parent_nt, child_nt)
     n_reversions = count_reversions_to_ref(parent_nt, child_nt, ref_seq, offset)
+    n_reversions_founder = count_reversions_to_founder(
+        parent_nt, child_nt, founder_seq, offset
+    )
 
     if n_nt_mutations > max_nt_mutations:
         filtered_count += 1
         continue
     if n_reversions > max_reversions_to_ref:
+        filtered_count += 1
+        continue
+    if founder_seq is not None and n_reversions_founder > max_reversions_to_founder:
         filtered_count += 1
         continue
 

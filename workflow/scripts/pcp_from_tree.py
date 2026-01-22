@@ -17,6 +17,10 @@ log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else 
 gene_region = snakemake.params.get("gene_region", None)
 max_nt_mutations = snakemake.params.get("max_nt_mutations", 4)
 max_reversions = snakemake.params.get("max_reversions_to_ref", 1)
+max_reversions_to_founder = snakemake.params.get("max_reversions_to_clade_founder", 1)
+
+# Clade founder sequence (optional, for filtering reversions to clade founder)
+clade_founder_fasta = snakemake.input.get("clade_founder_fasta", None)
 
 
 def log(msg):
@@ -33,6 +37,13 @@ def load_reference_from_fasta(reference_file):
         next(fh)  # Skip header
         reference_seq = "".join(map(str.strip, fh))
     return reference_seq
+
+
+def load_founder_sequence(founder_fasta):
+    """Load clade founder sequence from FASTA file if provided."""
+    if founder_fasta is None:
+        return None
+    return load_reference_from_fasta(founder_fasta)
 
 
 def apply_muts(sequence, muts):
@@ -61,7 +72,14 @@ class PCPHelper:
     """Helper class to extract PCPs from a tree with filtering."""
 
     def __init__(
-        self, tree_path, fasta_path, gtf_path, max_nt_mutations=4, max_reversions=1
+        self,
+        tree_path,
+        fasta_path,
+        gtf_path,
+        max_nt_mutations=4,
+        max_reversions=1,
+        max_reversions_to_founder=1,
+        founder_seq=None,
     ):
         log(f"Loading tree from {tree_path}")
         self.tree = bte.MATree(tree_path)
@@ -72,10 +90,14 @@ class PCPHelper:
         self.n_nodes = len(self.nodes)
         self.n_int_nodes = len(self.int_nodes)
         self.ref_seq = load_reference_from_fasta(fasta_path)
+        self.founder_seq = founder_seq
         self.max_nt_mutations = max_nt_mutations
         self.max_reversions = max_reversions
+        self.max_reversions_to_founder = max_reversions_to_founder
 
         log(f"Tree has {self.n_nodes} total nodes, {self.n_int_nodes} internal nodes")
+        if founder_seq:
+            log(f"Clade founder sequence loaded ({len(founder_seq)} bp)")
 
     def fails_filters(self, nt_muts, codon_muts):
         """Check if a branch fails QC filters."""
@@ -91,6 +113,13 @@ class PCPHelper:
         )
         if n_reversions > self.max_reversions:
             return True
+        # Too many reversions to clade founder (if founder sequence provided)
+        if self.founder_seq is not None:
+            n_reversions_to_founder = sum(
+                self.founder_seq[int(mut[1:-1]) - 1] == mut[-1] for mut in nt_muts
+            )
+            if n_reversions_to_founder > self.max_reversions_to_founder:
+                return True
         # Multiple mutations at same codon position (ambiguous)
         codon_positions = {(mut.gene, mut.aa_index) for mut in codon_muts}
         if len(codon_positions) < len(codon_muts):
@@ -185,7 +214,13 @@ def main():
         log(f"Gene region: {gene_slice[0]}-{gene_slice[1]}")
 
     log(f"Max mutations: {max_nt_mutations}")
-    log(f"Max reversions: {max_reversions}")
+    log(f"Max reversions to ref: {max_reversions}")
+    log(f"Max reversions to founder: {max_reversions_to_founder}")
+
+    # Load clade founder sequence if provided
+    founder_seq = load_founder_sequence(clade_founder_fasta)
+    if clade_founder_fasta:
+        log(f"Loaded clade founder from {clade_founder_fasta}")
 
     helper = PCPHelper(
         tree_path,
@@ -193,6 +228,8 @@ def main():
         gtf_path,
         max_nt_mutations=max_nt_mutations,
         max_reversions=max_reversions,
+        max_reversions_to_founder=max_reversions_to_founder,
+        founder_seq=founder_seq,
     )
 
     # Override pcp_list_to_df to use gene slicing

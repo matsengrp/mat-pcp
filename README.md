@@ -134,6 +134,7 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 | `pcp_gene_region` | Genomic region for PCPs (null = full genome) | Spike (21563-25384) |
 | `pcp_max_nt_mutations` | Max nucleotide mutations per branch | `4` |
 | `pcp_max_reversions_to_ref` | Max reversions to reference | `1` |
+| `pcp_max_reversions_to_clade_founder` | Max reversions to clade founder | `1` |
 
 ### Mutation Counting
 

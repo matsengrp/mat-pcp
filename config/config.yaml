@@ -56,6 +56,7 @@ pcp_gene_region:
 # PCP filtering parameters
 pcp_max_nt_mutations: 4
 pcp_max_reversions_to_ref: 1
+pcp_max_reversions_to_clade_founder: 1
 
 # =============================================================================
 # Clade Founder Configuration

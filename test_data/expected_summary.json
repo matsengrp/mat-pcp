@@ -1,5 +1,5 @@
 {
-  "_comment": "Expected results with max_clades=3 CI setting (processes only first 3 clades)",
+  "_comment": "Expected results with config_test_data.yaml (max_clades=3, subset_frac=0.1)",
   "results_directory": "results_test_data",
   "files": {
     "results_test_data/mat/all_pcps.csv": {
@@ -28,7 +28,7 @@
     }
   },
   "pcp_summary": {
-    "total_pcps": 30,
+    "total_pcps": 29,
     "columns": [
       "clade",
       "parent_name",
@@ -71,8 +71,8 @@
       "TG"
     ],
     "num_motifs": 64,
-    "rate_sum": 233.59591020351937,
-    "checksum": "addf01c56a900ab24548aaeb7302dba2"
+    "rate_sum": 225.66489594032254,
+    "checksum": "dc0e69d1e5262e86c6a098c2148060e8"
   },
   "clade_founder_nts_summary": {
     "num_rows": 89709,
@@ -119,10 +119,10 @@
     ],
     "num_clade_files": 3,
     "expected_count_sum": 0.0,
-    "actual_count_sum": 100.0,
-    "predicted_count_sum": 166.0912918688815,
-    "delta_fitness_sum": -2395.770545418176,
-    "checksum": "17a768207b81f14ba6bd94c2e7d85daf"
+    "actual_count_sum": 82.0,
+    "predicted_count_sum": 129.84898383637366,
+    "delta_fitness_sum": -1945.2602752102798,
+    "checksum": "fa7f6b8c59e77e6f97f3c97e5e69321b"
   },
   "num_clade_sample_files": 3,
   "empty_clade_files": []
