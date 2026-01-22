@@ -148,7 +148,7 @@ log("Computing amino acid translations...")
 
 
 def compute_aa_info(row):
-    """Compute founder_aa, mutant_aa, aa_mutation, and synonymous for a row."""
+    """Compute founder_aa, mutant_aa, aa_mutation, mutant_codon, and synonymous for a row."""
     founder_codon = str(row["codon"])
     codon_position = str(row["codon_position"])
     codon_site = str(row["codon_site"])
@@ -161,6 +161,7 @@ def compute_aa_info(row):
                 "clade_founder_aa": "noncoding",
                 "mutant_aa": "noncoding",
                 "aa_mutation": "noncoding",
+                "mutant_codon": "noncoding",
                 "synonymous": False,
                 "noncoding": True,
             }
@@ -175,6 +176,7 @@ def compute_aa_info(row):
     founder_aas = []
     mutant_aas = []
     aa_mutations = []
+    mutant_codons = []
     synonymous_flags = []
 
     for i, (codon, pos, site) in enumerate(zip(codons, positions, sites)):
@@ -182,6 +184,7 @@ def compute_aa_info(row):
             founder_aas.append("noncoding")
             mutant_aas.append("noncoding")
             aa_mutations.append("noncoding")
+            mutant_codons.append("noncoding")
             synonymous_flags.append(False)
             continue
 
@@ -192,18 +195,20 @@ def compute_aa_info(row):
             founder_aas.append("X")
             mutant_aas.append("X")
             aa_mutations.append("X")
+            mutant_codons.append("X")
             synonymous_flags.append(False)
             continue
 
-        mutant_codon = compute_mutant_codon(codon, pos_int, to_nt)
+        m_codon = compute_mutant_codon(codon, pos_int, to_nt)
 
         # Translate
         f_aa = translate_codon(codon)
-        m_aa = translate_codon(mutant_codon)
+        m_aa = translate_codon(m_codon)
 
         founder_aas.append(f_aa)
         mutant_aas.append(m_aa)
         aa_mutations.append(f"{f_aa}{site}{m_aa}")
+        mutant_codons.append(m_codon)
         synonymous_flags.append(f_aa == m_aa)
 
     # Combine results with semicolons for overlapping genes
@@ -212,6 +217,7 @@ def compute_aa_info(row):
             "clade_founder_aa": ";".join(founder_aas),
             "mutant_aa": ";".join(mutant_aas),
             "aa_mutation": ";".join(aa_mutations),
+            "mutant_codon": ";".join(mutant_codons),
             "synonymous": all(synonymous_flags),  # Only synonymous if all are
             "noncoding": False,
         }
@@ -251,7 +257,7 @@ else:
     # Old format: expected_count = rate directly
     all_mutations["expected_count"] = all_mutations["rate"].fillna(0)
 
-# Select and rename columns for output
+# Select and rename columns for output (v2-compatible column names)
 expected_df = all_mutations[
     [
         "clade",
@@ -259,16 +265,24 @@ expected_df = all_mutations[
         "nt_mutation",
         "mut_type",
         "expected_count",
+        "nt",  # clade_founder_nt
         "gene",
+        "codon",  # clade_founder_codon
         "codon_site",
         "codon_position",
+        "four_fold_degenerate",
         "clade_founder_aa",
+        "mutant_codon",
         "mutant_aa",
         "aa_mutation",
         "synonymous",
         "noncoding",
     ]
-].rename(columns={"site": "nt_site"})
+].rename(columns={
+    "site": "nt_site",
+    "nt": "clade_founder_nt",
+    "codon": "clade_founder_codon",
+})
 
 # Log summary per clade
 for clade in expected_df["clade"].unique():
