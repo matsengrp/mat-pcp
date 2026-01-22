@@ -94,6 +94,7 @@ results_files = [
     "fitness/ntmut_fitness_aggregated.csv",
     "aamut_fitness/all_aamut_fitness.csv",
     "validation/pcp_vs_counts_report.txt",
+    "mat/pcp_curation_report.txt",
 ]
 
 
@@ -429,7 +430,7 @@ rule extract_pcps_by_clade:
         fasta=rules.get_ref_fasta.output.ref_fasta,
         clade_founder_fasta=os.path.join(config["output_dir"], "clade_founders/{clade}.fa")
     output:
-        pcps=os.path.join(config["output_dir"], "mat/clades/{clade}_pcps.csv")
+        pcps=os.path.join(config["output_dir"], "mat/clades/{clade}_pcps_raw.csv")
     params:
         gene_region=config.get("pcp_gene_region", None),
         max_nt_mutations=config.get("pcp_max_nt_mutations", 4),
@@ -449,6 +450,21 @@ rule extract_pcps_by_clade:
         "scripts/pcp_from_tree.py"
 
 
+rule curate_pcps_by_clade:
+    """Filter PCPs for a clade to remove invalid entries for DASM training."""
+    input:
+        pcps=rules.extract_pcps_by_clade.output.pcps
+    output:
+        curated_pcps=os.path.join(config["output_dir"], "mat/clades/{clade}_pcps.csv"),
+        filtered_branches=os.path.join(config["output_dir"], "mat/clades/{clade}_filtered_branches.csv")
+    log:
+        os.path.join(config["output_dir"], "log/curate_pcps_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/curate_pcps_by_clade.py"
+
+
 rule aggregate_clade_pcps:
     """Aggregate all clade-specific PCPs into a single file."""
     input:
@@ -464,6 +480,29 @@ rule aggregate_clade_pcps:
         "envs/default.yml"
     script:
         "scripts/aggregate_clade_pcps.py"
+
+
+rule aggregate_filtered_branches:
+    """Aggregate per-clade filtered branch IDs and create curation report."""
+    input:
+        curated_pcps=rules.aggregate_clade_pcps.output.all_pcps,
+        raw_pcps=lambda wc: expand(
+            os.path.join(config["output_dir"], "mat/clades/{clade}_pcps_raw.csv"),
+            clade=clades_w_adequate_counts(wc)
+        ),
+        filtered_branches=lambda wc: expand(
+            os.path.join(config["output_dir"], "mat/clades/{clade}_filtered_branches.csv"),
+            clade=clades_w_adequate_counts(wc)
+        )
+    output:
+        report=os.path.join(config["output_dir"], "mat/pcp_curation_report.txt"),
+        filtered_branches=os.path.join(config["output_dir"], "mat/filtered_branch_ids.csv")
+    log:
+        os.path.join(config["output_dir"], "log/aggregate_filtered_branches.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/aggregate_filtered_branches.py"
 
 
 # =============================================================================
@@ -598,7 +637,8 @@ rule count_mutations_clade:
         usher_masked_sites=config["usher_masked_sites"],
         site_mask=rules.get_site_mask.output.csv,
         clade_founder_fasta=rules.clade_founder_fasta.output.fasta,
-        ref_to_founder_muts=rules.clade_founder_fasta.output.muts
+        ref_to_founder_muts=rules.clade_founder_fasta.output.muts,
+        filtered_branches=rules.curate_pcps_by_clade.output.filtered_branches
     output:
         csv=os.path.join(config["output_dir"], "mutation_counts/{clade}.csv")
     params:

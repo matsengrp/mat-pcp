@@ -60,8 +60,9 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 |-------|-------------|-------------|
 | 1. Input & Reference | Filter metadata, link inputs, fetch reference genome and annotations | `filtered_metadata.tsv.gz`, `ref.fa`, `coding_sites.csv` |
 | 2. Clade Processing | Identify clades, extract clade subtrees and PCPs | `clade_counts.csv`, `clades/{clade}_tree.pb`, `all_pcps.csv` |
+| 2b. PCP Curation | Filter PCPs for DASM training validity | `clades/{clade}_pcps.csv`, `pcp_curation_report.txt` |
 | 3a. Clade Founders | Download and process clade founder sequences | `clade_founders/{clade}.fa`, `clade_founder_nts.csv` |
-| 3b. Mutation Counting | Translate mutations, count per-clade mutations | `mutations/{clade}_mutations.tsv`, `mutation_counts/aggregated.csv` |
+| 3b. Mutation Counting | Translate mutations, count per-clade mutations (harmonized with PCP filtering) | `mutations/{clade}_mutations.tsv`, `mutation_counts/aggregated.csv` |
 | 4. Expected Counts | Compute synonymous rates and expected mutation counts | `synonymous_mut_rates/`, `expected_vs_actual_mut_counts.csv` |
 | 5. GLM Annotation | Annotate counts with RNA structure and sequence context | `glm/annotated_counts.csv`, `glm/curated_counts.csv` |
 | 6. Rate Estimation | Estimate neutral mutation rates via GLM | `glm/master_table.csv`, `rates_table.csv` |
@@ -73,7 +74,9 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 
 | Output | Description |
 |--------|-------------|
-| `mat/all_pcps.csv` | All parent-child pairs with clade annotations |
+| `mat/all_pcps.csv` | All curated parent-child pairs with clade annotations |
+| `mat/pcp_curation_report.txt` | Report showing PCP filtering statistics |
+| `mat/filtered_branch_ids.csv` | Branch IDs excluded from mutation counting |
 | `mat/clade_counts.csv` | Sample counts per clade |
 | `clade_founder_nts.csv` | Nucleotide at each coding site for all clade founders |
 | `mutation_counts/aggregated.csv` | Aggregated mutation counts across all clades |
@@ -131,7 +134,7 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `pcp_gene_region` | Genomic region for PCPs (null = full genome) | Spike (21563-25384) |
+| `pcp_gene_region` | Genomic region for PCPs (null = full genome) | Spike (21563-25381) |
 | `pcp_max_nt_mutations` | Max nucleotide mutations per branch | `4` |
 | `pcp_max_reversions_to_ref` | Max reversions to reference | `1` |
 | `pcp_max_reversions_to_clade_founder` | Max reversions to clade founder | `1` |
@@ -168,6 +171,79 @@ The pipeline uses reference data files in `data/`:
 - `usher_masked_sites.yaml`: UShER masking information for problematic sites by clade
 - `lan_2022/`: RNA secondary structure data from Lan et al. 2022
 
+## Branch Filtering
+
+The pipeline applies multiple layers of filtering to ensure high-quality data for downstream analysis. Understanding these filters is important for interpreting results.
+
+### Filter Summary
+
+| Stage | Filter | Purpose | Applied To |
+|-------|--------|---------|------------|
+| Metadata QC | Date range | Exclude samples outside study period | All samples |
+| Metadata QC | Host species | Limit to human samples | All samples |
+| Metadata QC | Genome length | Exclude incomplete genomes | All samples |
+| Clade Selection | Minimum size | Ensure statistical power | Clades |
+| Clade Selection | Exclusion list | Skip problematic clades | Clades |
+| PCP Extraction | Max mutations | Exclude hypermutated branches | Branches |
+| PCP Extraction | Max reversions | Exclude branches with many reversions | Branches |
+| PCP Curation | Identical sequences | Remove zero-mutation PCPs | PCPs |
+| PCP Curation | Stop codons | Remove PCPs with premature stops | PCPs |
+| PCP Curation | Ambiguous codons | Mask codons with N bases | PCPs |
+| Mutation Counting | Filtered branches | Harmonize with PCP curation | Branches |
+| Mutation Counting | Site masking | Exclude problematic genomic sites | Mutations |
+
+### PCP Extraction Filters
+
+During initial PCP extraction (`extract_pcps_by_clade`), branches are filtered based on:
+
+1. **Maximum nucleotide mutations** (`pcp_max_nt_mutations`): Branches with more than this many mutations are excluded (default: 4)
+2. **Maximum reversions to reference** (`pcp_max_reversions_to_ref`): Branches reverting too many sites to the reference are excluded (default: 1)
+3. **Maximum reversions to clade founder** (`pcp_max_reversions_to_clade_founder`): Branches reverting too many sites to the clade founder are excluded (default: 1)
+
+### PCP Curation Filters
+
+After extraction, PCPs are curated (`curate_pcps_by_clade`) for DASM training validity:
+
+1. **Identical sequences**: Parent and child sequences that are identical after slicing to the gene region are removed
+2. **Stop codons**: Sequences containing internal stop codons (TAA, TAG, TGA) are removed
+3. **Ambiguous codons**: Codons containing 'N' in either parent or child are masked; if all codons are masked or sequences become identical after masking, the PCP is removed
+
+### Harmonized Mutation Counting
+
+To ensure consistency between PCP-derived and matUtils-derived mutation counts, the mutation counting step (`count_mutations_clade`) excludes branches that failed PCP curation. This is achieved by:
+
+1. Per-clade PCP curation outputs a list of filtered branch IDs (`{clade}_filtered_branches.csv`)
+2. Mutation counting reads these IDs and excludes corresponding nodes from counting
+3. This ensures the same set of branches contributes to both PCP sequences and mutation counts
+
+### Site-Level Masking
+
+Individual mutation sites are excluded from counting based on:
+
+1. **VCF mask**: Problematic sites from the ProblematicSites_SARS-CoV2 database
+2. **UShER masks**: Clade-specific problematic sites (`data/usher_masked_sites.yaml`)
+3. **Site range**: Sites outside the coding region (`site_include_range`)
+4. **Configured exclusions**: Additional sites specified in `sites_to_exclude`
+5. **Ref-to-founder mutations**: Mutations defining the clade founder (when `exclude_ref_to_founder_muts: true`)
+
+### Curation Report
+
+The pipeline generates a curation report (`mat/pcp_curation_report.txt`) summarizing filtering statistics:
+
+```
+PCP Curation Report
+========================================
+
+Input PCPs: 29
+Valid PCPs: 5
+Removed: 24
+
+Filtered branches by clade:
+  19A: 1
+  19B: 3
+  20A: 20
+```
+
 ### Conda Environments
 
 The pipeline uses three specialized conda environments in `workflow/envs/`:
@@ -187,13 +263,17 @@ results/
 ├── mat/
 │   ├── clades/                    # Per-clade subtrees and PCPs
 │   │   ├── {clade}_tree.pb        # Clade-specific MAT subtree
-│   │   ├── {clade}_pcps.csv       # Clade-specific parent-child pairs
+│   │   ├── {clade}_pcps_raw.csv   # Raw (uncurated) parent-child pairs
+│   │   ├── {clade}_pcps.csv       # Curated parent-child pairs
+│   │   ├── {clade}_filtered_branches.csv  # Branch IDs filtered during curation
 │   │   └── {clade}_samples.txt    # Sample names in each clade
 │   ├── mat_tree.pb.gz             # Symlink to input MAT
 │   ├── metadata.tsv.gz            # Symlink to input metadata
 │   ├── filtered_metadata.tsv.gz   # QC-filtered metadata
 │   ├── filtered_tree_raw.pb       # Filtered MAT tree
-│   ├── all_pcps.csv               # Aggregated PCPs across all clades
+│   ├── all_pcps.csv               # Aggregated curated PCPs across all clades
+│   ├── pcp_curation_report.txt    # PCP curation statistics
+│   ├── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
 │   └── clade_counts.csv           # Sample counts per clade
 ├── ref/
 │   ├── ref.fa                     # Reference genome (FASTA)
