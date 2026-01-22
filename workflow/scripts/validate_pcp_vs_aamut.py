@@ -28,6 +28,22 @@ def log(msg):
 
 log("Validating PCP-derived AA mutation counts against aamut_fitness actual_count")
 
+
+def is_synonymous(aa_mutation):
+    """Check if an amino acid mutation is synonymous (e.g., D936D)."""
+    if pd.isna(aa_mutation) or len(aa_mutation) < 2:
+        return False
+    return aa_mutation[0] == aa_mutation[-1]
+
+
+def filter_nonsynonymous(df, aa_col="aa_mutation"):
+    """Filter dataframe to only include nonsynonymous mutations."""
+    if len(df) == 0 or aa_col not in df.columns:
+        return df
+    mask = ~df[aa_col].apply(is_synonymous)
+    return df[mask].copy()
+
+
 # Load PCP-derived counts
 pcp_counts = pd.read_csv(pcp_counts_csv)
 log(f"PCP-derived AA mutation counts: {len(pcp_counts)} entries")
@@ -65,6 +81,22 @@ if pcp_gene_name and len(aamut_all) > 0:
 if pcp_gene_name and len(pcp_counts) > 0 and "gene" in pcp_counts.columns:
     pcp_counts = pcp_counts[pcp_counts["gene"] == pcp_gene_name]
     log(f"Filtered PCP counts to {pcp_gene_name}: {len(pcp_counts)} entries")
+
+# Filter out synonymous mutations from all datasets
+# PCP extraction only captures nonsynonymous mutations, so we need to exclude
+# synonymous mutations from aamut_fitness for a fair comparison
+log("\n=== Filtering synonymous mutations ===")
+pcp_counts_orig = len(pcp_counts)
+pcp_counts = filter_nonsynonymous(pcp_counts)
+log(f"PCP counts: {pcp_counts_orig} -> {len(pcp_counts)} (removed {pcp_counts_orig - len(pcp_counts)} synonymous)")
+
+aamut_clade_orig = len(aamut_clade_df)
+aamut_clade_df = filter_nonsynonymous(aamut_clade_df)
+log(f"Per-clade aamut: {aamut_clade_orig} -> {len(aamut_clade_df)} (removed {aamut_clade_orig - len(aamut_clade_df)} synonymous)")
+
+aamut_all_orig = len(aamut_all)
+aamut_all = filter_nonsynonymous(aamut_all)
+log(f"Aggregate aamut: {aamut_all_orig} -> {len(aamut_all)} (removed {aamut_all_orig - len(aamut_all)} synonymous)")
 
 
 def compare_counts(pcp_df, aamut_df, clade_col="clade", is_aggregate=False):
@@ -179,6 +211,7 @@ with open(output_report, "w") as f:
     f.write("SUMMARY\n")
     f.write("-" * 40 + "\n")
     f.write(f"Gene: {pcp_gene_name}\n")
+    f.write("Note: Synonymous mutations excluded from comparison\n")
     f.write(f"Per-clade exact matches: {clade_matches}\n")
     f.write(f"Per-clade discrepancies: {clade_disc_count}\n")
     f.write(f"Aggregate exact matches: {agg_matches}\n")
