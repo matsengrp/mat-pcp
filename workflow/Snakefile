@@ -426,13 +426,15 @@ rule extract_pcps_by_clade:
     input:
         tree=rules.mat_clade_subset.output.tree,
         gtf=rules.edit_ref_gtf.output.gtf,
-        fasta=rules.get_ref_fasta.output.ref_fasta
+        fasta=rules.get_ref_fasta.output.ref_fasta,
+        clade_founder_fasta=os.path.join(config["output_dir"], "clade_founders/{clade}.fa")
     output:
         pcps=os.path.join(config["output_dir"], "mat/clades/{clade}_pcps.csv")
     params:
         gene_region=config.get("pcp_gene_region", None),
         max_nt_mutations=config.get("pcp_max_nt_mutations", 4),
-        max_reversions_to_ref=config.get("pcp_max_reversions_to_ref", 1)
+        max_reversions_to_ref=config.get("pcp_max_reversions_to_ref", 1),
+        max_reversions_to_clade_founder=config.get("pcp_max_reversions_to_clade_founder", 1)
     threads: get_threads("extract_pcps")
     resources:
         mem_mb=8000,

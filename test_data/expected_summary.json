@@ -10,9 +10,9 @@
     },
     "results_test_data/mat/clade_counts.csv": {
       "exists": true,
-      "size": 352,
-      "lines": 26,
-      "checksum": "23af44ee1acd291c0592ce762439b7c8"
+      "size": 412,
+      "lines": 30,
+      "checksum": "f2893d87c7836fe2ff008377e654fe84"
     },
     "results_test_data/mat/filtered_metadata.tsv.gz": {
       "exists": true,
@@ -28,7 +28,7 @@
     }
   },
   "pcp_summary": {
-    "total_pcps": 30,
+    "total_pcps": 361,
     "columns": [
       "clade",
       "parent_name",
@@ -43,10 +43,10 @@
     "first_5_child_nodes": null
   },
   "clade_counts_summary": {
-    "total_clades": 25,
-    "total_sequences": 2437,
-    "clades_with_adequate_samples": 22,
-    "checksum": "23af44ee1acd291c0592ce762439b7c8"
+    "total_clades": 29,
+    "total_sequences": 24375,
+    "clades_with_adequate_samples": 29,
+    "checksum": "f2893d87c7836fe2ff008377e654fe84"
   },
   "rates_table_summary": {
     "num_rows": 384,
