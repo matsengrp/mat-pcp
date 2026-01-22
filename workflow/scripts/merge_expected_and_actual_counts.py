@@ -72,6 +72,44 @@ merged["exclude"] = merged["masked_in_usher"].notna()
 merged["masked_in_usher"] = merged["masked_in_usher"].fillna(False)
 merged["masked_in_usher"] = merged["masked_in_usher"].infer_objects(copy=False).astype(bool)
 
+# Add v2-compatible columns
+# subset: v2 uses geographic subsets (e.g., "USA"), mat-pcp uses "all" for all data
+merged["subset"] = "all"
+# mean_log_size: average log of descendant clade size, not tracked by mat-pcp (set to 0)
+merged["mean_log_size"] = 0.0
+
+# Reorder columns to match v2 expected_vs_actual_mut_counts.csv format
+# Note: mut_type is needed by annotate_counts.py for downstream processing
+output_columns = [
+    "clade",
+    "subset",
+    "nt_site",
+    "nt_mutation",
+    "mut_type",
+    "exclude",
+    "masked_in_usher",
+    "expected_count",
+    "actual_count",
+    "clade_founder_nt",
+    "gene",
+    "clade_founder_codon",
+    "clade_founder_aa",
+    "mutant_codon",
+    "mutant_aa",
+    "aa_mutation",
+    "synonymous",
+    "noncoding",
+    "codon_position",
+    "codon_site",
+    "four_fold_degenerate",
+    "count_terminal",
+    "count_non_terminal",
+    "mean_log_size",
+]
+# Only include columns that exist in the merged data
+available_cols = [c for c in output_columns if c in merged.columns]
+merged = merged[available_cols]
+
 # Save merged data
 merged.to_csv(output_csv, index=False)
 
