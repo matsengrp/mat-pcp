@@ -115,11 +115,15 @@ else:
             codon_changes=lambda x: x["codon_changes"].str.split(";"),
             aa_mutations=lambda x: x["aa_mutations"].str.split(";"),
             noncoding_nt_mutations=lambda x: x.apply(get_noncoding, axis=1),
-            n_nt_mutations=lambda x: x["nt_mutations"].map(lambda ms: len(set(ms))),
-            n_reversions_to_ref=lambda x: x["nt_mutations"].map(
+            # Count ALL mutations (coding + noncoding) to match PCP extraction filter
+            n_nt_mutations=lambda x: x["nt_mutations_coding_and_noncoding"].map(
+                lambda ms: len(set(ms))
+            ),
+            # Count reversions on ALL mutations (coding + noncoding) to match PCP extraction
+            n_reversions_to_ref=lambda x: x["nt_mutations_coding_and_noncoding"].map(
                 lambda ms: sum(m[-1] == ref[int(m[1:-1]) - 1] for m in set(ms))
             ),
-            n_reversions_to_founder=lambda x: x["nt_mutations"].map(
+            n_reversions_to_founder=lambda x: x["nt_mutations_coding_and_noncoding"].map(
                 lambda ms: sum(m[-1] == founder[int(m[1:-1]) - 1] for m in set(ms))
             ),
             is_terminal=lambda x: x["leaves_sharing_mutations"] == 1,

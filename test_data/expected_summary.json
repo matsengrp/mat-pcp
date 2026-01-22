@@ -119,10 +119,10 @@
     ],
     "num_clade_files": 3,
     "expected_count_sum": 0.0,
-    "actual_count_sum": 100.0,
-    "predicted_count_sum": 166.0912918688815,
-    "delta_fitness_sum": -2395.770545418176,
-    "checksum": "17a768207b81f14ba6bd94c2e7d85daf"
+    "actual_count_sum": 82.0,
+    "predicted_count_sum": 129.84898383637366,
+    "delta_fitness_sum": -1945.2602752102798,
+    "checksum": "fa7f6b8c59e77e6f97f3c97e5e69321b"
   },
   "num_clade_sample_files": 3,
   "empty_clade_files": []
