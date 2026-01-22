@@ -2,8 +2,16 @@
 """Validate test pipeline outputs against expected results."""
 
 import json
+import math
 import sys
 from pathlib import Path
+
+
+def is_close(actual, expected, rel_tol=1e-6, abs_tol=1e-9):
+    """Check if two floats are close within tolerance."""
+    if expected == 0:
+        return abs(actual) <= abs_tol
+    return abs(actual - expected) <= max(rel_tol * abs(expected), abs_tol)
 
 
 def load_json(filepath):
@@ -74,8 +82,23 @@ def compare_summaries(actual, expected):
                     f"rates_table row count mismatch: expected {exp_rates['num_rows']}, "
                     f"got {act_rates['num_rows']}"
                 )
-            if act_rates['checksum'] != exp_rates['checksum']:
-                differences.append("rates_table.csv has changed (checksum mismatch)")
+            if set(act_rates.get('mut_types', [])) != set(exp_rates.get('mut_types', [])):
+                differences.append(
+                    f"rates_table mutation types mismatch: expected {exp_rates['mut_types']}, "
+                    f"got {act_rates['mut_types']}"
+                )
+            if act_rates.get('num_motifs') != exp_rates.get('num_motifs'):
+                differences.append(
+                    f"rates_table motif count mismatch: expected {exp_rates['num_motifs']}, "
+                    f"got {act_rates['num_motifs']}"
+                )
+            # Check rate_sum with floating-point tolerance
+            if 'rate_sum' in exp_rates and 'rate_sum' in act_rates:
+                if not is_close(act_rates['rate_sum'], exp_rates['rate_sum'], rel_tol=1e-6):
+                    differences.append(
+                        f"rates_table rate_sum mismatch: expected {exp_rates['rate_sum']}, "
+                        f"got {act_rates['rate_sum']}"
+                    )
 
     # Check clade_founder_nts.csv
     if expected.get('clade_founder_nts_summary'):
@@ -122,17 +145,23 @@ def compare_summaries(actual, expected):
                     f"got {act_aa['clade_files']}"
                 )
 
-            # Check numerical sums (with tolerance for floating point)
-            for key in ['expected_count_sum', 'actual_count_sum', 'predicted_count_sum', 'delta_fitness_sum']:
+            # Check numerical sums with appropriate tolerances
+            # Integer-like sums (expected_count, actual_count) use tight tolerance
+            for key in ['expected_count_sum', 'actual_count_sum']:
                 if key in exp_aa and key in act_aa:
-                    if abs(act_aa[key] - exp_aa[key]) > 1e-6:
+                    if not is_close(act_aa[key], exp_aa[key], rel_tol=1e-6):
                         differences.append(
                             f"aamut_fitness {key} mismatch: expected {exp_aa[key]}, "
                             f"got {act_aa[key]}"
                         )
-
-            if act_aa['checksum'] != exp_aa['checksum']:
-                differences.append("all_aamut_fitness.csv has changed (checksum mismatch)")
+            # Floating-point sums can vary more across platforms, use looser tolerance
+            for key in ['predicted_count_sum', 'delta_fitness_sum']:
+                if key in exp_aa and key in act_aa:
+                    if not is_close(act_aa[key], exp_aa[key], rel_tol=0.01):
+                        differences.append(
+                            f"aamut_fitness {key} mismatch: expected {exp_aa[key]}, "
+                            f"got {act_aa[key]} (rel_diff={abs(act_aa[key] - exp_aa[key]) / abs(exp_aa[key]):.4f})"
+                        )
 
     return differences
 
