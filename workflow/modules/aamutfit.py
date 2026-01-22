@@ -145,7 +145,11 @@ def map_orf1ab_to_nsps(orf1ab_to_nsps):
         return pd.DataFrame(columns=["ORF1ab_site", "nsp_site", "nsp"])
 
     dfs = []
-    for nsp, (start, end) in orf1ab_to_nsps.items():
+    for nsp, coords in orf1ab_to_nsps.items():
+        if coords is None:
+            # Skip entries with None values (used to override defaults)
+            continue
+        start, end = coords
         df = pd.DataFrame(
             {
                 "ORF1ab_site": list(range(start, end + 1)),
