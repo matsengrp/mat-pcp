@@ -55,7 +55,7 @@ def summarize_pcps(pcp_file):
 def summarize_clade_counts(clade_counts_file):
     """Get summary of clade counts."""
     df = pd.read_csv(clade_counts_file)
-    
+
     return {
         'total_clades': len(df),
         'total_sequences': int(df['count'].sum()),
@@ -64,18 +64,92 @@ def summarize_clade_counts(clade_counts_file):
     }
 
 
+def summarize_rates_table(rates_file):
+    """Get summary of rates_table.csv."""
+    if not os.path.exists(rates_file):
+        return None
+
+    df = pd.read_csv(rates_file)
+
+    return {
+        'num_rows': len(df),
+        'columns': list(df.columns),
+        'mut_types': sorted(df['mut_type'].unique().tolist()) if 'mut_type' in df else None,
+        'num_motifs': df['motif'].nunique() if 'motif' in df else None,
+        'rate_sum': float(df['rate'].sum()) if 'rate' in df else None,
+        'checksum': hashlib.md5(open(rates_file, 'rb').read()).hexdigest()
+    }
+
+
+def summarize_clade_founder_nts(founder_nts_file):
+    """Get summary of clade_founder_nts.csv."""
+    if not os.path.exists(founder_nts_file):
+        return None
+
+    df = pd.read_csv(founder_nts_file)
+
+    return {
+        'num_rows': len(df),
+        'columns': list(df.columns),
+        'clades': sorted(df['clade'].unique().tolist()) if 'clade' in df else None,
+        'num_sites': df['site'].nunique() if 'site' in df else None,
+        'checksum': hashlib.md5(open(founder_nts_file, 'rb').read()).hexdigest()
+    }
+
+
+def summarize_aamut_fitness(aamut_fitness_dir):
+    """Get summary of aamut_fitness outputs."""
+    if not os.path.exists(aamut_fitness_dir):
+        return None
+
+    all_fitness_file = os.path.join(aamut_fitness_dir, 'all_aamut_fitness.csv')
+    if not os.path.exists(all_fitness_file):
+        return None
+
+    df = pd.read_csv(all_fitness_file)
+
+    # List per-clade files
+    clade_files = [f for f in os.listdir(aamut_fitness_dir)
+                   if f.endswith('_aamut_fitness.csv') and f != 'all_aamut_fitness.csv']
+
+    summary = {
+        'num_rows': len(df),
+        'columns': list(df.columns),
+        'clade_files': sorted(clade_files),
+        'num_clade_files': len(clade_files),
+    }
+
+    # Add numerical summaries for key columns
+    if 'expected_count' in df.columns:
+        summary['expected_count_sum'] = float(df['expected_count'].sum())
+    if 'actual_count' in df.columns:
+        summary['actual_count_sum'] = float(df['actual_count'].sum())
+    if 'predicted_count' in df.columns:
+        summary['predicted_count_sum'] = float(df['predicted_count'].sum())
+    if 'delta_fitness' in df.columns:
+        summary['delta_fitness_sum'] = float(df['delta_fitness'].sum())
+
+    # Add checksum for the aggregated file
+    summary['checksum'] = hashlib.md5(open(all_fitness_file, 'rb').read()).hexdigest()
+
+    return summary
+
+
 def main(results_dir):
     """Generate test summary for the given results directory."""
     results_path = Path(results_dir)
     mat_path = results_path / "mat"
-    
+
     summary = {
         'results_directory': str(results_path),
         'files': {},
         'pcp_summary': None,
-        'clade_counts_summary': None
+        'clade_counts_summary': None,
+        'rates_table_summary': None,
+        'clade_founder_nts_summary': None,
+        'aamut_fitness_summary': None
     }
-    
+
     # Check key output files
     key_files = [
         mat_path / "all_pcps.csv",
@@ -83,37 +157,49 @@ def main(results_dir):
         mat_path / "filtered_metadata.tsv.gz",
         mat_path / "filtered_tree_raw.pb"
     ]
-    
+
     for filepath in key_files:
         summary['files'][str(filepath)] = get_file_stats(str(filepath))
-    
+
     # Get PCP summary
     pcp_file = mat_path / "all_pcps.csv"
     if pcp_file.exists():
         summary['pcp_summary'] = summarize_pcps(str(pcp_file))
-    
-    # Get clade counts summary  
+
+    # Get clade counts summary
     clade_counts_file = mat_path / "clade_counts.csv"
     if clade_counts_file.exists():
         summary['clade_counts_summary'] = summarize_clade_counts(str(clade_counts_file))
-    
+
     # Count clade-specific files
     clades_dir = mat_path / "clades"
     if clades_dir.exists():
         clade_files = list(clades_dir.glob("*_samples.txt"))
         summary['num_clade_sample_files'] = len(clade_files)
-        
+
         # Check if all clades have non-empty sample files
         empty_clade_files = []
         for clade_file in clade_files:
             if os.path.getsize(clade_file) == 0:
                 empty_clade_files.append(clade_file.name)
         summary['empty_clade_files'] = empty_clade_files
-    
+
+    # Get rates table summary
+    rates_file = results_path / "rates_table.csv"
+    summary['rates_table_summary'] = summarize_rates_table(str(rates_file))
+
+    # Get clade founder nucleotides summary
+    founder_nts_file = results_path / "clade_founder_nts.csv"
+    summary['clade_founder_nts_summary'] = summarize_clade_founder_nts(str(founder_nts_file))
+
+    # Get amino acid fitness summary
+    aamut_fitness_dir = results_path / "aamut_fitness"
+    summary['aamut_fitness_summary'] = summarize_aamut_fitness(str(aamut_fitness_dir))
+
     # Print summary in readable format
     import json
     print(json.dumps(summary, indent=2))
-    
+
     return summary
 
 

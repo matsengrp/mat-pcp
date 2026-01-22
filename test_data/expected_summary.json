@@ -48,6 +48,82 @@
     "clades_with_adequate_samples": 22,
     "checksum": "23af44ee1acd291c0592ce762439b7c8"
   },
+  "rates_table_summary": {
+    "num_rows": 384,
+    "columns": [
+      "mut_type",
+      "motif",
+      "unpaired",
+      "rate"
+    ],
+    "mut_types": [
+      "AC",
+      "AG",
+      "AT",
+      "CA",
+      "CG",
+      "CT",
+      "GA",
+      "GC",
+      "GT",
+      "TA",
+      "TC",
+      "TG"
+    ],
+    "num_motifs": 64,
+    "rate_sum": 233.59591020351937,
+    "checksum": "addf01c56a900ab24548aaeb7302dba2"
+  },
+  "clade_founder_nts_summary": {
+    "num_rows": 89709,
+    "columns": [
+      "clade",
+      "site",
+      "nt",
+      "gene",
+      "codon",
+      "codon_position",
+      "codon_site",
+      "four_fold_degenerate"
+    ],
+    "clades": [
+      "19A",
+      "19B",
+      "20A"
+    ],
+    "num_sites": 29903,
+    "checksum": "60641a61a449e4ac087421477e27472f"
+  },
+  "aamut_fitness_summary": {
+    "num_rows": 121290,
+    "columns": [
+      "gene",
+      "clade_founder_aa",
+      "mutant_aa",
+      "aa_site",
+      "aa_mutation",
+      "subset_of_ORF1ab",
+      "expected_count",
+      "predicted_count",
+      "actual_count",
+      "tau_squared",
+      "source_clade",
+      "delta_fitness",
+      "uncertainty",
+      "naive_delta_fitness"
+    ],
+    "clade_files": [
+      "19A_aamut_fitness.csv",
+      "19B_aamut_fitness.csv",
+      "20A_aamut_fitness.csv"
+    ],
+    "num_clade_files": 3,
+    "expected_count_sum": 0.0,
+    "actual_count_sum": 100.0,
+    "predicted_count_sum": 166.0912918688815,
+    "delta_fitness_sum": -2395.770545418176,
+    "checksum": "17a768207b81f14ba6bd94c2e7d85daf"
+  },
   "num_clade_sample_files": 3,
   "empty_clade_files": []
 }

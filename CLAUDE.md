@@ -43,10 +43,7 @@ pixi run snakemake --delete-all-output
 ```bash
 # Run on test data (fast, uses max_clades=3)
 pixi run snakemake -j 2 --use-conda \
-  --config output_dir="results_test_data" \
-           mat="test_data/filtered_tree_raw.pb.gz" \
-           metadata="test_data/filtered_metadata.tsv.gz" \
-           max_clades=3
+  --configfile config/config_test_data.yaml
 
 # Validate results
 pixi run python workflow/scripts/validate_test.py
