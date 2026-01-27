@@ -1,7 +1,7 @@
 name: default
 channels:
-  - conda-forge
-  - bioconda
+  - https://prefix.dev/conda-forge
+  - https://prefix.dev/bioconda
 dependencies:
   - python>=3.9,<3.13
   - pandas>=2.0,<3.0

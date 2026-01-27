@@ -1,7 +1,7 @@
 name: usher
 channels:
-  - conda-forge
-  - bioconda
+  - https://prefix.dev/conda-forge
+  - https://prefix.dev/bioconda
 dependencies:
   - usher>=0.6,<1.0
   - python>=3.9,<3.13
