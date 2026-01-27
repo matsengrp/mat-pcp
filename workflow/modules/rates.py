@@ -61,6 +61,7 @@ class Rates:
         )
 
         # Build rate table with all combinations
+        # Only include nt_site_before_boundary=True rows for mutation types with boundaries
         conditions = []
         for mut_type in mut_types:
             from_nt = mut_type[0]
@@ -68,15 +69,30 @@ class Rates:
                 for right_nt in letters:
                     motif = left_nt + from_nt + right_nt
                     for unpaired in [0, 1]:
-                        for before_boundary in [False, True]:
+                        # For mutation types WITH boundaries: create both True and False rows
+                        # For mutation types WITHOUT boundaries: only create False rows
+                        if mut_type in self.lightswitch_boundaries:
+                            for before_boundary in [False, True]:
+                                conditions.append(
+                                    {
+                                        "mut_type": mut_type,
+                                        "motif": motif,
+                                        "unpaired": unpaired,
+                                        "nt_site_before_boundary": before_boundary,
+                                        "condition": f"{mut_type}_{motif}_"
+                                        f"{unpaired}_{before_boundary}",
+                                    }
+                                )
+                        else:
+                            # No boundary for this mutation type - only False row
                             conditions.append(
                                 {
                                     "mut_type": mut_type,
                                     "motif": motif,
                                     "unpaired": unpaired,
-                                    "nt_site_before_boundary": before_boundary,
+                                    "nt_site_before_boundary": False,
                                     "condition": f"{mut_type}_{motif}_"
-                                    f"{unpaired}_{before_boundary}",
+                                    f"{unpaired}_False",
                                 }
                             )
 
