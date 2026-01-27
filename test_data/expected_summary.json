@@ -4,9 +4,9 @@
   "files": {
     "results_test_data/mat/all_pcps.csv": {
       "exists": true,
-      "size": null,
-      "lines": null,
-      "checksum": null
+      "size": 38479,
+      "lines": 6,
+      "checksum": "0089f578ef575f0ec7852198bb65f383"
     },
     "results_test_data/mat/clade_counts.csv": {
       "exists": true,
@@ -16,15 +16,15 @@
     },
     "results_test_data/mat/filtered_metadata.tsv.gz": {
       "exists": true,
-      "size": null,
+      "size": 67415,
       "lines": null,
-      "checksum": null
+      "checksum": "926a30b3b8fe0bd546cacbb78e8659b3"
     },
     "results_test_data/mat/filtered_tree_raw.pb": {
       "exists": true,
-      "size": null,
+      "size": 476609,
       "lines": null,
-      "checksum": null
+      "checksum": "4cc9169f0b5fa2761319025bc3d61e84"
     }
   },
   "pcp_summary": {
@@ -71,8 +71,8 @@
       "TG"
     ],
     "num_motifs": 64,
-    "rate_sum": 267.48630425259506,
-    "checksum": "89ca94b2ca58117d25497fdb746c8e9c"
+    "rate_sum": 267.4863042221358,
+    "checksum": "632b7b4ea91bb82f063a7a92060b7d99"
   },
   "clade_founder_nts_summary": {
     "num_rows": 89709,
@@ -120,9 +120,9 @@
     "num_clade_files": 3,
     "expected_count_sum": 0.0,
     "actual_count_sum": 14.0,
-    "predicted_count_sum": 46.090473238972734,
-    "delta_fitness_sum": -190.84103785076914,
-    "checksum": "f784493d465c7eec43035589ab2ba25f"
+    "predicted_count_sum": 46.09047322785283,
+    "delta_fitness_sum": -193.1987721313555,
+    "checksum": "cdae44ac24deafccb95ee8d66cb4e69f"
   },
   "num_clade_sample_files": 3,
   "empty_clade_files": []
