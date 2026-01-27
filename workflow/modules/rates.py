@@ -168,9 +168,6 @@ class Rates:
             print(f"First 10 negative rates:\n{negative_summary.to_string()}", file=sys.stderr)
             print("Note: This can occur with sparse training data", file=sys.stderr)
 
-        # Clamp tiny negative values to zero (numerical precision artifacts)
-        self.rates.loc[self.rates["rate"] < 0, "rate"] = 0.0
-
         # Add condition tuple column for lookup
         cond_cols = ["mut_type", "motif", "unpaired", "nt_site_before_boundary"]
         self.rates["condition"] = self.rates[cond_cols].apply(tuple, axis=1)
