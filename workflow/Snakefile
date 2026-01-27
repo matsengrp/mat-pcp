@@ -428,7 +428,8 @@ rule extract_pcps_by_clade:
         tree=rules.mat_clade_subset.output.tree,
         gtf=rules.edit_ref_gtf.output.gtf,
         fasta=rules.get_ref_fasta.output.ref_fasta,
-        clade_founder_fasta=os.path.join(config["output_dir"], "clade_founders/{clade}.fa")
+        clade_founder_fasta=os.path.join(config["output_dir"], "clade_founders/{clade}.fa"),
+        coding_sites=rules.ref_coding_sites.output.csv
     output:
         pcps=os.path.join(config["output_dir"], "mat/clades/{clade}_pcps_raw.csv")
     params:

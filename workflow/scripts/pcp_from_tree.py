@@ -5,11 +5,13 @@ from pandas import DataFrame as DF
 from collections import defaultdict
 import bte
 from time import time
+import pandas as pd
 
 # Get inputs from snakemake
 tree_path = snakemake.input.tree
 fasta_path = snakemake.input.fasta
 gtf_path = snakemake.input.gtf
+coding_sites_csv = snakemake.input.coding_sites
 output_path = snakemake.output.pcps
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
@@ -76,6 +78,7 @@ class PCPHelper:
         tree_path,
         fasta_path,
         gtf_path,
+        coding_sites_csv,
         max_nt_mutations=4,
         max_reversions=1,
         max_reversions_to_founder=1,
@@ -95,35 +98,59 @@ class PCPHelper:
         self.max_reversions = max_reversions
         self.max_reversions_to_founder = max_reversions_to_founder
 
+        # Load coding sites for filtering (exclude noncoding from quality criteria)
+        log(f"Loading coding sites from {coding_sites_csv}")
+        coding_sites_df = pd.read_csv(coding_sites_csv)
+        self.coding_sites = set(
+            coding_sites_df[coding_sites_df["gene"] != "noncoding"]["site"]
+        )
+        log(f"Loaded {len(self.coding_sites)} coding sites")
+
         log(f"Tree has {self.n_nodes} total nodes, {self.n_int_nodes} internal nodes")
         if founder_seq:
             log(f"Clade founder sequence loaded ({len(founder_seq)} bp)")
 
     def fails_filters(self, nt_muts, codon_muts):
-        """Check if a branch fails QC filters."""
-        # Too many mutations
-        if len(nt_muts) > self.max_nt_mutations:
+        """Check if a branch fails QC filters.
+
+        Quality filters are applied to CODING mutations only, to align with
+        SARS2-mut-fitness behavior and exclude error-prone noncoding regions
+        from quality assessment.
+        """
+        # Extract coding mutations only (exclude noncoding mutations)
+        # Uses pre-loaded coding_sites set from coding_sites.csv
+        coding_nt_muts = [m for m in nt_muts if int(m[1:-1]) in self.coding_sites]
+
+        # Too many CODING mutations
+        if len(coding_nt_muts) > self.max_nt_mutations:
             return True
-        # No mutations
+
+        # No mutations (coding or noncoding)
         if len(nt_muts) == 0:
             return True
-        # Too many reversions to reference
+
+        # Too many reversions to reference (CODING only)
         n_reversions = sum(
-            self.ref_seq[int(mut[1:-1]) - 1] == mut[-1] for mut in nt_muts
+            self.ref_seq[int(mut[1:-1]) - 1] == mut[-1]
+            for mut in coding_nt_muts
         )
         if n_reversions > self.max_reversions:
             return True
-        # Too many reversions to clade founder (if founder sequence provided)
+
+        # Too many reversions to clade founder (CODING only)
         if self.founder_seq is not None:
             n_reversions_to_founder = sum(
-                self.founder_seq[int(mut[1:-1]) - 1] == mut[-1] for mut in nt_muts
+                self.founder_seq[int(mut[1:-1]) - 1] == mut[-1]
+                for mut in coding_nt_muts
             )
             if n_reversions_to_founder > self.max_reversions_to_founder:
                 return True
+
         # Multiple mutations at same codon position (ambiguous)
         codon_positions = {(mut.gene, mut.aa_index) for mut in codon_muts}
         if len(codon_positions) < len(codon_muts):
             return True
+
         return False
 
     def count_mutations_from_parent(self, parent):
@@ -226,6 +253,7 @@ def main():
         tree_path,
         fasta_path,
         gtf_path,
+        coding_sites_csv,
         max_nt_mutations=max_nt_mutations,
         max_reversions=max_reversions,
         max_reversions_to_founder=max_reversions_to_founder,

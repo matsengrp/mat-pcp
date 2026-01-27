@@ -53,7 +53,8 @@ pcp_gene_region:
   start: 21563  # Spike start
   end: 25381    # Spike end (excludes stop codon)
 
-# PCP filtering parameters
+# PCP filtering parameters (applied to CODING mutations only)
+# Noncoding mutations are excluded from quality criteria but still tracked
 pcp_max_nt_mutations: 4
 pcp_max_reversions_to_ref: 1
 pcp_max_reversions_to_clade_founder: 1
@@ -74,7 +75,11 @@ roemer_nextstrain_to_pango:
 # =============================================================================
 # Mutation Counting Configuration
 # =============================================================================
+# Maximum number of CODING mutations per branch (aligns with SARS2-mut-fitness)
+# Branches with more coding mutations are filtered out as likely erroneous
 max_nt_mutations: 4
+# Maximum reversions to reference/founder in CODING regions only
+# Noncoding reversions excluded from quality criteria (error-prone)
 max_reversions_to_ref: 1
 max_reversions_to_clade_founder: 1
 exclude_ref_to_founder_muts: true  # Exclude mutations from ref to clade founder
