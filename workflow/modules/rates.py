@@ -136,18 +136,24 @@ class Rates:
         if tot_mut > 0:
             self.rates["rate"] = self.rates["rate"] * n_sites / tot_mut
 
-        # Validate: ensure no negative rates (fail-fast principle)
-        negative_rates = self.rates[self.rates["rate"] < 0]
+        # Validate: ensure no significantly negative rates (fail-fast principle)
+        # Use tolerance of -1e-10 to allow for numerical precision errors
+        NEGATIVE_RATE_TOLERANCE = -1e-10
+        negative_rates = self.rates[self.rates["rate"] < NEGATIVE_RATE_TOLERANCE]
         if len(negative_rates) > 0:
             # Include nt_site_before_boundary for debugging boundary-related issues
             negative_summary = negative_rates[
                 ["mut_type", "motif", "unpaired", "nt_site_before_boundary", "rate"]
             ].head(10)
             raise ValueError(
-                f"Negative rates detected in {len(negative_rates)} conditions. "
+                f"Significantly negative rates detected in {len(negative_rates)} conditions "
+                f"(threshold: {NEGATIVE_RATE_TOLERANCE}). "
                 f"This indicates a problem with the GLM prediction.\n"
                 f"First 10 negative rates:\n{negative_summary.to_string()}"
             )
+
+        # Clamp tiny negative values to zero (numerical precision artifacts)
+        self.rates.loc[self.rates["rate"] < 0, "rate"] = 0.0
 
         # Add condition tuple column for lookup
         cond_cols = ["mut_type", "motif", "unpaired", "nt_site_before_boundary"]
