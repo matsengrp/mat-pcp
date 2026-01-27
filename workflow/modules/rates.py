@@ -32,6 +32,16 @@ glm = _load_glm_module()
 letters = ["A", "C", "G", "T"]
 mut_types = ["AC", "AG", "AT", "CA", "CG", "CT", "GA", "GC", "GT", "TA", "TC", "TG"]
 
+# Default light-switch boundaries for SARS-CoV-2 mutation types
+# These match the boundaries used in SARS2-mut-fitness-v2
+DEFAULT_LIGHTSWITCH_BOUNDARIES = {
+    "CT": 13467,  # End of ORF1ab
+    "AT": 21562,  # End of S gene
+    "CG": 21562,
+    "GC": 21562,
+    # TA, TG, AC, AG, GA, TC intentionally omitted - no boundary feature
+}
+
 
 class Rates:
     """Class for computing and storing context-specific mutation rates."""
@@ -42,16 +52,16 @@ class Rates:
 
         Args:
             lightswitch_boundaries: Dict mapping mutation types to genome position
-                                    boundaries
+                boundaries. If None, uses DEFAULT_LIGHTSWITCH_BOUNDARIES.
         """
-        self.lightswitch_boundaries = lightswitch_boundaries or {
-            "CT": 13467,
-            "AT": 21562,
-            "CG": 21562,
-            "GC": 21562,
-        }
+        self.lightswitch_boundaries = (
+            lightswitch_boundaries
+            if lightswitch_boundaries is not None
+            else DEFAULT_LIGHTSWITCH_BOUNDARIES.copy()
+        )
 
         # Build rate table with all combinations
+        # Only include nt_site_before_boundary=True rows for mutation types with boundaries
         conditions = []
         for mut_type in mut_types:
             from_nt = mut_type[0]
@@ -59,15 +69,30 @@ class Rates:
                 for right_nt in letters:
                     motif = left_nt + from_nt + right_nt
                     for unpaired in [0, 1]:
-                        for before_boundary in [False, True]:
+                        # For mutation types WITH boundaries: create both True and False rows
+                        # For mutation types WITHOUT boundaries: only create False rows
+                        if mut_type in self.lightswitch_boundaries:
+                            for before_boundary in [False, True]:
+                                conditions.append(
+                                    {
+                                        "mut_type": mut_type,
+                                        "motif": motif,
+                                        "unpaired": unpaired,
+                                        "nt_site_before_boundary": before_boundary,
+                                        "condition": f"{mut_type}_{motif}_"
+                                        f"{unpaired}_{before_boundary}",
+                                    }
+                                )
+                        else:
+                            # No boundary for this mutation type - only False row
                             conditions.append(
                                 {
                                     "mut_type": mut_type,
                                     "motif": motif,
                                     "unpaired": unpaired,
-                                    "nt_site_before_boundary": before_boundary,
+                                    "nt_site_before_boundary": False,
                                     "condition": f"{mut_type}_{motif}_"
-                                    f"{unpaired}_{before_boundary}",
+                                    f"{unpaired}_False",
                                 }
                             )
 
@@ -98,12 +123,23 @@ class Rates:
         """
         # Initialize and train GLM (uses L2 regularization matching v2)
         self.glm = glm.GeneralLinearModel(
-            included_factors=["motif", "unpaired", "nt_site_before_boundary"]
+            included_factors=["global_context", "rna_structure", "local_context"],
+            lightswitch_boundaries=self.lightswitch_boundaries
         )
         self.glm.train(df_train, self.lightswitch_boundaries)
 
+        # Add temporary nt_site column for GLM prediction (matches SARS2-mut-fitness-v2)
+        # For nt_site_before_boundary=False, use max site; for True, use 0
+        s_max = df_train["nt_site"].max() if "nt_site" in df_train.columns else 30000
+        self.rates["nt_site"] = self.rates["nt_site_before_boundary"].apply(
+            lambda x: 0 if x else s_max
+        )
+
         # Predict counts for rate table conditions
-        self.glm.predict(self.rates)
+        self.glm.predict(self.rates, self.lightswitch_boundaries)
+
+        # Drop temporary nt_site column
+        self.rates.drop(columns=["nt_site"], inplace=True)
 
         # Store raw predicted count as rate
         self.rates["rate"] = self.rates["predicted_count"]
@@ -115,6 +151,22 @@ class Rates:
 
         if tot_mut > 0:
             self.rates["rate"] = self.rates["rate"] * n_sites / tot_mut
+
+        # Validate: warn about significantly negative rates
+        # Note: Sparse data can cause negative rates in GLM predictions
+        # Original issue #55 had TA/TG rates of -0.003 to -0.004
+        NEGATIVE_RATE_TOLERANCE = -1e-6
+        negative_rates = self.rates[self.rates["rate"] < NEGATIVE_RATE_TOLERANCE]
+        if len(negative_rates) > 0:
+            # Log warning but don't fail (sparse test data can have unstable predictions)
+            import sys
+            negative_summary = negative_rates[
+                ["mut_type", "motif", "unpaired", "nt_site_before_boundary", "rate"]
+            ].head(10)
+            print(f"WARNING: {len(negative_rates)} conditions have negative rates (threshold: {NEGATIVE_RATE_TOLERANCE})",
+                  file=sys.stderr)
+            print(f"First 10 negative rates:\n{negative_summary.to_string()}", file=sys.stderr)
+            print("Note: This can occur with sparse training data", file=sys.stderr)
 
         # Add condition tuple column for lookup
         cond_cols = ["mut_type", "motif", "unpaired", "nt_site_before_boundary"]
@@ -252,9 +304,10 @@ class Rates:
             return
 
         # Compute empirical residuals
+        LOG_COUNT_OFFSET = glm.LOG_COUNT_OFFSET
         self.rates.loc[idx, "residual"] = list(
             map(
-                lambda x, y: np.mean((np.log(x + 0.5) - np.log(y + 0.5)) ** 2),
+                lambda x, y: np.mean((np.log(x + LOG_COUNT_OFFSET) - np.log(y + LOG_COUNT_OFFSET)) ** 2),
                 emp_counts,
                 self.rates.loc[idx, "predicted_count"].to_numpy(),
             )
@@ -333,9 +386,10 @@ def add_predicted_count(train_df, count_df, clades, lightswitch_boundaries=None)
     train_df["predicted_count"] = rate.predicted_counts_by_clade(train_df)
 
     # Compute tau (residual variance) per mutation type from training data
+    LOG_COUNT_OFFSET = glm.LOG_COUNT_OFFSET
     tau = train_df.groupby("mut_type").apply(
         lambda x: np.mean(
-            (np.log(x.actual_count + 0.5) - np.log(x.predicted_count + 0.5)) ** 2
+            (np.log(x.actual_count + LOG_COUNT_OFFSET) - np.log(x.predicted_count + LOG_COUNT_OFFSET)) ** 2
         ),
         include_groups=False,
     )
