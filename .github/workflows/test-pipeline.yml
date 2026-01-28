@@ -21,6 +21,16 @@ jobs:
     - name: Install dependencies
       run: pixi install
 
+    - name: Configure conda channels
+      run: |
+        # Ensure conda uses channels from environment files
+        # and doesn't fall back to default anaconda channels
+        pixi run conda config --file .condarc --set channel_priority strict
+        pixi run conda config --file .condarc --add channels https://prefix.dev/conda-forge
+        pixi run conda config --file .condarc --add channels https://prefix.dev/bioconda
+        pixi run conda config --show channels
+        echo "Conda channels configured!"
+
     - name: Validate config schema
       run: |
         pixi run python -c "
@@ -87,8 +97,35 @@ jobs:
 
     - name: Run test pipeline
       run: |
-        pixi run snakemake -j $(nproc) --use-conda \
-          --configfile config/config_test_data.yaml
+        # Set conda timeout and retry settings for CI reliability
+        export CONDA_REMOTE_CONNECT_TIMEOUT_SECS=30
+        export CONDA_REMOTE_READ_TIMEOUT_SECS=120
+        export CONDA_REMOTE_MAX_RETRIES=3
+
+        # Run pipeline with retry logic for conda download failures
+        max_attempts=3
+        attempt=1
+        while [ $attempt -le $max_attempts ]; do
+          echo "Pipeline run attempt $attempt/$max_attempts"
+          if pixi run snakemake -j $(nproc) --use-conda \
+            --conda-frontend mamba \
+            --configfile config/config_test_data.yaml; then
+            echo "Pipeline completed successfully!"
+            break
+          else
+            exit_code=$?
+            if [ $attempt -lt $max_attempts ]; then
+              echo "Pipeline failed (exit code: $exit_code), retrying..."
+              # Clean up partial conda environments on retry
+              rm -rf .snakemake/conda/*
+              sleep 10
+              attempt=$((attempt + 1))
+            else
+              echo "Pipeline failed after $max_attempts attempts"
+              exit $exit_code
+            fi
+          fi
+        done
 
     - name: Verify input linking
       run: |

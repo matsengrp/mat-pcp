@@ -1,0 +1,21 @@
+# Conda configuration for mat-pcp
+# Ensures conda respects channels specified in environment files
+
+# Only use channels specified in environment files
+# This prevents fallback to default anaconda channels
+channel_priority: strict
+
+# Default channels (these will be overridden by environment file channels)
+channels:
+  - https://prefix.dev/conda-forge
+  - https://prefix.dev/bioconda
+
+# Don't show channel URLs in output (cleaner logs)
+show_channel_urls: false
+
+# Enable faster libmamba solver
+solver: libmamba
+
+# Allow conda to install from channels specified in environment files
+# even if they differ from these defaults
+override_channels_enabled: false
