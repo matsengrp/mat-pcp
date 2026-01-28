@@ -108,54 +108,28 @@ jobs:
           --configfile config/config_test_data.yaml
 
     - name: Run test pipeline
+      timeout-minutes: 30
       run: |
         # Ensure snakemake's conda uses our channel configuration
         export CONDARC="$HOME/.condarc"
 
-        # Set conda timeout and retry settings for CI reliability
+        # Set conda timeout settings for CI
         export CONDA_REMOTE_CONNECT_TIMEOUT_SECS=30
-        export CONDA_REMOTE_READ_TIMEOUT_SECS=120
-        export CONDA_REMOTE_MAX_RETRIES=3
+        export CONDA_REMOTE_READ_TIMEOUT_SECS=180
+        export CONDA_REMOTE_MAX_RETRIES=5
 
         # Disable conda plugins that might interfere with channel selection
         export CONDA_NO_PLUGINS=true
 
-        # Run pipeline with retry logic for conda download failures
-        max_attempts=3
-        attempt=1
-        while [ $attempt -le $max_attempts ]; do
-          echo "Pipeline run attempt $attempt/$max_attempts"
+        # Show conda configuration being used
+        echo "Conda configuration:"
+        pixi run conda config --show channels
+        pixi run conda config --show channel_priority
 
-          # Show conda configuration being used
-          if [ $attempt -eq 1 ]; then
-            echo "Conda configuration:"
-            pixi run conda config --show channels
-            pixi run conda config --show channel_priority
-          fi
-
-          if pixi run snakemake -j $(nproc) --use-conda \
-            --conda-frontend mamba \
-            --conda-create-envs-only \
-            --configfile config/config_test_data.yaml && \
-             pixi run snakemake -j $(nproc) --use-conda \
-            --conda-frontend mamba \
-            --configfile config/config_test_data.yaml; then
-            echo "Pipeline completed successfully!"
-            break
-          else
-            exit_code=$?
-            if [ $attempt -lt $max_attempts ]; then
-              echo "Pipeline failed (exit code: $exit_code), retrying..."
-              # Clean up partial conda environments on retry
-              rm -rf .snakemake/conda/*
-              sleep 10
-              attempt=$((attempt + 1))
-            else
-              echo "Pipeline failed after $max_attempts attempts"
-              exit $exit_code
-            fi
-          fi
-        done
+        # Run pipeline (single attempt with proper timeout)
+        pixi run snakemake -j $(nproc) --use-conda \
+          --conda-frontend mamba \
+          --configfile config/config_test_data.yaml
 
     - name: Verify input linking
       run: |
