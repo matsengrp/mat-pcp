@@ -59,6 +59,12 @@ min_clade_size: 10000
 clades_to_exclude:
   - 21A
 
+# Reference clade for motif/codon annotation
+# Used to determine "conserved" sites during GLM training data curation
+# This should be the ancestral/reference clade (typically 19A for SARS-CoV-2)
+# matching SARS2-mut-fitness-v2 behavior
+reference_clade: "19A"
+
 # =============================================================================
 # PCP Extraction Configuration
 # =============================================================================
