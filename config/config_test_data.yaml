@@ -44,6 +44,9 @@ min_clade_size: 2
 clades_to_exclude: []
 max_clades: 3  # Set to limit number of clades processed (useful for testing)
 
+# Reference clade for motif/codon annotation (using 19A to match production behavior)
+reference_clade: "19A"
+
 # =============================================================================
 # PCP Extraction Configuration
 # =============================================================================

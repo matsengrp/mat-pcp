@@ -63,9 +63,23 @@ founder_df["motif"] = founder_df.apply(
     axis=1,
 )
 
-# Add reference codon and motif columns (using first clade as reference)
-first_clade = founder_df["clade"].iloc[0]
-ref_founder = founder_df[founder_df["clade"] == first_clade]
+# Add reference codon and motif columns
+# Get reference clade from config (default to 19A for backward compatibility)
+reference_clade = snakemake.params.get("reference_clade", "19A")
+
+# Validate that reference clade exists in the dataset
+available_clades = sorted(founder_df["clade"].unique())
+if reference_clade not in available_clades:
+    raise ValueError(
+        f"Reference clade '{reference_clade}' not found in dataset. "
+        f"Available clades: {available_clades}. "
+        f"Please update 'reference_clade' in config.yaml to a valid clade."
+    )
+
+# Extract reference founder and merge
+ref_founder = founder_df[founder_df["clade"] == reference_clade]
+log(f"Using clade '{reference_clade}' as reference for motif/codon annotation")
+
 founder_df = founder_df.merge(
     ref_founder[["site", "codon", "motif"]].rename(
         columns={"codon": "ref_codon", "motif": "ref_motif"}
