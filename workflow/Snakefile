@@ -638,8 +638,7 @@ rule count_mutations_clade:
         usher_masked_sites=config["usher_masked_sites"],
         site_mask=rules.get_site_mask.output.csv,
         clade_founder_fasta=rules.clade_founder_fasta.output.fasta,
-        ref_to_founder_muts=rules.clade_founder_fasta.output.muts,
-        filtered_branches=rules.curate_pcps_by_clade.output.filtered_branches
+        ref_to_founder_muts=rules.clade_founder_fasta.output.muts
     output:
         csv=os.path.join(config["output_dir"], "mutation_counts/{clade}.csv")
     params:
