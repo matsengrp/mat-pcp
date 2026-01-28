@@ -1,12 +1,12 @@
 {
-  "_comment": "Expected results with config_test_data.yaml (max_clades=3, subset_frac=0.1). PCPs are curated to remove identical sequences and those with stop codons.",
+  "_comment": "Expected results with config_test_data.yaml (max_clades=3, subset_frac=0.1). PCPs are curated to remove identical sequences and those with stop codons. Updated for coding-only quality filtering (issue #58): more branches pass filters (8 PCPs vs 5 previously) since noncoding mutations are excluded from quality criteria.",
   "results_directory": "results_test_data",
   "files": {
     "results_test_data/mat/all_pcps.csv": {
       "exists": true,
-      "size": 38479,
-      "lines": 6,
-      "checksum": "0089f578ef575f0ec7852198bb65f383"
+      "size": 61494,
+      "lines": 9,
+      "checksum": "0601e759f6ab49758e2cad323b7b0976"
     },
     "results_test_data/mat/clade_counts.csv": {
       "exists": true,
@@ -18,7 +18,7 @@
       "exists": true,
       "size": 67415,
       "lines": null,
-      "checksum": "926a30b3b8fe0bd546cacbb78e8659b3"
+      "checksum": "c153816fa9ab76cb093def8288baadf3"
     },
     "results_test_data/mat/filtered_tree_raw.pb": {
       "exists": true,
@@ -28,7 +28,7 @@
     }
   },
   "pcp_summary": {
-    "total_pcps": 5,
+    "total_pcps": 8,
     "columns": [
       "clade",
       "parent_name",
@@ -71,8 +71,8 @@
       "TG"
     ],
     "num_motifs": 64,
-    "rate_sum": 267.4863042221358,
-    "checksum": "632b7b4ea91bb82f063a7a92060b7d99"
+    "rate_sum": 268.54152496917544,
+    "checksum": "0ac6f3b5c92af74ff1ea338105cb3ea9"
   },
   "clade_founder_nts_summary": {
     "num_rows": 89709,
@@ -119,10 +119,10 @@
     ],
     "num_clade_files": 3,
     "expected_count_sum": 0.0,
-    "actual_count_sum": 14.0,
-    "predicted_count_sum": 46.09047322785283,
-    "delta_fitness_sum": -193.1987721313555,
-    "checksum": "cdae44ac24deafccb95ee8d66cb4e69f"
+    "actual_count_sum": 32.0,
+    "predicted_count_sum": 82.39104698107563,
+    "delta_fitness_sum": -310.54662269480355,
+    "checksum": "55712ea8817930552bc94519e337dce1"
   },
   "num_clade_sample_files": 3,
   "empty_clade_files": []
