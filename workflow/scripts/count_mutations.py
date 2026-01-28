@@ -88,6 +88,27 @@ final_cols = [
 ]
 
 
+def safe_mutation_count(mutations):
+    """Count unique mutations, handling empty or malformed input."""
+    if not mutations or mutations == [""]:
+        return 0
+    return len(set(mutations))
+
+
+def count_reversions(mutations, reference_seq):
+    """Count reversions to reference, with error handling."""
+    if not mutations or mutations == [""]:
+        return 0
+    try:
+        return sum(
+            m[-1] == reference_seq[int(m[1:-1]) - 1]
+            for m in set(mutations)
+        )
+    except (ValueError, IndexError) as e:
+        log(f"Warning: Error counting reversions for mutations {mutations}: {e}")
+        return 0
+
+
 def get_noncoding(row):
     """Get just the noncoding mutations in a DataFrame row."""
     coding = row["nt_mutations"]
@@ -122,16 +143,16 @@ else:
             codon_changes=lambda x: x["codon_changes"].str.split(";"),
             aa_mutations=lambda x: x["aa_mutations"].str.split(";"),
             noncoding_nt_mutations=lambda x: x.apply(get_noncoding, axis=1),
-            # Count ALL mutations (coding + noncoding) to match PCP extraction filter
-            n_nt_mutations=lambda x: x["nt_mutations_coding_and_noncoding"].map(
-                lambda ms: len(set(ms))
+            # Count CODING mutations only for quality filtering (aligns with SARS2-mut-fitness)
+            # This excludes error-prone noncoding regions from quality criteria while still
+            # tracking all mutations for downstream analysis
+            n_nt_mutations=lambda x: x["nt_mutations"].map(safe_mutation_count),
+            # Count reversions on CODING mutations only
+            n_reversions_to_ref=lambda x: x["nt_mutations"].map(
+                lambda ms: count_reversions(ms, ref)
             ),
-            # Count reversions on ALL mutations (coding + noncoding) to match PCP extraction
-            n_reversions_to_ref=lambda x: x["nt_mutations_coding_and_noncoding"].map(
-                lambda ms: sum(m[-1] == ref[int(m[1:-1]) - 1] for m in set(ms))
-            ),
-            n_reversions_to_founder=lambda x: x["nt_mutations_coding_and_noncoding"].map(
-                lambda ms: sum(m[-1] == founder[int(m[1:-1]) - 1] for m in set(ms))
+            n_reversions_to_founder=lambda x: x["nt_mutations"].map(
+                lambda ms: count_reversions(ms, founder)
             ),
             is_terminal=lambda x: x["leaves_sharing_mutations"] == 1,
             log_size=lambda x: np.log(x["leaves_sharing_mutations"].clip(lower=1)),
