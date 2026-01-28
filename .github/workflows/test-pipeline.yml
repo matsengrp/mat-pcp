@@ -21,6 +21,25 @@ jobs:
     - name: Install dependencies
       run: pixi install
 
+    - name: Configure conda channels
+      run: |
+        # Configure conda to use prefix.dev mirrors and strict channel priority
+        # Write to both ~/.condarc (used by snakemake's conda) and local .condarc
+        mkdir -p ~/.conda
+        cat > ~/.condarc << 'CONDARC_EOF'
+        channel_priority: strict
+        channels:
+          - https://prefix.dev/conda-forge
+          - https://prefix.dev/bioconda
+        show_channel_urls: false
+        solver: libmamba
+        CONDARC_EOF
+
+        # Verify configuration
+        pixi run conda config --show channels
+        pixi run conda config --show channel_priority
+        echo "Conda channels configured in ~/.condarc"
+
     - name: Validate config schema
       run: |
         pixi run python -c "
@@ -82,12 +101,34 @@ jobs:
 
     - name: Dry run pipeline
       run: |
+        export CONDARC="$HOME/.condarc"
+        export CONDA_NO_PLUGINS=true
         pixi run snakemake -n --use-conda \
+          --conda-frontend mamba \
           --configfile config/config_test_data.yaml
 
     - name: Run test pipeline
+      timeout-minutes: 30
       run: |
+        # Ensure snakemake's conda uses our channel configuration
+        export CONDARC="$HOME/.condarc"
+
+        # Set conda timeout settings for CI
+        export CONDA_REMOTE_CONNECT_TIMEOUT_SECS=30
+        export CONDA_REMOTE_READ_TIMEOUT_SECS=180
+        export CONDA_REMOTE_MAX_RETRIES=5
+
+        # Disable conda plugins that might interfere with channel selection
+        export CONDA_NO_PLUGINS=true
+
+        # Show conda configuration being used
+        echo "Conda configuration:"
+        pixi run conda config --show channels
+        pixi run conda config --show channel_priority
+
+        # Run pipeline (single attempt with proper timeout)
         pixi run snakemake -j $(nproc) --use-conda \
+          --conda-frontend mamba \
           --configfile config/config_test_data.yaml
 
     - name: Verify input linking

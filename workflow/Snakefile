@@ -782,6 +782,7 @@ rule annotate_counts:
         counts_csv=os.path.join(config["output_dir"], "glm/annotated_counts.csv"),
         founder_csv=os.path.join(config["output_dir"], "glm/clade_founder_annotated.csv")
     params:
+        reference_clade=config.get("reference_clade", "19A"),
         lightswitch_boundaries=config.get("glm_lightswitch_boundaries", {
             "CT": 13467, "AT": 21562, "CG": 21562, "GC": 21562
         })
