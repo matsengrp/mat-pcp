@@ -11,7 +11,6 @@ data/
 results*
 !results_test_data
 
-config/config-public-2022-06-01.yaml
 docs/dag_max1_wide.svg
 docs/dag_max2_wide.svg
 docs/issues/
