@@ -21,7 +21,6 @@ sites_to_exclude_param = snakemake.params.sites_to_exclude
 site_include_range = snakemake.params.site_include_range
 exclude_ref_to_founder_muts = snakemake.params.exclude_ref_to_founder_muts
 ref_to_founder_muts_csv = snakemake.input.ref_to_founder_muts
-filtered_branches_csv = snakemake.input.filtered_branches
 output_csv = snakemake.output.csv
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
@@ -63,11 +62,6 @@ for mask, mask_dict in usher_masked_sites.items():
         log(
             f"Applied UShER mask '{mask}' with {len(mask_dict.get('sites', []))} sites"
         )
-
-# Load filtered branches (branches with invalid PCPs to exclude)
-filtered_branches_df = pd.read_csv(filtered_branches_csv)
-filtered_branch_ids = set(filtered_branches_df["child_name"])
-log(f"Filtered branches (invalid PCPs): {len(filtered_branch_ids)}")
 
 # Expected final columns
 final_cols = [
@@ -133,7 +127,6 @@ else:
     # Filter nodes by mutation criteria
     filtered_nodes = (
         translated_mat.merge(nt_muts, on="node_id", validate="one_to_one")
-        .query("node_id not in @filtered_branch_ids")  # Exclude branches with invalid PCPs
         .query("not nt_mutations.str.contains(',')")
         .assign(
             nt_mutations=lambda x: x["nt_mutations"].str.split(";"),
