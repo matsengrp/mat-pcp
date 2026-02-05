@@ -8,7 +8,7 @@
 # =============================================================================
 # Input/Output Configuration
 # =============================================================================
-output_dir: "results_public_2022-06-01"
+output_dir: "results/public_2022-06-01"
 mat: "../mat-trees/2022-06-01-public/public-2022-06-01.all.masked.nextclade.pangolin.pb.gz"
 metadata: "../mat-trees/2022-06-01-public/public-2022-06-01.metadata.tsv.gz"
 

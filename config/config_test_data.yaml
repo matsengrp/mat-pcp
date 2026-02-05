@@ -1,9 +1,9 @@
 # =============================================================================
 # Input/Output Configuration
 # =============================================================================
-output_dir: "results_test_data"
-mat: "test_data/filtered_tree_raw.pb.gz"
-metadata: "test_data/filtered_metadata.tsv.gz"
+output_dir: "results/test_data"
+mat: "data/test_data/filtered_tree_raw.pb.gz"
+metadata: "data/test_data/filtered_metadata.tsv.gz"
 
 # =============================================================================
 # Reference Genome Configuration

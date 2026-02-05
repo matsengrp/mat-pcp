@@ -55,7 +55,9 @@ pixi run python workflow/scripts/validate_test.py
 ```
 mat-pcp/
 ├── config/
-│   └── config.yaml          # Pipeline configuration
+│   ├── config.yaml                  # Default pipeline configuration
+│   ├── config_test_data.yaml        # Test data configuration
+│   └── config-public-2022-06-01.yaml # Production configuration
 ├── workflow/
 │   ├── Snakefile            # Main workflow definition
 │   ├── envs/                # Conda environments
@@ -69,11 +71,15 @@ mat-pcp/
 │   │   ├── aamutfit.py      # Amino acid fitness aggregation
 │   │   └── load.py          # Data loading utilities
 │   └── scripts/             # Snakemake scripts
-├── test_data/               # Test data files
 ├── data/                    # Static data files
 │   ├── usher_masked_sites.yaml
-│   └── lan_2022/            # RNA structure data
-└── results*/                # Output directories
+│   ├── lan_2022/           # RNA structure data
+│   └── test_data/          # Test datasets and expected results
+├── results/                 # Active pipeline outputs (gitignored)
+│   ├── test_data/          # Test runs
+│   └── {dataset}/          # Production runs
+└── archives/                # Archived results (gitignored)
+    └── README.md           # Archive documentation (tracked)
 ```
 
 ### Key Technologies
@@ -119,7 +125,8 @@ The configuration (`config/config.yaml`) is organized into:
 ### Output Organization
 
 Results are stored in `{output_dir}/`:
-- `mat/`: Filtered trees, clade subtrees, PCPs
+- `mat/`: Filtered trees, clade subtrees
+- `pcps/`: Curated parent-child pairs
 - `ref/`: Reference genome, coding sites
 - `mutation_counts/`: Per-clade and aggregated counts
 - `clade_founders/`: Founder sequences and mutations

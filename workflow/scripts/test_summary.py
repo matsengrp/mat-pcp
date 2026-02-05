@@ -139,6 +139,7 @@ def main(results_dir):
     """Generate test summary for the given results directory."""
     results_path = Path(results_dir)
     mat_path = results_path / "mat"
+    pcps_path = results_path / "pcps"
 
     summary = {
         'results_directory': str(results_path),
@@ -152,7 +153,7 @@ def main(results_dir):
 
     # Check key output files
     key_files = [
-        mat_path / "all_pcps.csv",
+        pcps_path / "all_pcps.csv",
         mat_path / "clade_counts.csv",
         mat_path / "filtered_metadata.tsv.gz",
         mat_path / "filtered_tree_raw.pb"
@@ -162,7 +163,7 @@ def main(results_dir):
         summary['files'][str(filepath)] = get_file_stats(str(filepath))
 
     # Get PCP summary
-    pcp_file = mat_path / "all_pcps.csv"
+    pcp_file = pcps_path / "all_pcps.csv"
     if pcp_file.exists():
         summary['pcp_summary'] = summarize_pcps(str(pcp_file))
 

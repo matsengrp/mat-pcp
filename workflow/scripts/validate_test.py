@@ -171,7 +171,7 @@ def main():
     # Generate current summary
     import subprocess
     result = subprocess.run(
-        ['python', 'workflow/scripts/test_summary.py', 'results_test_data'],
+        ['python', 'workflow/scripts/test_summary.py', 'results/test_data'],
         capture_output=True,
         text=True
     )
@@ -183,7 +183,7 @@ def main():
     actual = json.loads(result.stdout)
     
     # Load expected summary
-    expected_path = Path('test_data/expected_summary.json')
+    expected_path = Path('data/test_data/expected_summary.json')
     if not expected_path.exists():
         print(f"Expected summary not found at {expected_path}")
         print("Current summary:")

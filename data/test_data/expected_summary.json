@@ -1,26 +1,26 @@
 {
-  "_comment": "Expected results with config_test_data.yaml (max_clades=3, subset_frac=0.1). PCPs are curated to remove identical sequences and those with stop codons. Updated for coding-only quality filtering (issue #58): more branches pass filters (8 PCPs vs 5 previously) since noncoding mutations are excluded from quality criteria. Updated for decoupled PCP filtering (issue #59): mutation counting now includes all branches regardless of PCP-specific filters, resulting in more mutations counted (actual_count_sum increased from 32 to 100).",
-  "results_directory": "results_test_data",
+  "_comment": "Expected results with config_test_data.yaml (max_clades=3, subset_frac=0.1). PCPs are curated to remove identical sequences and those with stop codons. Updated for coding-only quality filtering (issue #58): more branches pass filters (8 PCPs vs 5 previously) since noncoding mutations are excluded from quality criteria. Updated for decoupled PCP filtering (issue #59): mutation counting now includes all branches regardless of PCP-specific filters, resulting in more mutations counted (actual_count_sum increased from 32 to 100). Updated paths: PCPs now in pcps/ directory, test data in data/test_data/.",
+  "results_directory": "results/test_data",
   "files": {
-    "results_test_data/mat/all_pcps.csv": {
+    "results/test_data/pcps/all_pcps.csv": {
       "exists": true,
       "size": 61494,
       "lines": 9,
       "checksum": "0601e759f6ab49758e2cad323b7b0976"
     },
-    "results_test_data/mat/clade_counts.csv": {
+    "results/test_data/mat/clade_counts.csv": {
       "exists": true,
       "size": 352,
       "lines": 26,
       "checksum": "23af44ee1acd291c0592ce762439b7c8"
     },
-    "results_test_data/mat/filtered_metadata.tsv.gz": {
+    "results/test_data/mat/filtered_metadata.tsv.gz": {
       "exists": true,
       "size": 67415,
       "lines": null,
-      "checksum": "c153816fa9ab76cb093def8288baadf3"
+      "checksum": "60767be43b023fc1ce7a093aff42132c"
     },
-    "results_test_data/mat/filtered_tree_raw.pb": {
+    "results/test_data/mat/filtered_tree_raw.pb": {
       "exists": true,
       "size": 476609,
       "lines": null,

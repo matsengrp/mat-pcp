@@ -74,9 +74,9 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 
 | Output | Description |
 |--------|-------------|
-| `mat/all_pcps.csv` | All curated parent-child pairs with clade annotations |
-| `mat/pcp_curation_report.txt` | Report showing PCP filtering statistics |
-| `mat/filtered_branch_ids.csv` | Branch IDs excluded from mutation counting |
+| `pcps/all_pcps.csv` | All curated parent-child pairs with clade annotations |
+| `pcps/pcp_curation_report.txt` | Report showing PCP filtering statistics |
+| `pcps/filtered_branch_ids.csv` | Branch IDs excluded from mutation counting |
 | `mat/clade_counts.csv` | Sample counts per clade |
 | `clade_founder_nts.csv` | Nucleotide at each coding site for all clade founders |
 | `mutation_counts/aggregated.csv` | Aggregated mutation counts across all clades |
@@ -314,17 +314,18 @@ results/
 │   ├── clades/                    # Per-clade subtrees and PCPs
 │   │   ├── {clade}_tree.pb        # Clade-specific MAT subtree
 │   │   ├── {clade}_pcps_raw.csv   # Raw (uncurated) parent-child pairs
-│   │   ├── {clade}_pcps.csv       # Curated parent-child pairs
-│   │   ├── {clade}_filtered_branches.csv  # Branch IDs filtered during curation
 │   │   └── {clade}_samples.txt    # Sample names in each clade
 │   ├── mat_tree.pb.gz             # Symlink to input MAT
 │   ├── metadata.tsv.gz            # Symlink to input metadata
 │   ├── filtered_metadata.tsv.gz   # QC-filtered metadata
 │   ├── filtered_tree_raw.pb       # Filtered MAT tree
+│   └── clade_counts.csv           # Sample counts per clade
+├── pcps/
+│   ├── {clade}_pcps.csv           # Curated parent-child pairs per clade
+│   ├── {clade}_filtered_branches.csv  # Branch IDs filtered during curation
 │   ├── all_pcps.csv               # Aggregated curated PCPs across all clades
 │   ├── pcp_curation_report.txt    # PCP curation statistics
-│   ├── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
-│   └── clade_counts.csv           # Sample counts per clade
+│   └── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
 ├── ref/
 │   ├── ref.fa                     # Reference genome (FASTA)
 │   ├── original_ref.gtf           # Original GTF annotations
@@ -368,16 +369,56 @@ results/
 └── log/                           # Processing logs per rule
 ```
 
+## Results Management
+
+### Directory Organization
+
+The pipeline uses a clean, organized structure for managing outputs:
+
+```
+mat-pcp/
+├── results/                      # Active pipeline outputs (gitignored)
+│   ├── test_data/               # Test runs
+│   ├── public_2022-06-01/       # Production runs
+│   └── ...                      # Other runs
+├── archives/                     # Archived results (gitignored)
+│   ├── public_2022-06-01/       # Preserved production results
+│   ├── README.md                # Archive documentation (tracked)
+│   └── ...                      # Historical runs
+└── config/
+    ├── config.yaml              # Default config (output_dir: "results")
+    ├── config_test_data.yaml    # Test config (output_dir: "results/test_data")
+    └── config-public-2022-06-01.yaml  # Production config
+```
+
+### Naming Convention
+
+Results directories follow this format: `results/{dataset}_{date}` or `results/{dataset}`
+
+**Examples:**
+- `results/test_data` - Test runs
+- `results/public_2022-06-01` - Public dataset through June 2022
+- `results/omicron_2023-12-15` - Omicron-specific analysis
+
+### Archiving Results
+
+To preserve completed runs:
+
+```bash
+# Move to archives with descriptive name
+mv results/public_2022-06-01 archives/
+
+# Or create compressed archive
+tar -czf archives/public_2022-06-01_$(date +%Y%m%d).tar.gz results/public_2022-06-01/
+```
+
+See `archives/README.md` for detailed archiving guidelines.
+
 ## Testing
 
 ```bash
-# Run pipeline on test data (uses subset_frac=0.1 for faster testing)
-pixi run snakemake -j 4 --use-conda \
-  --config output_dir="results_test_data" \
-           mat="test_data/filtered_tree_raw.pb.gz" \
-           metadata="test_data/filtered_metadata.tsv.gz" \
-           subset_frac=0.1 \
-           max_clades=3
+# Run pipeline on test data (uses max_clades=3, subset_frac=0.1)
+pixi run snakemake -j 4 --use-conda --configfile config/config_test_data.yaml
 
 # Validate results against expected
 pixi run python workflow/scripts/validate_test.py

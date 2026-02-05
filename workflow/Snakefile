@@ -94,7 +94,7 @@ results_files = [
     "fitness/ntmut_fitness_aggregated.csv",
     "aamut_fitness/all_aamut_fitness.csv",
     "validation/pcp_vs_counts_report.txt",
-    "mat/pcp_curation_report.txt",
+    "pcps/pcp_curation_report.txt",
 ]
 
 
@@ -456,8 +456,8 @@ rule curate_pcps_by_clade:
     input:
         pcps=rules.extract_pcps_by_clade.output.pcps
     output:
-        curated_pcps=os.path.join(config["output_dir"], "mat/clades/{clade}_pcps.csv"),
-        filtered_branches=os.path.join(config["output_dir"], "mat/clades/{clade}_filtered_branches.csv")
+        curated_pcps=os.path.join(config["output_dir"], "pcps/{clade}_pcps.csv"),
+        filtered_branches=os.path.join(config["output_dir"], "pcps/{clade}_filtered_branches.csv")
     log:
         os.path.join(config["output_dir"], "log/curate_pcps_{clade}.log")
     conda:
@@ -470,11 +470,11 @@ rule aggregate_clade_pcps:
     """Aggregate all clade-specific PCPs into a single file."""
     input:
         pcps=lambda wc: expand(
-            os.path.join(config["output_dir"], "mat/clades/{clade}_pcps.csv"),
+            os.path.join(config["output_dir"], "pcps/{clade}_pcps.csv"),
             clade=clades_w_adequate_counts(wc)
         )
     output:
-        all_pcps=os.path.join(config["output_dir"], "mat/all_pcps.csv")
+        all_pcps=os.path.join(config["output_dir"], "pcps/all_pcps.csv")
     log:
         os.path.join(config["output_dir"], "log/aggregate_clade_pcps.log")
     conda:
@@ -492,12 +492,12 @@ rule aggregate_filtered_branches:
             clade=clades_w_adequate_counts(wc)
         ),
         filtered_branches=lambda wc: expand(
-            os.path.join(config["output_dir"], "mat/clades/{clade}_filtered_branches.csv"),
+            os.path.join(config["output_dir"], "pcps/{clade}_filtered_branches.csv"),
             clade=clades_w_adequate_counts(wc)
         )
     output:
-        report=os.path.join(config["output_dir"], "mat/pcp_curation_report.txt"),
-        filtered_branches=os.path.join(config["output_dir"], "mat/filtered_branch_ids.csv")
+        report=os.path.join(config["output_dir"], "pcps/pcp_curation_report.txt"),
+        filtered_branches=os.path.join(config["output_dir"], "pcps/filtered_branch_ids.csv")
     log:
         os.path.join(config["output_dir"], "log/aggregate_filtered_branches.log")
     conda:
