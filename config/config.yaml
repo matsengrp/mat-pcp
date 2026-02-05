@@ -48,6 +48,8 @@ clades_to_exclude: []
 # Used to determine "conserved" sites during GLM training data curation
 # This should be the ancestral/reference clade (typically 19A for SARS-CoV-2)
 # matching SARS2-mut-fitness-v2 behavior
+# NOTE: THE PIPELINE WILL CRASH IF THIS CLADE IS NOT PRESENT DUE TO ADEQUATE SAMPLES
+# SEE `min_clade_size` SETTING ABOVE
 reference_clade: "19A"
 
 # =============================================================================

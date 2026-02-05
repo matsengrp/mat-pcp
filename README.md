@@ -204,9 +204,9 @@ During initial PCP extraction (`extract_pcps_by_clade`), branches are filtered b
 
 After extraction, PCPs are curated (`curate_pcps_by_clade`) for DASM training validity:
 
-1. **Identical sequences**: Parent and child sequences that are identical after slicing to the gene region are removed
-2. **Stop codons**: Sequences containing internal stop codons (TAA, TAG, TGA) are removed
-3. **Ambiguous codons**: Codons containing 'N' in either parent or child are masked; if all codons are masked or sequences become identical after masking, the PCP is removed
+1. **Identical sequences**: Parent and child sequences that are identical (in the gene region) are removed
+
+Note: Stop codons and ambiguous bases outside the gene region of interest do not cause PCPs to be filtered, as sequences are already sliced to the gene region during extraction. This ensures that sequence properties outside the gene region don't create artificial discrepancies in validation.
 
 ### Harmonized Mutation Counting
 
