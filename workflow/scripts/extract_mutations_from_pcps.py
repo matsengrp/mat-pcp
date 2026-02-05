@@ -84,8 +84,8 @@ def extract_aa_mutations_from_codons(parent_nt, child_nt):
             p_aa = translate_codon(p_codon)
             c_aa = translate_codon(c_codon)
 
-            # Skip if translation failed or contains stop codons
-            if p_aa == "*" or c_aa == "*" or p_aa == "X" or c_aa == "X":
+            # Skip if translation failed
+            if p_aa == "X" or c_aa == "X":
                 continue
 
             aa_site = (i // 3) + 1  # 1-indexed

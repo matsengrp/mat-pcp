@@ -219,6 +219,31 @@ with open(output_report, "w") as f:
             f.write(count_mismatch.head(10)[cols].to_string())
             f.write("\n")
 
+    # Add notes section about expected differences
+    f.write("\n" + "=" * 60 + "\n")
+    f.write("NOTES ON EXPECTED DIFFERENCES\n")
+    f.write("=" * 60 + "\n")
+
+    f.write("\nThe following types of discrepancies are EXPECTED:\n")
+    f.write("1. Mutations only in PCP counts:\n")
+    f.write("   - Likely reversions to clade founder (filtered from matUtils)\n")
+    f.write("   - These are excluded from fitness estimation by design\n")
+
+    f.write("\n2. Mutations only in matUtils counts:\n")
+    f.write("   - Should be rare after stop codon filter fix\n")
+    f.write("   - Investigate if any appear\n")
+
+    f.write("\n3. Count mismatches where matUtils > PCP:\n")
+    f.write("   - Likely due to terminal/non-terminal splits in matUtils\n")
+    f.write("   - Differences typically ±1-2 for small number of mutations\n")
+
+    f.write("\n4. Count mismatches where PCP > matUtils:\n")
+    f.write("   - Likely synonymous mutations with bidirectional changes\n")
+    f.write("   - One direction is reversion (filtered from matUtils)\n")
+
+    f.write("\nSee README.md 'PCP vs matUtils Validation' section for details.\n")
+    f.write("=" * 60 + "\n")
+
     f.write("\n" + "=" * 60 + "\n")
     f.write("End of Report\n")
     f.write("=" * 60 + "\n")
