@@ -67,6 +67,11 @@ def validate_pcp_df(pcp_df):
     """
     Validate a DataFrame of PCPs and return filtering results.
 
+    Only filters PCPs where parent and child are identical. Stop codons and
+    ambiguous bases are allowed since they don't affect mutation counting in
+    other regions. Sequences are assumed to already be sliced to the gene
+    region of interest by the upstream extraction step.
+
     Parameters:
         pcp_df: DataFrame with 'parent' and 'child' columns
 
@@ -76,9 +81,6 @@ def validate_pcp_df(pcp_df):
     """
     invalid_reasons = {
         "identical": [],
-        "parent_stop_codon": [],
-        "child_stop_codon": [],
-        "invalid_pcp": [],
     }
 
     valid_mask = pd.Series(True, index=pcp_df.index)
@@ -86,26 +88,9 @@ def validate_pcp_df(pcp_df):
     for idx, row in pcp_df.iterrows():
         parent, child = row["parent"], row["child"]
 
-        # Check identical
+        # Only filter if identical
         if parent == child:
             invalid_reasons["identical"].append(idx)
-            valid_mask[idx] = False
-            continue
-
-        # Check stop codons
-        if contains_stop_codon(parent):
-            invalid_reasons["parent_stop_codon"].append(idx)
-            valid_mask[idx] = False
-            continue
-
-        if contains_stop_codon(child):
-            invalid_reasons["child_stop_codon"].append(idx)
-            valid_mask[idx] = False
-            continue
-
-        # Check PCP validity (masking, etc.)
-        if not is_pcp_valid(parent, child):
-            invalid_reasons["invalid_pcp"].append(idx)
             valid_mask[idx] = False
 
     return valid_mask, invalid_reasons

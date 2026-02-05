@@ -14,11 +14,6 @@ pcps_csv = snakemake.input.pcps
 output_aa_csv = snakemake.output.aa_counts
 
 pcp_gene_region = snakemake.params.pcp_gene_region
-max_nt_mutations = snakemake.params.max_nt_mutations
-max_reversions_to_ref = snakemake.params.max_reversions_to_ref
-max_reversions_to_founder = snakemake.params.get("max_reversions_to_clade_founder", 1)
-ref_fasta = snakemake.input.ref_fasta
-clade_founder_fasta = snakemake.input.get("clade_founder_fasta", None)
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -34,17 +29,8 @@ log("Extracting AA mutations from PCPs by translating sequences")
 
 # Load inputs
 pcps = pd.read_csv(pcps_csv)
-ref_seq = str(Bio.SeqIO.read(ref_fasta, "fasta").seq)
-
-# Load clade founder sequence if provided
-founder_seq = None
-if clade_founder_fasta:
-    founder_seq = str(Bio.SeqIO.read(clade_founder_fasta, "fasta").seq)
 
 log(f"Loaded {len(pcps)} PCPs")
-log(f"Reference sequence length: {len(ref_seq)}")
-if founder_seq:
-    log(f"Founder sequence length: {len(founder_seq)}")
 
 # Get gene info from pcp_gene_region
 gene_name = None
@@ -58,73 +44,63 @@ else:
     log("No PCP gene region specified")
 
 
-def translate_sequence(nt_seq):
-    """Translate nucleotide sequence to amino acids."""
-    # Ensure length is multiple of 3
-    trim_len = len(nt_seq) - (len(nt_seq) % 3)
-    nt_seq = nt_seq[:trim_len]
+def translate_codon(codon):
+    """Translate a single codon to amino acid."""
+    if len(codon) != 3:
+        return "X"
     try:
-        return str(Seq(nt_seq).translate())
+        return str(Seq(codon).translate())
     except Exception:
-        return ""
+        return "X"
 
 
-def extract_aa_mutations(parent_aa, child_aa):
+def extract_aa_mutations_from_codons(parent_nt, child_nt):
     """
-    Extract amino acid mutations by comparing parent and child AA sequences.
+    Extract amino acid mutations by comparing codons and translating.
+
+    This approach identifies mutations at the codon level first, then translates
+    to determine amino acid changes. This captures ALL mutations including
+    synonymous ones (e.g., D614D where the codon changed but AA stayed the same).
 
     Returns:
         List of dicts with aa_site (1-indexed), parent_aa, child_aa, aa_mutation
     """
     mutations = []
-    for i, (p_aa, c_aa) in enumerate(zip(parent_aa, child_aa)):
-        if p_aa != c_aa and p_aa != "*" and c_aa != "*" and p_aa != "X" and c_aa != "X":
-            aa_site = i + 1  # 1-indexed
+
+    # Ensure lengths are multiples of 3
+    trim_len = min(len(parent_nt), len(child_nt))
+    trim_len = (trim_len // 3) * 3
+    parent_nt = parent_nt[:trim_len]
+    child_nt = child_nt[:trim_len]
+
+    # Compare codons
+    for i in range(0, trim_len, 3):
+        p_codon = parent_nt[i:i+3]
+        c_codon = child_nt[i:i+3]
+
+        # Only record if codons differ
+        if p_codon != c_codon:
+            # Translate both codons
+            p_aa = translate_codon(p_codon)
+            c_aa = translate_codon(c_codon)
+
+            # Skip if translation failed or contains stop codons
+            if p_aa == "*" or c_aa == "*" or p_aa == "X" or c_aa == "X":
+                continue
+
+            aa_site = (i // 3) + 1  # 1-indexed
             mutations.append({
                 "aa_site": aa_site,
                 "parent_aa": p_aa,
                 "child_aa": c_aa,
                 "aa_mutation": f"{p_aa}{aa_site}{c_aa}",
             })
+
     return mutations
-
-
-def count_nt_mutations(parent_nt, child_nt):
-    """Count nucleotide differences between parent and child."""
-    count = 0
-    for p, c in zip(parent_nt, child_nt):
-        if p != c and p in "ACGT" and c in "ACGT":
-            count += 1
-    return count
-
-
-def count_reversions_to_ref(parent_nt, child_nt, ref_nt, offset):
-    """Count mutations that revert to reference."""
-    count = 0
-    for i, (p, c) in enumerate(zip(parent_nt, child_nt)):
-        if p != c and p in "ACGT" and c in "ACGT":
-            ref_pos = offset - 1 + i  # 0-indexed position in ref
-            if ref_pos < len(ref_nt) and ref_nt[ref_pos] == c:
-                count += 1
-    return count
-
-
-def count_reversions_to_founder(parent_nt, child_nt, founder_nt, offset):
-    """Count mutations that revert to clade founder."""
-    if founder_nt is None:
-        return 0
-    count = 0
-    for i, (p, c) in enumerate(zip(parent_nt, child_nt)):
-        if p != c and p in "ACGT" and c in "ACGT":
-            founder_pos = offset - 1 + i  # 0-indexed position in founder
-            if founder_pos < len(founder_nt) and founder_nt[founder_pos] == c:
-                count += 1
-    return count
 
 
 # Extract AA mutations from each PCP
 all_aa_mutations = []
-filtered_count = 0
 total_pairs = 0
 
 for _, row in pcps.iterrows():
@@ -136,32 +112,8 @@ for _, row in pcps.iterrows():
     if pd.isna(parent_nt) or pd.isna(child_nt):
         continue
 
-    # Apply filtering based on nucleotide mutations
-    n_nt_mutations = count_nt_mutations(parent_nt, child_nt)
-    n_reversions = count_reversions_to_ref(parent_nt, child_nt, ref_seq, offset)
-    n_reversions_founder = count_reversions_to_founder(
-        parent_nt, child_nt, founder_seq, offset
-    )
-
-    if n_nt_mutations > max_nt_mutations:
-        filtered_count += 1
-        continue
-    if n_reversions > max_reversions_to_ref:
-        filtered_count += 1
-        continue
-    if founder_seq is not None and n_reversions_founder > max_reversions_to_founder:
-        filtered_count += 1
-        continue
-
-    # Translate sequences
-    parent_aa = translate_sequence(parent_nt)
-    child_aa = translate_sequence(child_nt)
-
-    if not parent_aa or not child_aa:
-        continue
-
-    # Extract AA mutations
-    aa_mutations = extract_aa_mutations(parent_aa, child_aa)
+    # Extract AA mutations at codon level (includes synonymous mutations)
+    aa_mutations = extract_aa_mutations_from_codons(parent_nt, child_nt)
 
     for mut in aa_mutations:
         all_aa_mutations.append({
@@ -174,7 +126,6 @@ for _, row in pcps.iterrows():
         })
 
 log(f"Extracted {len(all_aa_mutations)} AA mutations from {total_pairs} PCPs")
-log(f"Filtered {filtered_count} PCPs due to filtering criteria")
 
 # Create output dataframe with counts
 if all_aa_mutations:
