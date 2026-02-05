@@ -91,6 +91,56 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 | `aamut_fitness/all_aamut_fitness.csv` | Amino acid-level fitness estimates |
 | `validation/pcp_vs_counts_report.txt` | PCP vs counts validation report |
 
+## PCP vs matUtils Mutation Count Validation
+
+The pipeline includes a validation step (`validate_pcp_vs_counts`) that cross-checks amino acid mutation counts derived from two independent methods:
+
+1. **PCP Method:** Parent-child pairs extracted from the tree, then translated to amino acids
+2. **matUtils Method:** matUtils mutations counted and filtered, then aggregated to amino acids
+
+This validation provides crucial quality assurance by ensuring both methods see the same mutations. However, certain **expected differences** arise from legitimate methodological differences:
+
+### Expected Differences
+
+#### 1. Reversions to Clade Founder (matUtils excludes, PCP includes)
+
+**Cause:** The matUtils fitness pipeline generates expected mutation counts only for forward mutations FROM the clade founder. When merging actual counts with expected counts (LEFT JOIN), reversions TO the founder are dropped even though they passed quality filters.
+
+**Example:** In clade 19A, mutations like G614D (reversion to founder D) appear in PCP counts but not in matUtils aamut_fitness.
+
+**Why this is acceptable:** The fitness estimation pipeline is designed to analyze forward mutations from the founder. Reversions are scientifically interesting but handled separately in downstream analyses.
+
+**Affected mutations:** Typically 5-10 reversions per clade (e.g., G614D, R452L, Y80D, V222A in 19A)
+
+#### 2. Terminal vs Non-Terminal Splits (matUtils counts higher)
+
+**Cause:** The matUtils pipeline splits nucleotide mutations by terminal vs non-terminal branch status, then sums these when aggregating to amino acid level. The PCP method counts unique codon-level changes without this distinction.
+
+**Example:** Mutation A623V appears once in raw data but matUtils splits it into terminal and non-terminal counts, summing to 2 at the AA level.
+
+**Why this is acceptable:** The terminal/non-terminal distinction is useful for certain fitness analyses. The difference is typically ±1 for a small number of mutations.
+
+**Affected mutations:** Typically 1-3 mutations per clade with terminal/non-terminal heterogeneity
+
+#### 3. Synonymous Reversions (PCP counts higher)
+
+**Cause:** For synonymous mutations that can occur bidirectionally (e.g., ACC↔ACT for T1116T), the PCP method counts both directions while matUtils filters reversions to the founder.
+
+**Example:** T1116T can occur as C24910T (reversion) or T24910C (forward). PCP counts both (6 total), matUtils counts only forward (3 total).
+
+**Why this is acceptable:** Same rationale as #1 - reversions are filtered from the fitness pipeline by design.
+
+**Affected mutations:** Typically 2-5 synonymous mutations per clade
+
+### Validation Success Criteria
+
+The validation passes if:
+- All **unexpected** discrepancies are resolved (bugs, implementation errors)
+- **Expected** discrepancies match the patterns above
+- No new mutation types appear exclusively in one method
+
+The validation report (`pcp_vs_counts_report.txt`) notes which discrepancies are expected vs unexpected.
+
 ## Configuration Options
 
 See `config/config.yaml` for all configuration options. Key parameters are organized into sections:
