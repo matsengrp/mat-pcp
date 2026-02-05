@@ -5,6 +5,9 @@ description = "Mutation-annotated tree parent-child pair extraction pipeline"
 channels = ["conda-forge", "bioconda"]
 platforms = ["linux-64", "osx-64", "osx-arm64"]
 
+[activation.env]
+CONDARC = ".condarc"
+
 [tasks]
 
 [dependencies]
