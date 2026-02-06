@@ -72,6 +72,8 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 
 ## Primary Outputs
 
+> **Using the outputs?** See [OUTPUT_SCHEMA.md](OUTPUT_SCHEMA.md) for detailed column definitions and data types.
+
 | Output | Description |
 |--------|-------------|
 | `pcps/all_pcps.csv` | All curated parent-child pairs with clade annotations |
