@@ -139,3 +139,22 @@ Results are stored in `{output_dir}/`:
 ### Data Files
 - `data/usher_masked_sites.yaml`: UShER masking information for problematic sites by clade
 - `data/lan_2022/41467_2022_28603_MOESM11_ESM.txt`: RNA secondary structure data
+
+## Pre-PR Quality Checklist
+
+Before any pull request:
+
+1. **Issue Compliance**: Verify completion of all requirements from the linked issue
+2. **Documentation Sync**: If changes affect outputs or behavior:
+   - Update `OUTPUT_SCHEMA.md` for any changes to output file formats
+   - Update `README.md` for new outputs, changed behavior, or configuration options
+   - Update this file (`CLAUDE.md`) for architectural changes or new patterns
+3. **Test on Test Data**: Run the pipeline on test data to verify changes work:
+   ```bash
+   pixi run snakemake -j 2 --use-conda --configfile config/config_test_data.yaml
+   ```
+4. **Validate Results**: Run validation to check for regressions:
+   ```bash
+   pixi run python workflow/scripts/validate_test.py
+   ```
+5. **PR Description**: Ensure PR description accurately reflects the scope of changes
