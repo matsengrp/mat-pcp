@@ -54,7 +54,7 @@ Amino acid-level fitness estimates aggregated across all clades. Fitness is comp
 | `mutant_aa` | string | Single-letter mutant amino acid. |
 | `aa_site` | integer | 1-indexed amino acid position within the gene. |
 | `aa_mutation` | string | Mutation string in standard format (e.g., "D614G"). |
-| `subset_of_ORF1ab` | string | If gene is an ORF1ab subset (NSP1-16), contains the NSP name; otherwise empty. |
+| `subset_of_ORF1ab` | boolean | True if this entry is for an NSP (ORF1ab subset); False otherwise. |
 | `expected_count` | float | Expected mutation count based on synonymous mutation rates. |
 | `predicted_count` | float | GLM-predicted count incorporating sequence context and RNA structure. |
 | `actual_count` | float | Observed mutation count in the data. |
@@ -85,19 +85,26 @@ Nucleotide-level fitness estimates. Similar structure to amino acid fitness but 
 
 | Column | Type | Description |
 |--------|------|-------------|
+| `clade` | string | Clade name for this entry. |
 | `nt_mutation` | string | Nucleotide mutation (e.g., "A23403G"). |
 | `nt_site` | integer | 1-indexed genomic position. |
-| `reference_nt` | string | Nucleotide in the Wuhan-Hu-1 reference. |
 | `clade_founder_nt` | string | Nucleotide in the clade founder. |
-| `actual_count` | float | Observed mutation count. |
-| `predicted_count` | float | GLM-predicted count. |
-| `tau_squared` | float | Variance component. |
-| `f_mean` | float | Mean fitness estimate from probabilistic model. |
-| `f_st_dev` | float | Standard deviation of fitness estimate. |
 | `gene` | string | Gene containing this site (semicolon-separated if multiple). |
-| `codon_site` | string | Codon position within gene (semicolon-separated if multiple). |
 | `aa_mutation` | string | Amino acid mutation if nonsynonymous (semicolon-separated if multiple). |
 | `synonymous` | boolean | True if mutation is synonymous. |
+| `actual_count` | float | Observed mutation count. |
+| `expected_count` | float | Expected count from synonymous rates (pre-GLM). |
+| `predicted_count` | float | GLM-predicted count incorporating sequence context. |
+| `tau_squared` | float | Variance component from GLM. |
+| `f_max` | float | Maximum a posteriori (MAP) fitness estimate. |
+| `left_conf_int` | float | Left 68% credible interval distance from `f_max`. |
+| `right_conf_int` | float | Right 68% credible interval distance from `f_max`. |
+| `f_mean` | float | Posterior mean fitness estimate. |
+| `f_st_dev` | float | Posterior standard deviation of fitness estimate. |
+| `source_clade` | string | Semicolon-separated list of clades that contributed to this entry. |
+
+**Notes:**
+- Additional technical columns (e.g., `motif`, `unpaired`, `codon_site`, `mut_class`) are present for internal pipeline use but are not documented here.
 
 ## Mutation Counts
 
