@@ -168,10 +168,15 @@ def compare_summaries(actual, expected):
 
 def main():
     """Run validation."""
-    # Generate current summary
+    import os
     import subprocess
+
+    # Determine output directory from args, env var, or default
+    output_dir = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('OUTPUT_DIR', 'results/test_data')
+
+    # Generate current summary
     result = subprocess.run(
-        ['python', 'workflow/scripts/test_summary.py', 'results/test_data'],
+        ['python', 'workflow/scripts/test_summary.py', output_dir],
         capture_output=True,
         text=True
     )
