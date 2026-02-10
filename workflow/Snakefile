@@ -8,6 +8,22 @@ configfile: "config/config.yaml"
 
 
 # =============================================================================
+# Version Management
+# =============================================================================
+
+# Read pipeline version from VERSION file
+VERSION_FILE = os.path.join(workflow.basedir, "..", "VERSION")
+with open(VERSION_FILE) as f:
+    PIPELINE_VERSION = f.read().strip()
+
+# Append version to output_dir if not already present
+output_dir = config["output_dir"]
+if not output_dir.endswith(f"_{PIPELINE_VERSION}"):
+    config["output_dir"] = f"{output_dir}_{PIPELINE_VERSION}"
+    print(f"Pipeline version {PIPELINE_VERSION}: Output directory set to {config['output_dir']}")
+
+
+# =============================================================================
 # Config Validation
 # =============================================================================
 

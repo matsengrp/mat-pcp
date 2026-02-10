@@ -9,6 +9,31 @@ This pipeline combines functionality from three previously separate projects:
 2. **SARS2-mut-fitness** - Expected vs actual mutation count computation
 3. **SARS2-mut-fitness-v2** - Neutral mutation rate estimation via GLM
 
+## Versioning
+
+The pipeline uses simple integer versioning (v1, v2, v3, etc.) to enable reproducibility tracking. The version is automatically appended to output directories to clearly identify which pipeline version produced the outputs.
+
+- **Current Version**: v1 (see [CHANGELOG.md](CHANGELOG.md) for version history)
+- **Version File**: The pipeline version is stored in the `VERSION` file at the repository root
+- **Output Naming**: Outputs are automatically versioned (e.g., `results/public_2022-06-01_v1`)
+- **Git Tags**: Each version is tagged in git for easy reference (e.g., `git checkout v1`)
+
+### Why Versioning?
+
+Any change to output format or filtering logic that affects downstream consumers bumps the version. This is critical because:
+- Models trained on one version's outputs may not work with another's
+- Downstream manifests can specify exact pipeline versions
+- Output schema changes are tracked in [CHANGELOG.md](CHANGELOG.md)
+
+### Referencing a Specific Version
+
+To use a specific pipeline version:
+```bash
+git checkout v1  # or v2, v3, etc.
+pixi install
+pixi run snakemake -j 4 --use-conda
+```
+
 ## Pipeline DAG
 
 The following diagram shows the workflow structure when running with test data (`max_clades=1`):
