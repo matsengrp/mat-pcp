@@ -131,11 +131,19 @@ jobs:
           --conda-frontend mamba \
           --configfile config/config_test_data.yaml
 
+    - name: Set output directory variable
+      run: |
+        # Determine the actual output directory created by the pipeline
+        # (includes version suffix added by versioning system)
+        OUTPUT_DIR=$(ls -d results/test_data* | head -1)
+        echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
+        echo "Using output directory: $OUTPUT_DIR"
+
     - name: Verify input linking
       run: |
         # Check symlinks were created
-        test -L results/test_data/mat/mat_tree.pb.gz
-        test -L results/test_data/mat/metadata.tsv.gz
+        test -L $OUTPUT_DIR/mat/mat_tree.pb.gz
+        test -L $OUTPUT_DIR/mat/metadata.tsv.gz
         echo "Input linking verified!"
 
     - name: Verify metadata filtering
@@ -145,7 +153,7 @@ jobs:
         import gzip
 
         # Load filtered metadata
-        with gzip.open('results/test_data/mat/filtered_metadata.tsv.gz', 'rt') as f:
+        with gzip.open('${OUTPUT_DIR}/mat/filtered_metadata.tsv.gz', 'rt') as f:
             df = pd.read_csv(f, sep='\t')
 
         print(f'Filtered metadata rows: {len(df)}')
@@ -161,43 +169,43 @@ jobs:
 
     - name: Verify invalid strains log
       run: |
-        test -f results/test_data/log/invalid_strains.txt
-        head -10 results/test_data/log/invalid_strains.txt
+        test -f $OUTPUT_DIR/log/invalid_strains.txt
+        head -10 $OUTPUT_DIR/log/invalid_strains.txt
         echo "Invalid strains log verified!"
 
     - name: Verify tree filtering
       run: |
-        test -f results/test_data/mat/filtered_tree_raw.pb
+        test -f $OUTPUT_DIR/mat/filtered_tree_raw.pb
         echo "Tree filtering verified!"
 
         # Check log files
-        test -f results/test_data/log/filter_mat_tree.stdout
-        test -f results/test_data/log/valid_strains.txt
-        echo "Valid strains: $(wc -l < results/test_data/log/valid_strains.txt)"
+        test -f $OUTPUT_DIR/log/filter_mat_tree.stdout
+        test -f $OUTPUT_DIR/log/valid_strains.txt
+        echo "Valid strains: $(wc -l < $OUTPUT_DIR/log/valid_strains.txt)"
 
     - name: Verify reference files
       run: |
         # Check FASTA
-        test -f results/test_data/ref/ref.fa
+        test -f $OUTPUT_DIR/ref/ref.fa
         # Verify FASTA length without BioPython (which is only in conda envs)
-        SEQ_LEN=$(grep -v '>' results/test_data/ref/ref.fa | tr -d '\n' | wc -c)
+        SEQ_LEN=$(grep -v '>' $OUTPUT_DIR/ref/ref.fa | tr -d '\n' | wc -c)
         echo "Reference sequence length: $SEQ_LEN bp"
         [ "$SEQ_LEN" -gt 29000 ] || (echo "Reference too short!" && exit 1)
 
         # Check GTF files
-        test -f results/test_data/ref/original_ref.gtf
-        test -f results/test_data/ref/edited_ref.gtf
+        test -f $OUTPUT_DIR/ref/original_ref.gtf
+        test -f $OUTPUT_DIR/ref/edited_ref.gtf
 
         # Verify ORF9b was added
-        grep -q "ORF9b" results/test_data/ref/edited_ref.gtf && \
+        grep -q "ORF9b" $OUTPUT_DIR/ref/edited_ref.gtf && \
           echo "ORF9b gene added successfully!"
 
     - name: Verify coding sites
       run: |
-        test -f results/test_data/ref/coding_sites.csv
+        test -f $OUTPUT_DIR/ref/coding_sites.csv
         pixi run python -c "
         import pandas as pd
-        df = pd.read_csv('results/test_data/ref/coding_sites.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/ref/coding_sites.csv')
         print(f'Coding sites: {len(df)} total')
 
         # Check structure
@@ -223,10 +231,10 @@ jobs:
 
     - name: Verify clade counts checkpoint
       run: |
-        test -f results/test_data/mat/clade_counts.csv
+        test -f $OUTPUT_DIR/mat/clade_counts.csv
         pixi run python -c "
         import pandas as pd
-        df = pd.read_csv('results/test_data/mat/clade_counts.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/mat/clade_counts.csv')
         print(f'Total clades: {len(df)}')
         print(f'Adequate clades: {df.adequate_sample_counts.sum()}')
 
@@ -246,14 +254,14 @@ jobs:
         import os
 
         # Get adequate clades
-        df = pd.read_csv('results/test_data/mat/clade_counts.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/mat/clade_counts.csv')
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
         print(f'Checking {len(adequate)} adequate clades...')
 
         for clade in adequate:
-            samples_file = f'results/test_data/mat/clades/{clade}_samples.txt'
+            samples_file = f'${OUTPUT_DIR}/mat/clades/{clade}_samples.txt'
             if os.path.exists(samples_file):
                 with open(samples_file) as f:
                     count = len(f.readlines())
@@ -269,7 +277,7 @@ jobs:
         import os
 
         # Get adequate clades
-        df = pd.read_csv('results/test_data/mat/clade_counts.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/mat/clade_counts.csv')
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
@@ -277,7 +285,7 @@ jobs:
 
         missing = []
         for clade in adequate:
-            tree_file = f'results/test_data/mat/clades/{clade}_tree.pb'
+            tree_file = f'${OUTPUT_DIR}/mat/clades/{clade}_tree.pb'
             if os.path.exists(tree_file):
                 size = os.path.getsize(tree_file)
                 print(f'  {clade}: {size} bytes')
@@ -297,14 +305,14 @@ jobs:
         import os
 
         # Get adequate clades
-        df = pd.read_csv('results/test_data/mat/clade_counts.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/mat/clade_counts.csv')
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
         print(f'Checking {len(adequate)} clade PCP files...')
 
         for clade in adequate:
-            pcp_file = f'results/test_data/pcps/{clade}_pcps.csv'
+            pcp_file = f'${OUTPUT_DIR}/pcps/{clade}_pcps.csv'
             if os.path.exists(pcp_file):
                 pcp_df = pd.read_csv(pcp_file)
                 print(f'  {clade}: {len(pcp_df)} PCPs')
@@ -319,11 +327,11 @@ jobs:
 
     - name: Verify aggregated PCP file
       run: |
-        test -f results/test_data/pcps/all_pcps.csv
+        test -f $OUTPUT_DIR/pcps/all_pcps.csv
         pixi run python -c "
         import pandas as pd
 
-        df = pd.read_csv('results/test_data/pcps/all_pcps.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/pcps/all_pcps.csv')
         print(f'Total aggregated PCPs: {len(df)}')
         print(f'Clades: {sorted(df.clade.unique())}')
         print(f'PCPs per clade:')
@@ -345,7 +353,7 @@ jobs:
         pixi run python -c "
         import pandas as pd
 
-        df = pd.read_csv('results/test_data/pcps/all_pcps.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/pcps/all_pcps.csv')
 
         # Check sequence lengths are consistent
         parent_lens = df['parent'].str.len()
@@ -362,12 +370,14 @@ jobs:
         # Build clade founder JSONs and FASTA files for first 3 clades
         pixi run python -c "
         import pandas as pd
-        df = pd.read_csv('results/test_data/mat/clade_counts.csv')
+        import os
+        output_dir = os.environ['OUTPUT_DIR']
+        df = pd.read_csv(f'{output_dir}/mat/clade_counts.csv')
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
         # Print first 3 clades for snakemake targets
         for clade in adequate[:3]:
-            print(f'results/test_data/clade_founders/{clade}.fa')
+            print(f'{output_dir}/clade_founders/{clade}.fa')
         " > /tmp/founder_targets.txt
 
         # Build founder files for first 3 clades
@@ -378,23 +388,23 @@ jobs:
     - name: Verify clade founder files
       run: |
         # Check JSON downloads
-        test -f results/test_data/clade_founders/clade_founders_neher.json
-        test -f results/test_data/clade_founders/clade_founders_roemer.json
+        test -f $OUTPUT_DIR/clade_founders/clade_founders_neher.json
+        test -f $OUTPUT_DIR/clade_founders/clade_founders_roemer.json
 
         pixi run python -c "
         import pandas as pd
         import os
 
         # Get adequate clades
-        df = pd.read_csv('results/test_data/mat/clade_counts.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/mat/clade_counts.csv')
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
         print(f'Checking founder files for first 3 of {len(adequate)} clades...')
 
         for clade in adequate[:3]:  # Check first 3 clades (same as we built)
-            fasta_file = f'results/test_data/clade_founders/{clade}.fa'
-            muts_file = f'results/test_data/clade_founders/{clade}_ref_to_founder_muts.csv'
+            fasta_file = f'${OUTPUT_DIR}/clade_founders/{clade}.fa'
+            muts_file = f'${OUTPUT_DIR}/clade_founders/{clade}_ref_to_founder_muts.csv'
 
             if os.path.exists(fasta_file):
                 # Check FASTA file size
@@ -410,19 +420,21 @@ jobs:
     - name: Generate site mask and mutation files
       run: |
         # Build site mask
-        pixi run snakemake -j 1 --use-conda results/test_data/ref/site_mask.csv \
+        pixi run snakemake -j 1 --use-conda $OUTPUT_DIR/ref/site_mask.csv \
           --configfile config/config_test_data.yaml
 
         # Build mutation translation and sample paths for first 2 clades
         pixi run python -c "
         import pandas as pd
-        df = pd.read_csv('results/test_data/mat/clade_counts.csv')
+        import os
+        output_dir = os.environ['OUTPUT_DIR']
+        df = pd.read_csv(f'{output_dir}/mat/clade_counts.csv')
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
         for clade in adequate[:2]:
             # Request both mutation translation and sample path outputs
-            print(f'results/test_data/mutations/{clade}_mutations.tsv')
-            print(f'results/test_data/mutations/{clade}_nt_mutations.csv')
+            print(f'{output_dir}/mutations/{clade}_mutations.tsv')
+            print(f'{output_dir}/mutations/{clade}_nt_mutations.csv')
         " > /tmp/mutation_targets.txt
 
         pixi run snakemake $(cat /tmp/mutation_targets.txt | tr '\n' ' ') \
@@ -431,10 +443,10 @@ jobs:
 
     - name: Verify site mask
       run: |
-        test -f results/test_data/ref/site_mask.csv
+        test -f $OUTPUT_DIR/ref/site_mask.csv
         pixi run python -c "
         import pandas as pd
-        df = pd.read_csv('results/test_data/ref/site_mask.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/ref/site_mask.csv')
         print(f'Masked sites: {len(df)}')
         assert 'site' in df.columns
         assert len(df) > 0, 'No masked sites found!'
@@ -447,13 +459,13 @@ jobs:
         import pandas as pd
         import os
 
-        df = pd.read_csv('results/test_data/mat/clade_counts.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/mat/clade_counts.csv')
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
         print('Checking mutation translation files...')
         for clade in adequate[:2]:  # Check first 2
-            tsv_file = f'results/test_data/mutations/{clade}_mutations.tsv'
+            tsv_file = f'${OUTPUT_DIR}/mutations/{clade}_mutations.tsv'
             if os.path.exists(tsv_file):
                 mut_df = pd.read_csv(tsv_file, sep='\t')
                 print(f'  {clade}: {len(mut_df)} translated mutations')
@@ -469,13 +481,13 @@ jobs:
         import pandas as pd
         import os
 
-        df = pd.read_csv('results/test_data/mat/clade_counts.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/mat/clade_counts.csv')
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
         print('Checking sample path files...')
         for clade in adequate[:2]:  # Check first 2
-            csv_file = f'results/test_data/mutations/{clade}_nt_mutations.csv'
+            csv_file = f'${OUTPUT_DIR}/mutations/{clade}_nt_mutations.csv'
             if os.path.exists(csv_file):
                 nt_df = pd.read_csv(csv_file)
                 print(f'  {clade}: {len(nt_df)} nodes with mutations')
@@ -493,14 +505,14 @@ jobs:
         import pandas as pd
         import os
 
-        df = pd.read_csv('results/test_data/mat/clade_counts.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/mat/clade_counts.csv')
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
         print(f'Checking mutation counts for {len(adequate)} clades...')
 
         for clade in adequate[:3]:  # Check first 3
-            csv_file = f'results/test_data/mutation_counts/{clade}.csv'
+            csv_file = f'${OUTPUT_DIR}/mutation_counts/{clade}.csv'
             if os.path.exists(csv_file):
                 counts_df = pd.read_csv(csv_file)
                 print(f'  {clade}: {len(counts_df)} unique mutations')
@@ -520,11 +532,11 @@ jobs:
 
     - name: Verify aggregated mutation counts
       run: |
-        test -f results/test_data/mutation_counts/aggregated.csv
+        test -f $OUTPUT_DIR/mutation_counts/aggregated.csv
         pixi run python -c "
         import pandas as pd
 
-        agg = pd.read_csv('results/test_data/mutation_counts/aggregated.csv')
+        agg = pd.read_csv('${OUTPUT_DIR}/mutation_counts/aggregated.csv')
         print(f'Aggregated mutations: {len(agg)}')
 
         # Check structure
@@ -555,11 +567,11 @@ jobs:
 
     - name: Verify clade founder nucleotides
       run: |
-        test -f results/test_data/clade_founder_nts.csv
+        test -f $OUTPUT_DIR/clade_founder_nts.csv
         pixi run python -c "
         import pandas as pd
 
-        nts = pd.read_csv('results/test_data/clade_founder_nts.csv')
+        nts = pd.read_csv('${OUTPUT_DIR}/clade_founder_nts.csv')
         print(f'Clade founder nucleotides: {len(nts)} entries')
 
         # Check columns
@@ -574,11 +586,11 @@ jobs:
 
     - name: Verify synonymous mutation rates
       run: |
-        test -f results/test_data/synonymous_mut_rates/rates_by_clade.csv
+        test -f $OUTPUT_DIR/synonymous_mut_rates/rates_by_clade.csv
         pixi run python -c "
         import pandas as pd
 
-        rates = pd.read_csv('results/test_data/synonymous_mut_rates/rates_by_clade.csv')
+        rates = pd.read_csv('${OUTPUT_DIR}/synonymous_mut_rates/rates_by_clade.csv')
         print(f'Synonymous rate entries: {len(rates)}')
 
         # Check columns
@@ -595,11 +607,11 @@ jobs:
 
     - name: Verify expected vs actual counts
       run: |
-        test -f results/test_data/expected_vs_actual_mut_counts.csv
+        test -f $OUTPUT_DIR/expected_vs_actual_mut_counts.csv
         pixi run python -c "
         import pandas as pd
 
-        df = pd.read_csv('results/test_data/expected_vs_actual_mut_counts.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/expected_vs_actual_mut_counts.csv')
         print(f'Expected vs actual entries: {len(df)}')
 
         # Check columns
@@ -614,13 +626,13 @@ jobs:
 
     - name: Verify annotated counts
       run: |
-        test -f results/test_data/glm/annotated_counts.csv
-        test -f results/test_data/glm/clade_founder_annotated.csv
+        test -f $OUTPUT_DIR/glm/annotated_counts.csv
+        test -f $OUTPUT_DIR/glm/clade_founder_annotated.csv
         pixi run python -c "
         import pandas as pd
 
-        counts = pd.read_csv('results/test_data/glm/annotated_counts.csv')
-        founder = pd.read_csv('results/test_data/glm/clade_founder_annotated.csv')
+        counts = pd.read_csv('${OUTPUT_DIR}/glm/annotated_counts.csv')
+        founder = pd.read_csv('${OUTPUT_DIR}/glm/clade_founder_annotated.csv')
 
         print(f'Annotated counts: {len(counts)} entries')
         print(f'Annotated founder: {len(founder)} entries')
@@ -639,11 +651,11 @@ jobs:
 
     - name: Verify curated counts
       run: |
-        test -f results/test_data/glm/curated_counts.csv
+        test -f $OUTPUT_DIR/glm/curated_counts.csv
         pixi run python -c "
         import pandas as pd
 
-        curated = pd.read_csv('results/test_data/glm/curated_counts.csv')
+        curated = pd.read_csv('${OUTPUT_DIR}/glm/curated_counts.csv')
         print(f'Curated counts: {len(curated)} entries')
 
         # Check structure
@@ -674,11 +686,11 @@ jobs:
 
     - name: Verify master table
       run: |
-        test -f results/test_data/glm/master_table.csv
+        test -f $OUTPUT_DIR/glm/master_table.csv
         pixi run python -c "
         import pandas as pd
 
-        master = pd.read_csv('results/test_data/glm/master_table.csv')
+        master = pd.read_csv('${OUTPUT_DIR}/glm/master_table.csv')
         print(f'Master table: {len(master)} rate entries')
 
         # Check required columns
@@ -698,11 +710,11 @@ jobs:
 
     - name: Verify rates table
       run: |
-        test -f results/test_data/rates_table.csv
+        test -f $OUTPUT_DIR/rates_table.csv
         pixi run python -c "
         import pandas as pd
 
-        rates = pd.read_csv('results/test_data/rates_table.csv')
+        rates = pd.read_csv('${OUTPUT_DIR}/rates_table.csv')
         print(f'Rates table: {len(rates)} entries')
 
         # Check columns
@@ -715,9 +727,9 @@ jobs:
 
     - name: Verify problematic sites
       run: |
-        test -f results/test_data/spike_codon_sites_to_mask.txt
+        test -f $OUTPUT_DIR/spike_codon_sites_to_mask.txt
         pixi run python -c "
-        with open('results/test_data/spike_codon_sites_to_mask.txt') as f:
+        with open('${OUTPUT_DIR}/spike_codon_sites_to_mask.txt') as f:
             sites = [line.strip() for line in f if line.strip()]
         print(f'Problematic spike codon sites: {len(sites)}')
         if sites:
@@ -738,11 +750,11 @@ jobs:
 
     - name: Verify predicted counts by clade
       run: |
-        test -f results/test_data/fitness/predicted_counts_by_clade.csv
+        test -f $OUTPUT_DIR/fitness/predicted_counts_by_clade.csv
         pixi run python -c "
         import pandas as pd
 
-        pred = pd.read_csv('results/test_data/fitness/predicted_counts_by_clade.csv')
+        pred = pd.read_csv('${OUTPUT_DIR}/fitness/predicted_counts_by_clade.csv')
         print(f'Predicted counts: {len(pred)} entries')
 
         # Check required columns
@@ -759,14 +771,14 @@ jobs:
         import pandas as pd
         import os
 
-        df = pd.read_csv('results/test_data/mat/clade_counts.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/mat/clade_counts.csv')
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
         print(f'Checking nucleotide fitness for clades...')
 
         for clade in adequate[:3]:  # Check first 3
-            fitness_file = f'results/test_data/fitness/ntmut_fitness/{clade}_ntmut_fitness.csv'
+            fitness_file = f'${OUTPUT_DIR}/fitness/ntmut_fitness/{clade}_ntmut_fitness.csv'
             if os.path.exists(fitness_file):
                 fit_df = pd.read_csv(fitness_file)
                 print(f'  {clade}: {len(fit_df)} mutations')
@@ -782,11 +794,11 @@ jobs:
 
     - name: Verify aggregated nucleotide fitness
       run: |
-        test -f results/test_data/fitness/ntmut_fitness_aggregated.csv
+        test -f $OUTPUT_DIR/fitness/ntmut_fitness_aggregated.csv
         pixi run python -c "
         import pandas as pd
 
-        agg = pd.read_csv('results/test_data/fitness/ntmut_fitness_aggregated.csv')
+        agg = pd.read_csv('${OUTPUT_DIR}/fitness/ntmut_fitness_aggregated.csv')
         print(f'Aggregated nucleotide fitness: {len(agg)} entries')
 
         if len(agg) > 0:
@@ -813,14 +825,14 @@ jobs:
         import pandas as pd
         import os
 
-        df = pd.read_csv('results/test_data/mat/clade_counts.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/mat/clade_counts.csv')
         clade_col = df.columns[0]
         adequate = df[df['adequate_sample_counts'] == True][clade_col].tolist()
 
         print(f'Checking amino acid fitness for clades...')
 
         for clade in adequate[:3]:  # Check first 3
-            fitness_file = f'results/test_data/aamut_fitness/{clade}_aamut_fitness.csv'
+            fitness_file = f'${OUTPUT_DIR}/aamut_fitness/{clade}_aamut_fitness.csv'
             if os.path.exists(fitness_file):
                 fit_df = pd.read_csv(fitness_file)
                 print(f'  {clade}: {len(fit_df)} amino acid mutations')
@@ -844,11 +856,11 @@ jobs:
 
     - name: Verify aggregated amino acid fitness
       run: |
-        test -f results/test_data/aamut_fitness/all_aamut_fitness.csv
+        test -f $OUTPUT_DIR/aamut_fitness/all_aamut_fitness.csv
         pixi run python -c "
         import pandas as pd
 
-        agg = pd.read_csv('results/test_data/aamut_fitness/all_aamut_fitness.csv')
+        agg = pd.read_csv('${OUTPUT_DIR}/aamut_fitness/all_aamut_fitness.csv')
         print(f'Aggregated amino acid fitness: {len(agg)} entries')
         print(f'Columns: {list(agg.columns)[:10]}...')
 
@@ -869,11 +881,11 @@ jobs:
 
     - name: Verify PCP-derived AA counts
       run: |
-        test -f results/test_data/validation/pcp_aa_counts.csv
+        test -f $OUTPUT_DIR/validation/pcp_aa_counts.csv
         pixi run python -c "
         import pandas as pd
 
-        pcp_counts = pd.read_csv('results/test_data/validation/pcp_aa_counts.csv')
+        pcp_counts = pd.read_csv('${OUTPUT_DIR}/validation/pcp_aa_counts.csv')
         print(f'PCP-derived AA counts: {len(pcp_counts)} entries')
 
         if len(pcp_counts) > 0:
@@ -889,9 +901,9 @@ jobs:
 
     - name: Verify validation report
       run: |
-        test -f results/test_data/validation/pcp_vs_counts_report.txt
-        test -f results/test_data/validation/pcp_vs_counts_discrepancies.csv
-        cat results/test_data/validation/pcp_vs_counts_report.txt
+        test -f $OUTPUT_DIR/validation/pcp_vs_counts_report.txt
+        test -f $OUTPUT_DIR/validation/pcp_vs_counts_discrepancies.csv
+        cat $OUTPUT_DIR/validation/pcp_vs_counts_report.txt
 
     - name: Check validation results
       run: |
@@ -899,7 +911,7 @@ jobs:
         import pandas as pd
 
         # Load discrepancies
-        disc = pd.read_csv('results/test_data/validation/pcp_vs_counts_discrepancies.csv')
+        disc = pd.read_csv('${OUTPUT_DIR}/validation/pcp_vs_counts_discrepancies.csv')
         print(f'Validation discrepancies: {len(disc)}')
 
         # Check if validation passed
@@ -918,7 +930,7 @@ jobs:
 
     - name: Generate test summary
       run: |
-        pixi run python workflow/scripts/test_summary.py results/test_data > test_summary.txt
+        pixi run python workflow/scripts/test_summary.py $OUTPUT_DIR > test_summary.txt
 
     - name: Compare with expected results
       run: |
