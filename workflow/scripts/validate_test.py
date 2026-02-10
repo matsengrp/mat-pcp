@@ -3,6 +3,7 @@
 
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -62,12 +63,20 @@ def compare_summaries(actual, expected):
     if len(actual.get('empty_clade_files', [])) > 0:
         differences.append(f"Found empty clade files: {actual['empty_clade_files']}")
 
-    # Check file existence
-    for filepath, stats in expected['files'].items():
-        if filepath not in actual['files']:
-            differences.append(f"Missing expected file: {filepath}")
-        elif actual['files'][filepath] is None:
-            differences.append(f"Expected file does not exist: {filepath}")
+    # Check file existence (normalize paths by removing directory prefix)
+    def normalize_path(path):
+        """Strip the results directory prefix to compare relative paths."""
+        # Remove results/test_data or results/test_data_v1 etc prefix
+        return re.sub(r'^results/test_data[^/]*/', '', path)
+
+    expected_normalized = {normalize_path(k): v for k, v in expected['files'].items()}
+    actual_normalized = {normalize_path(k): v for k, v in actual['files'].items()}
+
+    for filepath_norm, stats in expected_normalized.items():
+        if filepath_norm not in actual_normalized:
+            differences.append(f"Missing expected file: {filepath_norm}")
+        elif actual_normalized[filepath_norm] is None:
+            differences.append(f"Expected file does not exist: {filepath_norm}")
 
     # Check rates_table.csv
     if expected.get('rates_table_summary'):
