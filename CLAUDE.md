@@ -22,6 +22,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 7 | Fitness Estimation | `ntmut_fitness_by_clade`, `aamut_fitness_by_clade`, `aggregate_*_fitness` |
 | 8 | Validation | `extract_mutations_from_pcps`, `validate_pcp_vs_counts` |
 
+## Versioning
+
+The pipeline uses simple integer versioning (v1, v2, v3, etc.) for reproducibility and output tracking.
+
+### Version Management
+
+- **Version File**: `VERSION` in the repository root contains the current pipeline version
+- **Automatic Versioning**: The Snakefile automatically appends the version to `output_dir` (e.g., `results/public_2022-06-01_v1`)
+- **Git Tags**: Each version should be tagged in git (e.g., `git tag v1`) when the branch is ready to merge
+- **Changelog**: All output schema changes must be documented in `CHANGELOG.md`
+
+### When to Bump Version
+
+Any change that affects downstream consumers requires a version bump:
+- Changes to output file formats or schemas (see `OUTPUT_SCHEMA.md`)
+- Changes to filtering logic or curation criteria
+- Changes to fitness estimation algorithms
+- Changes to GLM rate estimation
+
+In general, any change to the pipeline is a breaking change since models trained on one version's outputs may not work with another's.
+
+### How to Bump Version
+
+1. Update the version number in the `VERSION` file (e.g., from `v1` to `v2`)
+2. Document all changes in `CHANGELOG.md` under a new version heading
+3. Update `OUTPUT_SCHEMA.md` if the schema has changed
+4. Update any affected documentation (README.md, this file)
+5. Commit the changes
+6. Create a git tag matching the version: `git tag v2`
+7. Push the tag: `git push origin v2`
+
+### Development with Versioning
+
+When making changes that will affect outputs:
+1. Work on a feature branch as usual
+2. Update VERSION, CHANGELOG.md, and OUTPUT_SCHEMA.md as part of your changes
+3. When the PR is ready to merge, the new version tag should be created
+
 ## Development Commands
 
 ### Running the Pipeline
@@ -145,16 +183,21 @@ Results are stored in `{output_dir}/`:
 Before any pull request:
 
 1. **Issue Compliance**: Verify completion of all requirements from the linked issue
-2. **Documentation Sync**: If changes affect outputs or behavior:
+2. **Versioning**: If changes affect outputs or downstream consumers:
+   - Bump the version number in the `VERSION` file
+   - Document changes in `CHANGELOG.md` under the new version
+   - Update `OUTPUT_SCHEMA.md` if schema changed
+   - Plan to tag the version in git when PR is ready to merge
+3. **Documentation Sync**: If changes affect outputs or behavior:
    - Update `OUTPUT_SCHEMA.md` for any changes to output file formats
    - Update `README.md` for new outputs, changed behavior, or configuration options
    - Update this file (`CLAUDE.md`) for architectural changes or new patterns
-3. **Test on Test Data**: Run the pipeline on test data to verify changes work:
+4. **Test on Test Data**: Run the pipeline on test data to verify changes work:
    ```bash
    pixi run snakemake -j 2 --use-conda --configfile config/config_test_data.yaml
    ```
-4. **Validate Results**: Run validation to check for regressions:
+5. **Validate Results**: Run validation to check for regressions:
    ```bash
    pixi run python workflow/scripts/validate_test.py
    ```
-5. **PR Description**: Ensure PR description accurately reflects the scope of changes
+6. **PR Description**: Ensure PR description accurately reflects the scope of changes
