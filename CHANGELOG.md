@@ -18,7 +18,23 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
-### v1 (Current)
+### v2 (unreleased)
+
+**Bundled v2 cut** — VERSION bump and tag will land in the final PR of the v2 bundle. Tracks issues [#75](https://github.com/matsengrp/mat-pcp/issues/75), [#76](https://github.com/matsengrp/mat-pcp/issues/76), [#80](https://github.com/matsengrp/mat-pcp/issues/80), and [#81](https://github.com/matsengrp/mat-pcp/issues/81).
+
+**Changes landed so far** (this entry will be appended to as the bundle progresses):
+
+- **Fused PCP extraction and curation** ([#75](https://github.com/matsengrp/mat-pcp/issues/75)):
+  - The `curate_pcps_by_clade` rule, `workflow/scripts/curate_pcps_by_clade.py`, and `workflow/modules/pcp_validation.py` are removed.
+  - `extract_pcps_by_clade` now writes the final curated `pcps/{clade}_pcps.csv` directly (no `mat/clades/{clade}_pcps_raw.csv` intermediate) and emits `pcps/{clade}_filtered_branches.csv` alongside it.
+  - The identical-parent/child filter is applied inside `pcp_from_tree.py` after the gene-region slice, replacing the separate curation step.
+  - Output schema is unchanged: `pcps/{clade}_pcps.csv`, `pcps/all_pcps.csv`, `pcps/{clade}_filtered_branches.csv`, `pcps/filtered_branch_ids.csv`, and `pcps/pcp_curation_report.txt` all keep their v1 columns and content.
+  - The unit-test file `tests/test_pcp_validation.py` is removed along with the module it covered.
+
+- **`min_clade_size` guardrail** ([#75](https://github.com/matsengrp/mat-pcp/issues/75)):
+  - The Snakefile prints a `WARNING` to stderr at config-load time if any config matching `config-public-*.yaml` sets `min_clade_size > 0`. v1 production configs shipped with `min_clade_size: 10000` and biased the GLM rate estimation; the guardrail makes a recurrence of that mistake noisy.
+
+### v1
 
 **Initial release** - Pipeline combining mat-pcp, SARS2-mut-fitness, and SARS2-mut-fitness-v2
 

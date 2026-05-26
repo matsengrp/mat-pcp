@@ -84,8 +84,7 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 | Stage | Description | Key Outputs |
 |-------|-------------|-------------|
 | 1. Input & Reference | Filter metadata, link inputs, fetch reference genome and annotations | `filtered_metadata.tsv.gz`, `ref.fa`, `coding_sites.csv` |
-| 2. Clade Processing | Identify clades, extract clade subtrees and PCPs | `clade_counts.csv`, `clades/{clade}_tree.pb`, `all_pcps.csv` |
-| 2b. PCP Curation | Filter PCPs for DASM training validity | `clades/{clade}_pcps.csv`, `pcp_curation_report.txt` |
+| 2. Clade Processing & PCPs | Identify clades, extract clade subtrees, and emit curated PCPs in one pass (identical-slice branches are dropped during extraction) | `clade_counts.csv`, `clades/{clade}_tree.pb`, `pcps/{clade}_pcps.csv`, `pcps/all_pcps.csv`, `pcp_curation_report.txt` |
 | 3a. Clade Founders | Download and process clade founder sequences | `clade_founders/{clade}.fa`, `clade_founder_nts.csv` |
 | 3b. Mutation Counting | Translate mutations, count per-clade mutations (harmonized with PCP filtering) | `mutations/{clade}_mutations.tsv`, `mutation_counts/aggregated.csv` |
 | 4. Expected Counts | Compute synonymous rates and expected mutation counts | `synonymous_mut_rates/`, `expected_vs_actual_mut_counts.csv` |
@@ -277,19 +276,21 @@ During initial PCP extraction (`extract_pcps_by_clade`), branches are filtered b
 2. **Maximum reversions to reference** (`pcp_max_reversions_to_ref`): Branches reverting too many sites to the reference are excluded (default: 1)
 3. **Maximum reversions to clade founder** (`pcp_max_reversions_to_clade_founder`): Branches reverting too many sites to the clade founder are excluded (default: 1)
 
-### PCP Curation Filters
+### PCP Curation Filter
 
-After extraction, PCPs are curated (`curate_pcps_by_clade`) for DASM training validity:
+`extract_pcps_by_clade` removes parent/child pairs whose sliced sequences are identical in the same pass that builds them:
 
-1. **Identical sequences**: Parent and child sequences that are identical (in the gene region) are removed
+1. **Identical sequences**: Parent and child sequences that are identical (in the gene region) are dropped before the per-clade `pcps/{clade}_pcps.csv` is written.
+
+The IDs of dropped branches are written to `pcps/{clade}_filtered_branches.csv` and consumed downstream by mutation counting (see "Harmonized Mutation Counting" below).
 
 Note: Stop codons and ambiguous bases outside the gene region of interest do not cause PCPs to be filtered, as sequences are already sliced to the gene region during extraction. This ensures that sequence properties outside the gene region don't create artificial discrepancies in validation.
 
 ### Harmonized Mutation Counting
 
-To ensure consistency between PCP-derived and matUtils-derived mutation counts, the mutation counting step (`count_mutations_clade`) excludes branches that failed PCP curation. This is achieved by:
+To ensure consistency between PCP-derived and matUtils-derived mutation counts, the mutation counting step (`count_mutations_clade`) excludes branches that the PCP extraction step dropped. This is achieved by:
 
-1. Per-clade PCP curation outputs a list of filtered branch IDs (`{clade}_filtered_branches.csv`)
+1. `extract_pcps_by_clade` writes a per-clade list of filtered branch IDs (`pcps/{clade}_filtered_branches.csv`)
 2. Mutation counting reads these IDs and excludes corresponding nodes from counting
 3. This ensures the same set of branches contributes to both PCP sequences and mutation counts
 
@@ -305,7 +306,7 @@ Individual mutation sites are excluded from counting based on:
 
 ### Curation Report
 
-The pipeline generates a curation report (`mat/pcp_curation_report.txt`) summarizing filtering statistics:
+The pipeline generates a curation report (`pcps/pcp_curation_report.txt`) summarizing filtering statistics:
 
 ```
 PCP Curation Report
@@ -338,9 +339,8 @@ Results are organized in the output directory:
 ```
 results/
 ├── mat/
-│   ├── clades/                    # Per-clade subtrees and PCPs
+│   ├── clades/                    # Per-clade subtrees and sample lists
 │   │   ├── {clade}_tree.pb        # Clade-specific MAT subtree
-│   │   ├── {clade}_pcps_raw.csv   # Raw (uncurated) parent-child pairs
 │   │   └── {clade}_samples.txt    # Sample names in each clade
 │   ├── mat_tree.pb.gz             # Symlink to input MAT
 │   ├── metadata.tsv.gz            # Symlink to input metadata
