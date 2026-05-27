@@ -130,6 +130,45 @@ def compare_summaries(actual, expected):
             if act_nts['checksum'] != exp_nts['checksum']:
                 differences.append("clade_founder_nts.csv has changed (checksum mismatch)")
 
+    # Check gene-sliced (spike) founder FASTAs, including the cross-version
+    # 19A integrity sentinel. 19A spike is byte-stable across cutoff dates
+    # because the Wuhan-Hu-1 reference founder for clade 19A is the same in
+    # every run; its md5 should be b948f2a1f20edbce64cfff1dc540c119.
+    SPIKE_19A_SENTINEL_MD5 = "b948f2a1f20edbce64cfff1dc540c119"
+    if expected.get('spike_founders_summary'):
+        if not actual.get('spike_founders_summary'):
+            differences.append("spike_founders_summary missing")
+        else:
+            exp_spike = expected['spike_founders_summary']
+            act_spike = actual['spike_founders_summary']
+
+            if act_spike.get('num_files') != exp_spike.get('num_files'):
+                differences.append(
+                    f"spike_founders file count mismatch: expected "
+                    f"{exp_spike.get('num_files')}, got {act_spike.get('num_files')}"
+                )
+            if set(act_spike.get('files', [])) != set(exp_spike.get('files', [])):
+                differences.append(
+                    f"spike_founders files mismatch: expected "
+                    f"{exp_spike.get('files')}, got {act_spike.get('files')}"
+                )
+            for clade, exp_md5 in exp_spike.get('checksums', {}).items():
+                act_md5 = act_spike.get('checksums', {}).get(clade)
+                if act_md5 != exp_md5:
+                    differences.append(
+                        f"spike_founders {clade} md5 mismatch: expected "
+                        f"{exp_md5}, got {act_md5}"
+                    )
+
+            # Hard-coded cross-version sentinel: 19A spike slice must match
+            # the canonical Wuhan-Hu-1 reference checksum.
+            act_19a = act_spike.get('checksums', {}).get('19A')
+            if act_19a and act_19a != SPIKE_19A_SENTINEL_MD5:
+                differences.append(
+                    f"19A spike sentinel md5 mismatch: expected "
+                    f"{SPIKE_19A_SENTINEL_MD5}, got {act_19a}"
+                )
+
     # Check aamut_fitness outputs
     if expected.get('aamut_fitness_summary'):
         if not actual.get('aamut_fitness_summary'):

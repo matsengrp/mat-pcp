@@ -199,7 +199,18 @@ class PCPHelper:
         return n_passed, all_pcps
 
     def pcps_to_df(self, pcps, gene_slice_boundaries=None):
-        """Convert PCP list to DataFrame with optional region slicing."""
+        """Convert PCP list to DataFrame with optional region slicing.
+
+        ``gene_slice_boundaries`` is a ``(start, end)`` tuple sourced from
+        ``pcp_gene_region`` in the pipeline config. Both coordinates are
+        **1-based and inclusive** on both ends, relative to the Wuhan-Hu-1
+        reference (NC_045512.2). For Spike, ``(21563, 25381)`` excludes the
+        trailing stop codon by convention and yields 3819 nt (1273 codons).
+
+        The Python expression ``seq[start - 1 : end]`` converts the 1-based
+        inclusive range to a half-open Python slice that returns the same
+        inclusive nucleotide range.
+        """
 
         def mut_dict(muts):
             return {int(mut[1:-1]): mut[-1] for mut in muts}
@@ -210,6 +221,7 @@ class PCPHelper:
         def slice_seq(seq):
             if gene_slice_boundaries is None:
                 return seq
+            # 1-based inclusive -> Python half-open slice
             return seq[gene_slice_boundaries[0] - 1 : gene_slice_boundaries[1]]
 
         cols = ["parent_name", "child_name", "parent", "child", "branch_length"]

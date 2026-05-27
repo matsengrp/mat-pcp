@@ -97,6 +97,33 @@ def summarize_clade_founder_nts(founder_nts_file):
     }
 
 
+def summarize_spike_founders(spike_founders_dir):
+    """Summarize gene-sliced (spike) founder FASTAs.
+
+    The 19A spike slice is byte-stable across SARS-CoV-2 mat-pcp cutoff dates
+    (Wuhan-Hu-1 reference founder for clade 19A doesn't change), so its md5 is
+    a useful cross-version integrity sentinel. Expected md5 for 19A spike:
+    ``b948f2a1f20edbce64cfff1dc540c119``.
+    """
+    if not os.path.exists(spike_founders_dir):
+        return None
+
+    fasta_files = sorted(
+        f for f in os.listdir(spike_founders_dir) if f.endswith(".fa")
+    )
+    summary = {
+        "num_files": len(fasta_files),
+        "files": fasta_files,
+        "checksums": {},
+    }
+    for fname in fasta_files:
+        clade = fname[:-3]
+        path = os.path.join(spike_founders_dir, fname)
+        with open(path, "rb") as f:
+            summary["checksums"][clade] = hashlib.md5(f.read()).hexdigest()
+    return summary
+
+
 def summarize_aamut_fitness(aamut_fitness_dir):
     """Get summary of aamut_fitness outputs."""
     if not os.path.exists(aamut_fitness_dir):
@@ -148,6 +175,7 @@ def main(results_dir):
         'clade_counts_summary': None,
         'rates_table_summary': None,
         'clade_founder_nts_summary': None,
+        'spike_founders_summary': None,
         'aamut_fitness_summary': None
     }
 
@@ -192,6 +220,10 @@ def main(results_dir):
     # Get clade founder nucleotides summary
     founder_nts_file = results_path / "clade_founder_nts.csv"
     summary['clade_founder_nts_summary'] = summarize_clade_founder_nts(str(founder_nts_file))
+
+    # Get gene-sliced (spike) founder summary
+    spike_founders_dir = results_path / "clade_founders" / "spike"
+    summary['spike_founders_summary'] = summarize_spike_founders(str(spike_founders_dir))
 
     # Get amino acid fitness summary
     aamut_fitness_dir = results_path / "aamut_fitness"

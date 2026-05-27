@@ -50,11 +50,18 @@ reference_clade: "19A"
 # =============================================================================
 # PCP Extraction Configuration
 # =============================================================================
-# Set to null for full genome, or specify region
+# Set to null for full genome, or specify region.
+#
+# Coordinates are 1-based INCLUSIVE on both ends, relative to the Wuhan-Hu-1
+# reference (NC_045512.2). For Spike, ``end: 25381`` deliberately excludes the
+# trailing stop codon by convention: 21563-25381 yields 3819 nt = 1273 codons.
+# The Python slice used downstream is ``seq[start-1:end]`` (see
+# ``workflow/scripts/pcp_from_tree.py``), which produces the same inclusive
+# nucleotide range.
 pcp_gene_region:
   gene: S       # Gene name for validation filtering
-  start: 21563  # Spike start
-  end: 25381    # Spike end (excludes stop codon)
+  start: 21563  # Spike start (1-based, inclusive)
+  end: 25381    # Spike end (1-based, inclusive; excludes stop codon)
 
 # PCP filtering parameters (applied to CODING mutations only)
 # Noncoding mutations are excluded from quality criteria but still tracked

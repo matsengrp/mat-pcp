@@ -74,6 +74,17 @@
     "rate_sum": 233.59591019539877,
     "checksum": "684414f26013cf9e41cb4f217d974f5b"
   },
+  "spike_founders_summary": {
+    "num_files": 3,
+    "files": [
+      "19A.fa",
+      "19B.fa",
+      "20A.fa"
+    ],
+    "checksums": {
+      "19A": "b948f2a1f20edbce64cfff1dc540c119"
+    }
+  },
   "clade_founder_nts_summary": {
     "num_rows": 89709,
     "columns": [

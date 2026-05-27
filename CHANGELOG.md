@@ -34,6 +34,13 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 - **`min_clade_size` guardrail** ([#75](https://github.com/matsengrp/mat-pcp/issues/75)):
   - The Snakefile prints a `WARNING` to stderr at config-load time if any config matching `config-public-*.yaml` sets `min_clade_size > 0`. v1 production configs shipped with `min_clade_size: 10000` and biased the GLM rate estimation; the guardrail makes a recurrence of that mistake noisy.
 
+- **Gene-sliced clade founder FASTAs** ([#76](https://github.com/matsengrp/mat-pcp/issues/76)):
+  - `rule clade_founder_fasta` now also emits a gene-sliced founder FASTA at `clade_founders/{gene_dir}/{clade}.fa` whenever `pcp_gene_region` is configured. For the canonical Spike slice this is `clade_founders/spike/{clade}.fa` (3819 nt, positions 21563-25381, 1-based inclusive, excludes the trailing stop codon).
+  - The slice uses the same `seq[start-1:end]` convention as PCP extraction, so the founder slice byte-aligns with the parent/child sequences in `pcps/{clade}_pcps.csv`.
+  - Cross-version integrity sentinel: the 19A spike slice has md5 `b948f2a1f20edbce64cfff1dc540c119`; this is asserted in `validate_test.py`.
+  - The `pcp_gene_region` block in all production configs and the slicing helper in `workflow/scripts/pcp_from_tree.py` are now documented as 1-based inclusive on both ends.
+  - Once v2 ships, this replaces the post-hoc `data-central/scripts/slice_spike_founders.sh` step.
+
 ### v1
 
 **Initial release** - Pipeline combining mat-pcp, SARS2-mut-fitness, and SARS2-mut-fitness-v2
