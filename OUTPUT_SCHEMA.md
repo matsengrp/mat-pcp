@@ -130,6 +130,33 @@ Raw mutation counts aggregated across all clades, with annotations.
 | `exclude` | boolean | True if this mutation should be excluded from fitness analysis. |
 | `mean_log_size` | float | Mean log of subtree sizes for branches with this mutation. |
 
+## Clade Founder Sequences
+
+### `clade_founders/{clade}.fa`
+
+Whole-genome founder sequence (FASTA) for each clade, computed by applying the clade's founder mutations (sourced from Neher and/or Roemer) to the Wuhan-Hu-1 reference (NC_045512.2). One sequence record per file; the header is the clade name (e.g. `>19A`). Length: 29903 nt.
+
+### `clade_founders/{clade}_ref_to_founder_muts.csv`
+
+Mutation list used to produce the founder FASTA, one row per substitution.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `mutation` | string | Mutation string in standard format (e.g., `A23403G`). |
+| `site` | integer | 1-indexed genomic position. |
+| `from_nt` | string | Reference nucleotide. |
+| `to_nt` | string | Founder nucleotide. |
+
+### `clade_founders/spike/{clade}.fa` (v2+)
+
+Gene-sliced founder sequence for each clade, produced when `pcp_gene_region` is set in the config. For Spike (the v2 default), this contains positions 21563-25381 (1-based, inclusive) of the founder genome — 3819 nt = 1273 codons, excluding the trailing stop codon. The slice is byte-aligned with the `parent`/`child` sequences in `pcps/{clade}_pcps.csv`, so it can be used directly as the wildtype for training ParentIndependent DASM models.
+
+**Cross-version integrity sentinel**: the 19A spike slice (Wuhan-Hu-1 reference founder) has md5 `b948f2a1f20edbce64cfff1dc540c119` and is byte-stable across all SARS-CoV-2 cutoff dates.
+
+**Notes:**
+- The subdirectory name (`spike/`) is derived from the gene symbol in `pcp_gene_region.gene` via the `GENE_FOUNDER_DIRNAMES` mapping in the Snakefile (`S` → `spike`); other gene symbols fall back to a lowercased name.
+- Multi-gene slicing is not yet supported (tracked for v3).
+
 ## Neutral Mutation Rates
 
 ### `rates_table.csv`

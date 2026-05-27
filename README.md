@@ -85,7 +85,7 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 |-------|-------------|-------------|
 | 1. Input & Reference | Filter metadata, link inputs, fetch reference genome and annotations | `filtered_metadata.tsv.gz`, `ref.fa`, `coding_sites.csv` |
 | 2. Clade Processing & PCPs | Identify clades, extract clade subtrees, and emit curated PCPs in one pass (identical-slice branches are dropped during extraction) | `clade_counts.csv`, `clades/{clade}_tree.pb`, `pcps/{clade}_pcps.csv`, `pcps/all_pcps.csv`, `pcp_curation_report.txt` |
-| 3a. Clade Founders | Download and process clade founder sequences | `clade_founders/{clade}.fa`, `clade_founder_nts.csv` |
+| 3a. Clade Founders | Download and process clade founder sequences (whole-genome + gene-sliced, e.g. Spike) | `clade_founders/{clade}.fa`, `clade_founders/spike/{clade}.fa`, `clade_founder_nts.csv` |
 | 3b. Mutation Counting | Translate mutations, count per-clade mutations (harmonized with PCP filtering) | `mutations/{clade}_mutations.tsv`, `mutation_counts/aggregated.csv` |
 | 4. Expected Counts | Compute synonymous rates and expected mutation counts | `synonymous_mut_rates/`, `expected_vs_actual_mut_counts.csv` |
 | 5. GLM Annotation | Annotate counts with RNA structure and sequence context | `glm/annotated_counts.csv`, `glm/curated_counts.csv` |
@@ -210,7 +210,7 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `pcp_gene_region` | Genomic region for PCPs (null = full genome) | Spike (21563-25381) |
+| `pcp_gene_region` | Genomic region for PCPs (null = full genome). Coordinates are **1-based inclusive** on both ends, relative to Wuhan-Hu-1 (NC_045512.2); for Spike the end excludes the trailing stop codon. Also drives the gene-sliced founder FASTA output. | Spike (21563-25381) |
 | `pcp_max_nt_mutations` | Max nucleotide mutations per branch | `4` |
 | `pcp_max_reversions_to_ref` | Max reversions to reference | `1` |
 | `pcp_max_reversions_to_clade_founder` | Max reversions to clade founder | `1` |
@@ -360,8 +360,9 @@ results/
 │   ├── coding_sites.csv           # Coding site annotations
 │   └── site_mask.csv              # Problematic sites from VCF
 ├── clade_founders/
-│   ├── {clade}.fa                 # Founder sequence for each clade
+│   ├── {clade}.fa                 # Whole-genome founder sequence for each clade
 │   ├── {clade}_ref_to_founder_muts.csv  # Mutations from ref to founder
+│   ├── spike/{clade}.fa           # Gene-sliced founder (Spike 21563-25381, when pcp_gene_region is set)
 │   ├── clade_founders_neher.json  # Neher lab clade founder data
 │   └── clade_founders_roemer.json # Roemer clade founder data
 ├── mutations/

@@ -1,18 +1,46 @@
 #!/usr/bin/env python3
-"""Generate FASTA and mutation list for each clade founder."""
+"""Generate FASTA and mutation list for each clade founder.
+
+When ``pcp_gene_region`` is set in the pipeline config, a second FASTA file is
+also written containing only the gene-region slice of the founder sequence
+(e.g. Spike: 21563-25381, 1-based inclusive). The gene-sliced founder is
+needed for training ParentIndependent DASM models.
+"""
 
 import json
 import Bio.SeqIO
 import pandas as pd
+
+
+def write_fasta(filepath, header, seq, line_width=80):
+    """Write a single-record FASTA with a wrapped sequence.
+
+    The header is written verbatim (caller supplies any prefix); the sequence
+    is wrapped at ``line_width`` characters per line. Used for both the
+    whole-genome founder and the optional gene-sliced founder.
+    """
+    with open(filepath, "w") as f:
+        f.write(f">{header}\n")
+        for i in range(0, len(seq), line_width):
+            f.write(seq[i : i + line_width] + "\n")
+
 
 # Get inputs from snakemake
 neher_json_path = snakemake.input.neher_json
 roemer_json_path = snakemake.input.roemer_json
 ref_fasta = snakemake.input.ref_fasta
 roemer_nextstrain_to_pango = snakemake.params.roemer_nextstrain_to_pango
+pcp_gene_region = getattr(snakemake.params, "pcp_gene_region", None)
 clade = snakemake.wildcards.clade
 output_fasta = snakemake.output.fasta
 output_muts = snakemake.output.muts
+# ``gene_fasta`` is an empty list in ``snakemake.output`` when
+# ``pcp_gene_region`` is unset (see ``_gene_sliced_founder_outputs`` in the
+# Snakefile). The attribute itself is always present because the rule
+# declares it; we coerce the empty-list case to ``None`` so the
+# ``if output_gene_fasta`` check below is the single guard point.
+_gene_fasta_out = getattr(snakemake.output, "gene_fasta", None)
+output_gene_fasta = _gene_fasta_out[0] if _gene_fasta_out else None
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -147,11 +175,7 @@ n_diffs = sum(1 for a, b in zip(ref_seq, founder_seq) if a != b)
 log(f"Founder differs from reference at {n_diffs} positions")
 
 # Write FASTA
-with open(output_fasta, "w") as f:
-    f.write(f">{clade}\n")
-    # Write sequence in 80-character lines
-    for i in range(0, len(founder_seq), 80):
-        f.write(founder_seq[i : i + 80] + "\n")
+write_fasta(output_fasta, clade, founder_seq)
 log(f"Wrote founder FASTA to {output_fasta}")
 
 # Write mutations CSV
@@ -173,4 +197,27 @@ else:
 
 muts_df.to_csv(output_muts, index=False)
 log(f"Wrote {len(muts_df)} mutations to {output_muts}")
+
+# Optional gene-sliced founder FASTA
+# ``pcp_gene_region`` boundaries are 1-based inclusive (start/end both included)
+# relative to the Wuhan-Hu-1 (NC_045512.2) reference. For Spike, end=25381
+# excludes the trailing stop codon by convention (positions 21563-25381 ->
+# 3819 nt = 1273 codons). We use [start-1:end] for half-open Python slicing
+# that yields the same inclusive nt range.
+if output_gene_fasta and pcp_gene_region:
+    gene_name = pcp_gene_region.get("gene") or "gene"
+    start = pcp_gene_region["start"]
+    end = pcp_gene_region["end"]
+    gene_seq = founder_seq[start - 1 : end]
+    expected_len = end - start + 1
+    assert len(gene_seq) == expected_len, (
+        f"Gene slice length {len(gene_seq)} != expected {expected_len} "
+        f"for {gene_name} {start}-{end}"
+    )
+    write_fasta(output_gene_fasta, clade, gene_seq)
+    log(
+        f"Wrote gene-sliced ({gene_name} {start}-{end}, {len(gene_seq)} nt) "
+        f"founder FASTA to {output_gene_fasta}"
+    )
+
 log("Done!")

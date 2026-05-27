@@ -562,17 +562,114 @@ rule clade_founder_jsons:
         """
 
 
+# ---------------------------------------------------------------------------
+# Gene-sliced founder FASTA path resolution  (v2 single-gene shim)
+# ---------------------------------------------------------------------------
+#
+# In v2, the pipeline slices PCPs to exactly ONE gene region (controlled by the
+# top-level ``pcp_gene_region`` config key — Spike by default). Issue #76 added
+# a matching gene-sliced founder FASTA per clade so that downstream training
+# (ParentIndependent DASM) has a wildtype that byte-aligns with the parent/child
+# sequences in ``pcps/{clade}_pcps.csv``.
+#
+# The output path is ``clade_founders/<dirname>/<clade>.fa``. ``<dirname>`` is
+# resolved from the gene symbol (``pcp_gene_region.gene``) via the
+# ``GENE_FOUNDER_DIRNAMES`` map below. The whole reason this map exists is so
+# that the canonical Spike path is the human-readable ``clade_founders/spike/``
+# rather than ``clade_founders/S/`` (the issue spec calls for ``spike/``).
+# Any gene symbol not in the map falls back to its lowercase form.
+#
+# CAVEAT — this is a single-gene shim, NOT the v3 design.
+#
+# Today the structure is:
+#   pcp_gene_region:        # exactly one gene, top-level key
+#     gene: S
+#     start: 21563
+#     end: 25381
+# which produces exactly one output directory.
+#
+# v3 will need multi-gene slicing (e.g. N, ORF1ab in addition to S). When that
+# lands, the config block should become a list — something like
+# ``gene_slice_outputs: [{gene: S, ...}, {gene: N, ...}]`` — and this map +
+# helper will be replaced by an explicit ``dirname`` field per gene block, so
+# that names like ``clade_founders/spike/`` and ``clade_founders/nucleocapsid/``
+# come straight from config rather than from a hardcoded lookup table. The
+# fallback (lowercase gene symbol) exists so that adding a *new* single-gene
+# config (e.g. switch to ``gene: N``) still produces a sensible path
+# (``clade_founders/n/``) without a code change.
+#
+# v3 epic (tracking issue, multi-gene refactor): #84.
+#
+# When you change this, check:
+#   - ``OUTPUT_SCHEMA.md`` → "Clade Founder Sequences" section names the
+#     ``clade_founders/spike/{clade}.fa`` path explicitly.
+#   - ``workflow/scripts/test_summary.py`` (``summarize_spike_founders``) looks
+#     at ``clade_founders/spike/`` by hardcoded path.
+#   - ``data/test_data/expected_summary.json`` lists ``spike_founders_summary``
+#     with the 19A md5 sentinel; the sentinel only applies to the Spike slice.
+GENE_FOUNDER_DIRNAMES = {"S": "spike"}
+
+
+def gene_founder_dirname(gene_symbol):
+    """Return the founder-FASTA subdir name for ``gene_symbol``.
+
+    Maps known gene symbols to their conventional human-readable directory
+    names (``S`` → ``spike``); falls back to the lowercased symbol for any
+    gene not in ``GENE_FOUNDER_DIRNAMES``. Returns ``None`` when no symbol
+    is provided so the caller can omit the gene-sliced output.
+
+    See the comment block above ``GENE_FOUNDER_DIRNAMES`` for why this exists
+    and how it should evolve in v3.
+    """
+    if not gene_symbol:
+        return None
+    return GENE_FOUNDER_DIRNAMES.get(gene_symbol, gene_symbol.lower())
+
+
+def _gene_sliced_founder_outputs():
+    """Return a list of gene-sliced founder FASTA output paths.
+
+    Empty list when ``pcp_gene_region`` is unset, so ``output: gene_fasta=[]``
+    becomes a no-op for that wildcard slot. Single-element list otherwise.
+
+    Returning a list in all branches keeps the type consistent — any future
+    extension to multi-gene slicing can simply append more paths without
+    changing the calling convention. The script side guards on
+    ``getattr(snakemake.output, "gene_fasta", None)`` since the attribute is
+    absent from ``snakemake.output`` (not just empty) when this returns ``[]``.
+    """
+    gene_region = config.get("pcp_gene_region")
+    if not gene_region:
+        return []
+    dirname = gene_founder_dirname(gene_region.get("gene"))
+    if not dirname:
+        return []
+    return [
+        os.path.join(
+            config["output_dir"], "clade_founders", dirname, "{clade}.fa"
+        )
+    ]
+
+
 rule clade_founder_fasta:
-    """Generate FASTA and mutation list for each clade founder."""
+    """Generate FASTA and mutation list for each clade founder.
+
+    Emits the whole-genome founder FASTA and, when ``pcp_gene_region`` is
+    configured, a gene-sliced founder FASTA (e.g. ``clade_founders/spike/{clade}.fa``
+    for the canonical Spike slice). Gene-sliced founders are needed for training
+    ParentIndependent DASM models.
+    """
     input:
         neher_json=rules.clade_founder_jsons.output.neher_json,
         roemer_json=rules.clade_founder_jsons.output.roemer_json,
         ref_fasta=rules.get_ref_fasta.output.ref_fasta
     output:
         fasta=os.path.join(config["output_dir"], "clade_founders/{clade}.fa"),
-        muts=os.path.join(config["output_dir"], "clade_founders/{clade}_ref_to_founder_muts.csv")
+        muts=os.path.join(config["output_dir"], "clade_founders/{clade}_ref_to_founder_muts.csv"),
+        gene_fasta=_gene_sliced_founder_outputs()
     params:
-        roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {})
+        roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {}),
+        pcp_gene_region=config.get("pcp_gene_region")
     log:
         os.path.join(config["output_dir"], "log/clade_founder_{clade}.log")
     conda:

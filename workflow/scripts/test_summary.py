@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Generate a summary of test pipeline outputs for validation."""
 
-import sys
-import os
-import pandas as pd
 import hashlib
+import json
+import os
+import sys
 from pathlib import Path
+
+import pandas as pd
+
+# Must match ``GENE_FOUNDER_DIRNAMES["S"]`` in ``workflow/Snakefile``. Pulled
+# into a named constant so a v3 multi-gene refactor that changes the dirname
+# can be found by grep rather than a bare-string sweep across the codebase.
+SPIKE_FOUNDER_DIRNAME = "spike"
 
 
 def get_file_stats(filepath):
@@ -97,6 +104,38 @@ def summarize_clade_founder_nts(founder_nts_file):
     }
 
 
+def summarize_spike_founders(spike_founders_dir):
+    """Summarize gene-sliced (spike) founder FASTAs.
+
+    Records per-file md5s so ``validate_test.py`` can compare against the
+    canonical cross-version sentinel (see ``SPIKE_19A_SENTINEL_MD5`` in
+    ``validate_test.py``).
+
+    NOTE: This helper assumes the v2 single-gene layout where the gene-sliced
+    founder directory is hardcoded to ``clade_founders/<SPIKE_FOUNDER_DIRNAME>/``.
+    When v3 introduces multi-gene slicing, this should fan out over every
+    configured ``gene_slice_outputs`` entry. See the comment block above
+    ``GENE_FOUNDER_DIRNAMES`` in ``workflow/Snakefile`` for the wider context.
+    """
+    if not os.path.exists(spike_founders_dir):
+        return None
+
+    fasta_files = sorted(
+        f for f in os.listdir(spike_founders_dir) if f.endswith(".fa")
+    )
+    summary = {
+        "num_files": len(fasta_files),
+        "files": fasta_files,
+        "checksums": {},
+    }
+    for fname in fasta_files:
+        clade = os.path.splitext(fname)[0]
+        path = os.path.join(spike_founders_dir, fname)
+        with open(path, "rb") as f:
+            summary["checksums"][clade] = hashlib.md5(f.read()).hexdigest()
+    return summary
+
+
 def summarize_aamut_fitness(aamut_fitness_dir):
     """Get summary of aamut_fitness outputs."""
     if not os.path.exists(aamut_fitness_dir):
@@ -148,6 +187,7 @@ def main(results_dir):
         'clade_counts_summary': None,
         'rates_table_summary': None,
         'clade_founder_nts_summary': None,
+        'spike_founders_summary': None,
         'aamut_fitness_summary': None
     }
 
@@ -193,12 +233,15 @@ def main(results_dir):
     founder_nts_file = results_path / "clade_founder_nts.csv"
     summary['clade_founder_nts_summary'] = summarize_clade_founder_nts(str(founder_nts_file))
 
+    # Get gene-sliced (spike) founder summary
+    spike_founders_dir = results_path / "clade_founders" / SPIKE_FOUNDER_DIRNAME
+    summary['spike_founders_summary'] = summarize_spike_founders(str(spike_founders_dir))
+
     # Get amino acid fitness summary
     aamut_fitness_dir = results_path / "aamut_fitness"
     summary['aamut_fitness_summary'] = summarize_aamut_fitness(str(aamut_fitness_dir))
 
     # Print summary in readable format
-    import json
     print(json.dumps(summary, indent=2))
 
     return summary
