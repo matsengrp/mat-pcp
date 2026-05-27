@@ -105,6 +105,34 @@
     "num_sites": 29903,
     "checksum": "60641a61a449e4ac087421477e27472f"
   },
+  "dasm_ready_pcps_summary": {
+    "aggregate": {
+      "num_rows": 8,
+      "columns": [
+        "clade",
+        "parent_name",
+        "child_name",
+        "parent",
+        "child",
+        "branch_length",
+        "in_train"
+      ],
+      "has_in_train": true,
+      "n_train": 7,
+      "n_val": 1,
+      "checksum": "5e538bd088e676b485a11a04745221e9"
+    },
+    "per_clade_files": [
+      "19A_pcps_dasm_ready.csv",
+      "19B_pcps_dasm_ready.csv",
+      "20A_pcps_dasm_ready.csv"
+    ],
+    "per_clade_checksums": {
+      "19A_pcps_dasm_ready": "28d909850eeea0e7c831355f5e9d2bd2",
+      "19B_pcps_dasm_ready": "28d909850eeea0e7c831355f5e9d2bd2",
+      "20A_pcps_dasm_ready": "798c9c20556866ee9eb43bddc352e47f"
+    }
+  },
   "aamut_fitness_summary": {
     "num_rows": 121290,
     "columns": [

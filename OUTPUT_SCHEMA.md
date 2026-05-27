@@ -24,6 +24,36 @@ Curated parent-child sequence pairs extracted from the mutation-annotated tree. 
 - PCPs have been curated to remove branches with identical parent/child sequences (in the gene region). As of v2, this filter is applied during extraction in the same pass that builds the table; there is no separate `mat/clades/{clade}_pcps_raw.csv` file.
 - The filtering criteria (max mutations, max reversions) are controlled by config parameters `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`, and `pcp_max_reversions_to_clade_founder`.
 
+### `pcps/all_pcps_dasm_ready.csv` and `pcps/{clade}_pcps_dasm_ready.csv` (v2+)
+
+DASM-training-ready sibling of `*_pcps.csv`. Same row schema as the parent file plus one column (`in_train`). The filter set + train/val split are applied in the pipeline so downstream consumers (e.g. `data-central` manifests) can read these files directly without any post-processing step.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| (all columns from `*_pcps.csv`) | — | Preserved verbatim. |
+| `in_train` | boolean | `True` for the train split, `False` for the val split. The 90/10 split is realized by `np.random.default_rng(seed).random(N) < val_fraction` (with `val_fraction=0.10`), then `in_train = ~val_mask`. |
+
+**Filters applied (in order)**:
+
+1. Empty parent OR empty child sequence
+2. Length mismatch parent vs child
+3. Length not divisible by 3 (non-codon-aligned)
+4. Ambiguous nucleotides (`N`) in either sequence
+5. Stop codons (`TAA`, `TAG`, `TGA`) in parent or child
+6. Every codon-level mutation falls in a codon position listed in `spike_codon_sites_to_mask.txt` (no-signal PCP)
+
+**Seed convention**:
+
+- **Per-clade**: `seed=1729` (matches `data-central/scripts/filter_viral_pcps.sh`).
+- **Aggregate (`all_pcps_dasm_ready.csv`)**: `seed=42` (matches the explicit-seed guardrail in `filter_viral_pcps.sh`; the different seed prevents accidentally producing the aggregate with the per-clade default).
+
+**Byte-equivalence to `dasm2 preprocess`**: this rule is a NumPy-only reimplementation of `dasm2.preprocess_command.preprocess` (which `filter_viral_pcps.sh` wraps). On the test pipeline, the aggregate file is byte-identical to the dasm2 reference output; md5 `5e538bd088e676b485a11a04745221e9` is asserted in `validate_test.py`.
+
+**Companion files**:
+
+- `pcps/{clade}_dasm_filter_report.txt` — human-readable per-filter drop counts.
+- `pcps/{clade}_dasm_filter_stats.json` — machine-readable equivalent for downstream tooling.
+
 ### `pcps/{clade}_filtered_branches.csv`
 
 Branch identifiers that were excluded during PCP curation. Used internally to harmonize mutation counting with PCP extraction.

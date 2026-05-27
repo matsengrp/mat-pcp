@@ -14,6 +14,15 @@ from pathlib import Path
 # changed, or the FASTA writer's header/wrap convention changed.
 SPIKE_19A_SENTINEL_MD5 = "b948f2a1f20edbce64cfff1dc540c119"
 
+# Cross-implementation byte-equivalence sentinels for DASM-ready PCP outputs
+# on the test dataset (#80). These md5s come from running the reference
+# implementation in ``dasm2.preprocess_command.preprocess`` (the same
+# function that ``data-central/scripts/filter_viral_pcps.sh`` invokes) on
+# the test pipeline's ``all_pcps.csv`` + ``spike_codon_sites_to_mask.txt``
+# with the canonical seeds. A mismatch here means either the filter logic
+# drifted from dasm2 or the train/val RNG call sequence changed.
+DASM_READY_ALL_SENTINEL_MD5 = "5e538bd088e676b485a11a04745221e9"
+
 
 def is_close(actual, expected, rel_tol=1e-6, abs_tol=1e-9):
     """Check if two floats are close within tolerance."""
@@ -172,6 +181,54 @@ def compare_summaries(actual, expected):
                     f"19A spike sentinel md5 mismatch: expected "
                     f"{SPIKE_19A_SENTINEL_MD5}, got {act_19a}"
                 )
+
+    # Check DASM-ready PCP outputs (#80), including byte-equivalence sentinel
+    # against the dasm2 reference implementation.
+    if expected.get('dasm_ready_pcps_summary'):
+        if not actual.get('dasm_ready_pcps_summary'):
+            differences.append("dasm_ready_pcps_summary missing")
+        else:
+            exp_dasm = expected['dasm_ready_pcps_summary']
+            act_dasm = actual['dasm_ready_pcps_summary']
+
+            exp_agg = exp_dasm.get('aggregate', {})
+            act_agg = act_dasm.get('aggregate', {})
+
+            if act_agg.get('num_rows') != exp_agg.get('num_rows'):
+                differences.append(
+                    f"dasm_ready aggregate row count mismatch: expected "
+                    f"{exp_agg.get('num_rows')}, got {act_agg.get('num_rows')}"
+                )
+            if not act_agg.get('has_in_train'):
+                differences.append("dasm_ready aggregate missing in_train column")
+            if act_agg.get('n_train') != exp_agg.get('n_train'):
+                differences.append(
+                    f"dasm_ready aggregate n_train mismatch: expected "
+                    f"{exp_agg.get('n_train')}, got {act_agg.get('n_train')}"
+                )
+            if act_agg.get('checksum') != exp_agg.get('checksum'):
+                differences.append(
+                    f"dasm_ready aggregate md5 mismatch: expected "
+                    f"{exp_agg.get('checksum')}, got {act_agg.get('checksum')}"
+                )
+
+            # Hard-coded cross-implementation sentinel: the aggregate md5
+            # must equal the dasm2 reference output (proves byte-equivalence
+            # to filter_viral_pcps.sh).
+            if act_agg.get('checksum') and act_agg.get('checksum') != DASM_READY_ALL_SENTINEL_MD5:
+                differences.append(
+                    f"dasm_ready aggregate sentinel md5 mismatch: expected "
+                    f"{DASM_READY_ALL_SENTINEL_MD5}, got {act_agg.get('checksum')}"
+                )
+
+            # Per-clade checksum diffs
+            for clade, exp_md5 in exp_dasm.get('per_clade_checksums', {}).items():
+                act_md5 = act_dasm.get('per_clade_checksums', {}).get(clade)
+                if act_md5 != exp_md5:
+                    differences.append(
+                        f"dasm_ready per-clade {clade} md5 mismatch: expected "
+                        f"{exp_md5}, got {act_md5}"
+                    )
 
     # Check aamut_fitness outputs
     if expected.get('aamut_fitness_summary'):

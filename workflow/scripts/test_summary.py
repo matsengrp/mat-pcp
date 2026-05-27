@@ -136,6 +136,46 @@ def summarize_spike_founders(spike_founders_dir):
     return summary
 
 
+def summarize_dasm_ready_pcps(pcps_dir):
+    """Summarize the DASM-ready PCP outputs (#80).
+
+    Records md5s for the aggregate and any per-clade dasm_ready files, plus
+    a quick check on the ``in_train`` column. Asserts are deferred to
+    ``validate_test.py``.
+    """
+    if not os.path.exists(pcps_dir):
+        return None
+
+    aggregate = os.path.join(pcps_dir, "all_pcps_dasm_ready.csv")
+    if not os.path.exists(aggregate):
+        return None
+
+    agg_df = pd.read_csv(aggregate)
+    per_clade_files = sorted(
+        f for f in os.listdir(pcps_dir)
+        if f.endswith("_pcps_dasm_ready.csv") and not f.startswith("all_")
+    )
+
+    summary = {
+        "aggregate": {
+            "num_rows": len(agg_df),
+            "columns": list(agg_df.columns),
+            "has_in_train": "in_train" in agg_df.columns,
+            "n_train": int(agg_df["in_train"].sum()) if "in_train" in agg_df else None,
+            "n_val": int((~agg_df["in_train"]).sum()) if "in_train" in agg_df else None,
+            "checksum": hashlib.md5(open(aggregate, "rb").read()).hexdigest(),
+        },
+        "per_clade_files": per_clade_files,
+        "per_clade_checksums": {
+            os.path.splitext(f)[0]: hashlib.md5(
+                open(os.path.join(pcps_dir, f), "rb").read()
+            ).hexdigest()
+            for f in per_clade_files
+        },
+    }
+    return summary
+
+
 def summarize_aamut_fitness(aamut_fitness_dir):
     """Get summary of aamut_fitness outputs."""
     if not os.path.exists(aamut_fitness_dir):
@@ -188,6 +228,7 @@ def main(results_dir):
         'rates_table_summary': None,
         'clade_founder_nts_summary': None,
         'spike_founders_summary': None,
+        'dasm_ready_pcps_summary': None,
         'aamut_fitness_summary': None
     }
 
@@ -236,6 +277,9 @@ def main(results_dir):
     # Get gene-sliced (spike) founder summary
     spike_founders_dir = results_path / "clade_founders" / SPIKE_FOUNDER_DIRNAME
     summary['spike_founders_summary'] = summarize_spike_founders(str(spike_founders_dir))
+
+    # Get DASM-ready PCP summary (#80)
+    summary['dasm_ready_pcps_summary'] = summarize_dasm_ready_pcps(str(pcps_path))
 
     # Get amino acid fitness summary
     aamut_fitness_dir = results_path / "aamut_fitness"

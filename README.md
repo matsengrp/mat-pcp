@@ -84,7 +84,7 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 | Stage | Description | Key Outputs |
 |-------|-------------|-------------|
 | 1. Input & Reference | Filter metadata, link inputs, fetch reference genome and annotations | `filtered_metadata.tsv.gz`, `ref.fa`, `coding_sites.csv` |
-| 2. Clade Processing & PCPs | Identify clades, extract clade subtrees, and emit curated PCPs in one pass (identical-slice branches are dropped during extraction) | `clade_counts.csv`, `clades/{clade}_tree.pb`, `pcps/{clade}_pcps.csv`, `pcps/all_pcps.csv`, `pcp_curation_report.txt` |
+| 2. Clade Processing & PCPs | Identify clades, extract clade subtrees, and emit curated PCPs in one pass (identical-slice branches are dropped during extraction). DASM-training-ready siblings are emitted alongside. | `clade_counts.csv`, `clades/{clade}_tree.pb`, `pcps/{clade}_pcps.csv`, `pcps/all_pcps.csv`, `pcps/{clade}_pcps_dasm_ready.csv`, `pcps/all_pcps_dasm_ready.csv`, `pcp_curation_report.txt` |
 | 3a. Clade Founders | Download and process clade founder sequences (whole-genome + gene-sliced, e.g. Spike) | `clade_founders/{clade}.fa`, `clade_founders/spike/{clade}.fa`, `clade_founder_nts.csv` |
 | 3b. Mutation Counting | Translate mutations, count per-clade mutations (harmonized with PCP filtering) | `mutations/{clade}_mutations.tsv`, `mutation_counts/aggregated.csv` |
 | 4. Expected Counts | Compute synonymous rates and expected mutation counts | `synonymous_mut_rates/`, `expected_vs_actual_mut_counts.csv` |
@@ -101,6 +101,7 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 | Output | Description |
 |--------|-------------|
 | `pcps/all_pcps.csv` | All curated parent-child pairs with clade annotations |
+| `pcps/all_pcps_dasm_ready.csv` | DASM-training-ready PCPs (filters + 90/10 `in_train` split applied); per-clade siblings at `pcps/{clade}_pcps_dasm_ready.csv` |
 | `pcps/pcp_curation_report.txt` | Report showing PCP filtering statistics |
 | `pcps/filtered_branch_ids.csv` | Branch IDs excluded from mutation counting |
 | `mat/clade_counts.csv` | Sample counts per clade |
@@ -349,8 +350,12 @@ results/
 │   └── clade_counts.csv           # Sample counts per clade
 ├── pcps/
 │   ├── {clade}_pcps.csv           # Curated parent-child pairs per clade
+│   ├── {clade}_pcps_dasm_ready.csv    # DASM-training-ready PCPs per clade (v2+)
+│   ├── {clade}_dasm_filter_report.txt # Per-filter drop counts (v2+)
+│   ├── {clade}_dasm_filter_stats.json # Machine-readable filter stats (v2+)
 │   ├── {clade}_filtered_branches.csv  # Branch IDs filtered during curation
 │   ├── all_pcps.csv               # Aggregated curated PCPs across all clades
+│   ├── all_pcps_dasm_ready.csv    # DASM-training-ready aggregate (v2+)
 │   ├── pcp_curation_report.txt    # PCP curation statistics
 │   └── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
 ├── ref/
