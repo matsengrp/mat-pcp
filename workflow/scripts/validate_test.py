@@ -7,6 +7,13 @@ import re
 import sys
 from pathlib import Path
 
+# Cross-version integrity sentinel for the gene-sliced 19A spike founder.
+# 19A spike is byte-stable across SARS-CoV-2 mat-pcp cutoff dates because the
+# Wuhan-Hu-1 reference founder for clade 19A doesn't change between runs.
+# A mismatch here means either the slice math drifted, the reference FASTA
+# changed, or the FASTA writer's header/wrap convention changed.
+SPIKE_19A_SENTINEL_MD5 = "b948f2a1f20edbce64cfff1dc540c119"
+
 
 def is_close(actual, expected, rel_tol=1e-6, abs_tol=1e-9):
     """Check if two floats are close within tolerance."""
@@ -131,10 +138,7 @@ def compare_summaries(actual, expected):
                 differences.append("clade_founder_nts.csv has changed (checksum mismatch)")
 
     # Check gene-sliced (spike) founder FASTAs, including the cross-version
-    # 19A integrity sentinel. 19A spike is byte-stable across cutoff dates
-    # because the Wuhan-Hu-1 reference founder for clade 19A is the same in
-    # every run; its md5 should be b948f2a1f20edbce64cfff1dc540c119.
-    SPIKE_19A_SENTINEL_MD5 = "b948f2a1f20edbce64cfff1dc540c119"
+    # 19A integrity sentinel (see module-level ``SPIKE_19A_SENTINEL_MD5``).
     if expected.get('spike_founders_summary'):
         if not actual.get('spike_founders_summary'):
             differences.append("spike_founders_summary missing")

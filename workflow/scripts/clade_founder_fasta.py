@@ -11,6 +11,20 @@ import json
 import Bio.SeqIO
 import pandas as pd
 
+
+def write_fasta(filepath, header, seq, line_width=80):
+    """Write a single-record FASTA with a wrapped sequence.
+
+    The header is written verbatim (caller supplies any prefix); the sequence
+    is wrapped at ``line_width`` characters per line. Used for both the
+    whole-genome founder and the optional gene-sliced founder.
+    """
+    with open(filepath, "w") as f:
+        f.write(f">{header}\n")
+        for i in range(0, len(seq), line_width):
+            f.write(seq[i : i + line_width] + "\n")
+
+
 # Get inputs from snakemake
 neher_json_path = snakemake.input.neher_json
 roemer_json_path = snakemake.input.roemer_json
@@ -20,9 +34,13 @@ pcp_gene_region = getattr(snakemake.params, "pcp_gene_region", None)
 clade = snakemake.wildcards.clade
 output_fasta = snakemake.output.fasta
 output_muts = snakemake.output.muts
-# gene_fasta is only present when pcp_gene_region is configured. Guard with
-# getattr so this script still runs if a future config omits the slice output.
-output_gene_fasta = getattr(snakemake.output, "gene_fasta", None)
+# ``gene_fasta`` is an empty list in ``snakemake.output`` when
+# ``pcp_gene_region`` is unset (see ``_gene_sliced_founder_outputs`` in the
+# Snakefile). The attribute itself is always present because the rule
+# declares it; we coerce the empty-list case to ``None`` so the
+# ``if output_gene_fasta`` check below is the single guard point.
+_gene_fasta_out = getattr(snakemake.output, "gene_fasta", None)
+output_gene_fasta = _gene_fasta_out[0] if _gene_fasta_out else None
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -157,11 +175,7 @@ n_diffs = sum(1 for a, b in zip(ref_seq, founder_seq) if a != b)
 log(f"Founder differs from reference at {n_diffs} positions")
 
 # Write FASTA
-with open(output_fasta, "w") as f:
-    f.write(f">{clade}\n")
-    # Write sequence in 80-character lines
-    for i in range(0, len(founder_seq), 80):
-        f.write(founder_seq[i : i + 80] + "\n")
+write_fasta(output_fasta, clade, founder_seq)
 log(f"Wrote founder FASTA to {output_fasta}")
 
 # Write mutations CSV
@@ -200,10 +214,7 @@ if output_gene_fasta and pcp_gene_region:
         f"Gene slice length {len(gene_seq)} != expected {expected_len} "
         f"for {gene_name} {start}-{end}"
     )
-    with open(output_gene_fasta, "w") as f:
-        f.write(f">{clade}\n")
-        for i in range(0, len(gene_seq), 80):
-            f.write(gene_seq[i : i + 80] + "\n")
+    write_fasta(output_gene_fasta, clade, gene_seq)
     log(
         f"Wrote gene-sliced ({gene_name} {start}-{end}, {len(gene_seq)} nt) "
         f"founder FASTA to {output_gene_fasta}"

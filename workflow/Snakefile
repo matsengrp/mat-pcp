@@ -627,11 +627,16 @@ def gene_founder_dirname(gene_symbol):
 
 
 def _gene_sliced_founder_outputs():
-    """Return the gene-sliced founder FASTA output path, or [] if not configured.
+    """Return a list of gene-sliced founder FASTA output paths.
 
-    Returning ``[]`` makes the ``gene_fasta`` rule output a no-op when
-    ``pcp_gene_region`` is unset (e.g. a future whole-genome run); the script
-    side guards on ``getattr(snakemake.output, "gene_fasta", None)`` to match.
+    Empty list when ``pcp_gene_region`` is unset, so ``output: gene_fasta=[]``
+    becomes a no-op for that wildcard slot. Single-element list otherwise.
+
+    Returning a list in all branches keeps the type consistent — any future
+    extension to multi-gene slicing can simply append more paths without
+    changing the calling convention. The script side guards on
+    ``getattr(snakemake.output, "gene_fasta", None)`` since the attribute is
+    absent from ``snakemake.output`` (not just empty) when this returns ``[]``.
     """
     gene_region = config.get("pcp_gene_region")
     if not gene_region:
@@ -639,9 +644,11 @@ def _gene_sliced_founder_outputs():
     dirname = gene_founder_dirname(gene_region.get("gene"))
     if not dirname:
         return []
-    return os.path.join(
-        config["output_dir"], "clade_founders", dirname, "{clade}.fa"
-    )
+    return [
+        os.path.join(
+            config["output_dir"], "clade_founders", dirname, "{clade}.fa"
+        )
+    ]
 
 
 rule clade_founder_fasta:
@@ -662,7 +669,7 @@ rule clade_founder_fasta:
         gene_fasta=_gene_sliced_founder_outputs()
     params:
         roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {}),
-        pcp_gene_region=config.get("pcp_gene_region", None)
+        pcp_gene_region=config.get("pcp_gene_region")
     log:
         os.path.join(config["output_dir"], "log/clade_founder_{clade}.log")
     conda:
