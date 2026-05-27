@@ -11,6 +11,13 @@ configfile: "config/config.yaml"
 # Version Management
 # =============================================================================
 
+# Filename of the problematic-codon mask produced by ``rule
+# get_problematic_sites`` and consumed by the DASM-ready filter rules (#80).
+# Kept as a module-level constant so a rename is a one-line change; the
+# rule itself is defined far below the consumers, which is why the
+# consumers use a hardcoded path instead of ``rules.X.output.Y``.
+SPIKE_MASK_FILENAME = "spike_codon_sites_to_mask.txt"
+
 # Read pipeline version from VERSION file
 VERSION_FILE = os.path.join(workflow.basedir, "..", "VERSION")
 with open(VERSION_FILE) as f:
@@ -133,11 +140,14 @@ def get_final_tree():
 # (intermediate files are created automatically as dependencies)
 results_files = [
     "rates_table.csv",
-    "spike_codon_sites_to_mask.txt",
+    SPIKE_MASK_FILENAME,
     "fitness/ntmut_fitness_aggregated.csv",
     "aamut_fitness/all_aamut_fitness.csv",
     "validation/pcp_vs_counts_report.txt",
     "pcps/pcp_curation_report.txt",
+    # DASM-ready PCPs (#80): aggregate file + sentinel covering per-clade fan-out.
+    "pcps/all_pcps_dasm_ready.csv",
+    "pcps/dasm_ready_per_clade.done",
 ]
 
 
@@ -535,6 +545,89 @@ rule aggregate_filtered_branches:
         "envs/default.yml"
     script:
         "scripts/aggregate_filtered_branches.py"
+
+
+# =============================================================================
+# DASM-ready PCP curation
+# =============================================================================
+# These rules emit ``*_pcps_dasm_ready.csv`` siblings of the existing
+# ``*_pcps.csv`` files. The filter set + train/val split mirrors
+# ``dasm2 preprocess`` exactly (reimplemented in plain NumPy here so the
+# rule can stay in ``envs/default.yml`` without pulling in torch/dasm2).
+#
+# Seed convention (mirrors ``data-central/scripts/filter_viral_pcps.sh``):
+#   per-clade  -> seed=1729
+#   aggregate  -> seed=42
+# The aggregate's seed differs intentionally; it's a guardrail against
+# accidentally producing the aggregate with the per-clade default.
+#
+# Once v2 ships, these outputs replace the post-hoc
+# ``data-central/scripts/filter_viral_pcps.sh`` step.
+
+rule curate_pcps_for_dasm:
+    """Apply DASM-ready filters and train/val split to a single clade's PCPs."""
+    input:
+        pcps=rules.extract_pcps_by_clade.output.pcps,
+        mask_sites=os.path.join(config["output_dir"], SPIKE_MASK_FILENAME)
+    output:
+        dasm_ready=os.path.join(config["output_dir"], "pcps/{clade}_pcps_dasm_ready.csv"),
+        report=os.path.join(config["output_dir"], "pcps/{clade}_dasm_filter_report.txt"),
+        stats=os.path.join(config["output_dir"], "pcps/{clade}_dasm_filter_stats.json")
+    params:
+        seed=1729,
+        val_fraction=0.10
+    log:
+        os.path.join(config["output_dir"], "log/curate_pcps_for_dasm_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/curate_pcps_for_dasm.py"
+
+
+rule curate_all_pcps_for_dasm:
+    """Apply DASM-ready filters and train/val split to the all-clades aggregate.
+
+    Uses a different seed (42) than the per-clade rule (1729) by repository
+    convention; this matches ``filter_viral_pcps.sh``'s guardrail.
+    """
+    input:
+        pcps=rules.aggregate_clade_pcps.output.all_pcps,
+        mask_sites=os.path.join(config["output_dir"], SPIKE_MASK_FILENAME)
+    output:
+        dasm_ready=os.path.join(config["output_dir"], "pcps/all_pcps_dasm_ready.csv"),
+        report=os.path.join(config["output_dir"], "pcps/all_dasm_filter_report.txt"),
+        stats=os.path.join(config["output_dir"], "pcps/all_dasm_filter_stats.json")
+    params:
+        seed=42,
+        val_fraction=0.10
+    log:
+        os.path.join(config["output_dir"], "log/curate_all_pcps_for_dasm.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/curate_pcps_for_dasm.py"
+
+
+def _dasm_ready_per_clade_outputs(wildcards):
+    """Per-clade dasm-ready outputs - fans out over clades_w_adequate_counts."""
+    return expand(
+        os.path.join(config["output_dir"], "pcps/{clade}_pcps_dasm_ready.csv"),
+        clade=clades_w_adequate_counts(wildcards),
+    )
+
+
+rule dasm_ready_pcps_all_clades:
+    """Collector target for the per-clade DASM-ready outputs.
+
+    Aggregates the per-clade ``*_pcps_dasm_ready.csv`` files into a single
+    "everything is built" signal so ``rule all`` can depend on one path.
+    """
+    input:
+        _dasm_ready_per_clade_outputs
+    output:
+        sentinel=os.path.join(config["output_dir"], "pcps/dasm_ready_per_clade.done")
+    shell:
+        "touch {output.sentinel}"
 
 
 # =============================================================================
@@ -986,7 +1079,7 @@ rule get_problematic_sites:
     input:
         expected_vs_actual=rules.merge_expected_and_actual_counts.output.csv
     output:
-        sites_to_mask=os.path.join(config["output_dir"], "spike_codon_sites_to_mask.txt")
+        sites_to_mask=os.path.join(config["output_dir"], SPIKE_MASK_FILENAME)
     params:
         masking_gene=config.get("masking_gene", "S"),
         additional_sites_to_ignore=config.get("additional_sites_to_ignore", [])

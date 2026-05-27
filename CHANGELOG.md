@@ -34,6 +34,15 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 - **`min_clade_size` guardrail** ([#75](https://github.com/matsengrp/mat-pcp/issues/75)):
   - The Snakefile prints a `WARNING` to stderr at config-load time if any config matching `config-public-*.yaml` sets `min_clade_size > 0`. v1 production configs shipped with `min_clade_size: 10000` and biased the GLM rate estimation; the guardrail makes a recurrence of that mistake noisy.
 
+- **DASM-ready PCP outputs** ([#80](https://github.com/matsengrp/mat-pcp/issues/80)):
+  - New `pcps/{clade}_pcps_dasm_ready.csv` and `pcps/all_pcps_dasm_ready.csv` outputs land alongside the existing `*_pcps.csv` files. These absorb the post-processing that `data-central/scripts/filter_viral_pcps.sh` does today (invalid-PCP filtering, masked-only-mutation filtering, 90/10 train/val split).
+  - Schema: all columns from `*_pcps.csv` are preserved verbatim; one new column `in_train` (boolean) is appended. `True` means the row is in the train split, `False` means val.
+  - Seed convention: per-clade `seed=1729`, aggregate `seed=42` (matches the guardrail in `filter_viral_pcps.sh`).
+  - Byte-equivalence to `dasm2 preprocess` is asserted on the test pipeline: the aggregate has md5 `5e538bd088e676b485a11a04745221e9` (sentinel in `validate_test.py`).
+  - The filter is a NumPy-only reimplementation of `dasm2.preprocess_command.preprocess`, vendored into `workflow/scripts/curate_pcps_for_dasm.py` so the new rule stays in `envs/default.yml` (no torch/dasm2 dep).
+  - Companion files emitted alongside each output: `{clade}_dasm_filter_report.txt` (human-readable per-filter drop counts) and `{clade}_dasm_filter_stats.json` (machine-readable).
+  - Once v2 ships, these outputs make `data-central/scripts/filter_viral_pcps.sh` redundant.
+
 - **Gene-sliced clade founder FASTAs** ([#76](https://github.com/matsengrp/mat-pcp/issues/76)):
   - `rule clade_founder_fasta` now also emits a gene-sliced founder FASTA at `clade_founders/{gene_dir}/{clade}.fa` whenever `pcp_gene_region` is configured. For the canonical Spike slice this is `clade_founders/spike/{clade}.fa` (3819 nt, positions 21563-25381, 1-based inclusive, excludes the trailing stop codon).
   - The slice uses the same `seq[start-1:end]` convention as PCP extraction, so the founder slice byte-aligns with the parent/child sequences in `pcps/{clade}_pcps.csv`.
