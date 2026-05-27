@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Extract parent-child pairs from a mutation-annotated tree."""
+"""Extract parent-child pairs from a mutation-annotated tree.
+
+This step also drops branches whose parent and child are identical within the
+gene-region slice. These arise when a branch's only mutations fall outside the
+sliced region - for non-spike branches in a spike-only extraction, this catches
+the same case that the old `curate_pcps_by_clade` rule used to handle, but
+fused into one pass so no `_pcps_raw.csv` intermediate is needed.
+
+Outputs:
+  pcps              CSV of curated PCPs (no identical parent/child within slice).
+  filtered_branches CSV with a single `child_name` column listing branches that
+                    were dropped because the slice was identical.
+"""
 
 from pandas import DataFrame as DF
 from collections import defaultdict
@@ -13,6 +25,7 @@ fasta_path = snakemake.input.fasta
 gtf_path = snakemake.input.gtf
 coding_sites_csv = snakemake.input.coding_sites
 output_path = snakemake.output.pcps
+filtered_branches_path = snakemake.output.filtered_branches
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 # Get params
@@ -171,22 +184,21 @@ class PCPHelper:
         return n_filtered, pcps
 
     def count_mutations_on_tree(self):
-        """Iterate over all nodes and extract PCPs."""
-        n_filtered = 0
+        """Iterate over all nodes and extract PCPs (no DataFrame conversion yet)."""
+        n_passed = 0
         all_pcps = []
         t0 = time()
         for i, node in enumerate(self.int_nodes, 1):
             count, pcps = self.count_mutations_from_parent(node)
-            n_filtered += count
+            n_passed += count
             if count != 0:
                 all_pcps.append(pcps)
             if i % 1000 == 0:
                 elapsed = time() - t0
                 log(f"  {i}/{self.n_int_nodes} nodes processed in {elapsed:.1f}s")
-        all_pcps_df = self.pcp_list_to_df(all_pcps)
-        return n_filtered, all_pcps_df
+        return n_passed, all_pcps
 
-    def pcp_list_to_df(self, pcps, gene_slice_boundaries=None):
+    def pcps_to_df(self, pcps, gene_slice_boundaries=None):
         """Convert PCP list to DataFrame with optional region slicing."""
 
         def mut_dict(muts):
@@ -214,18 +226,38 @@ class PCPHelper:
         )
         return DF(rows, columns=cols)
 
-    def make_and_write_pcps(self, output_path, gene_slice_boundaries=None):
-        """Extract and write PCPs to file."""
+    def make_and_write_pcps(
+        self,
+        output_path,
+        filtered_branches_path,
+        gene_slice_boundaries=None,
+    ):
+        """Extract, filter, and write PCPs + filtered-branch IDs."""
         log("Extracting PCPs from tree...")
-        n_filtered, all_pcps_df = self.count_mutations_on_tree()
-        log(f"Found {n_filtered} branches passing filters")
-        log(f"Total PCPs: {len(all_pcps_df)}")
+        n_branches_passed, pcps = self.count_mutations_on_tree()
+        log(f"Found {n_branches_passed} branches passing QC filters")
 
         if gene_slice_boundaries:
             log(f"Slicing sequences to region {gene_slice_boundaries}")
 
-        all_pcps_df.to_csv(output_path, index=False)
+        pcp_df = self.pcps_to_df(pcps, gene_slice_boundaries=gene_slice_boundaries)
+        log(f"PCPs after slicing: {len(pcp_df)}")
+
+        # Drop PCPs whose parent and child are identical within the (possibly
+        # sliced) sequence. These were previously removed by the now-defunct
+        # `curate_pcps_by_clade` rule; folding the check in here means callers
+        # see a single curated output and no `_pcps_raw.csv` intermediate.
+        identical_mask = pcp_df["parent"] == pcp_df["child"]
+        n_identical = int(identical_mask.sum())
+        filtered_df = pcp_df.loc[identical_mask, ["child_name"]].reset_index(drop=True)
+        pcp_df = pcp_df.loc[~identical_mask].reset_index(drop=True)
+        log(f"  identical: {n_identical}")
+        log(f"Final PCPs: {len(pcp_df)} (dropped {n_identical} identical)")
+
+        pcp_df.to_csv(output_path, index=False)
         log(f"Wrote PCPs to {output_path}")
+        filtered_df.to_csv(filtered_branches_path, index=False)
+        log(f"Wrote {len(filtered_df)} filtered branch IDs to {filtered_branches_path}")
 
 
 def main():
@@ -260,13 +292,11 @@ def main():
         founder_seq=founder_seq,
     )
 
-    # Override pcp_list_to_df to use gene slicing
-    original_pcp_list_to_df = helper.pcp_list_to_df
-    helper.pcp_list_to_df = lambda pcps: original_pcp_list_to_df(
-        pcps, gene_slice_boundaries=gene_slice
+    helper.make_and_write_pcps(
+        output_path,
+        filtered_branches_path,
+        gene_slice_boundaries=gene_slice,
     )
-
-    helper.make_and_write_pcps(output_path, gene_slice_boundaries=gene_slice)
 
     log("=" * 60)
     log("Done!")

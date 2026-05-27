@@ -196,7 +196,7 @@ def main():
     summaries = []
     for clade in args.clades:
         tree_pb = results_dir / "mat" / "clades" / f"{clade}_tree.pb"
-        matpcp_csv = results_dir / "mat" / "clades" / f"{clade}_pcps_raw.csv"
+        matpcp_csv = results_dir / "pcps" / f"{clade}_pcps.csv"
         phyz_tsv = phyz_out_dir / f"{clade}_phyz_pcps.tsv"
 
         if not tree_pb.exists():

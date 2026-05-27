@@ -58,6 +58,33 @@ if missing_params:
     )
 
 
+# Soft warning: production configs (`config-public-*.yaml`) should generally
+# run with `min_clade_size: 0` so the GLM rates table is estimated from every
+# available clade, not just the largest ones. v1 production runs shipped with
+# `min_clade_size: 10000` and biased the resulting rates.
+def _warn_if_public_config_has_min_clade_size(workflow_obj, min_clade_size):
+    if min_clade_size in (0, None):
+        return
+    configfiles = getattr(workflow_obj, "configfiles", []) or []
+    public_configs = [
+        cf for cf in configfiles
+        if os.path.basename(cf).startswith("config-public-")
+        and os.path.basename(cf).endswith(".yaml")
+    ]
+    if not public_configs:
+        return
+    names = ", ".join(os.path.basename(cf) for cf in public_configs)
+    print(
+        f"WARNING: min_clade_size={min_clade_size} in production config(s) "
+        f"[{names}]. Set min_clade_size: 0 unless you specifically want to "
+        f"drop small clades from the GLM rate estimation. See mat-pcp #81 "
+        f"for context.",
+        file=__import__("sys").stderr,
+    )
+
+_warn_if_public_config_has_min_clade_size(workflow, config.get("min_clade_size", 0))
+
+
 # =============================================================================
 # Wildcard Constraints
 # =============================================================================
@@ -439,7 +466,13 @@ rule mat_clade_subset:
 
 
 rule extract_pcps_by_clade:
-    """Extract parent-child pairs from a clade-specific tree."""
+    """Extract and curate parent-child pairs from a clade-specific tree.
+
+    Drops branches whose parent/child are identical within the gene-region
+    slice in the same pass that constructs them. Emits both the curated PCP
+    table and a per-clade list of identical-slice branch IDs (consumed by
+    `count_mutations_clade` to harmonize mutation counting).
+    """
     input:
         tree=rules.mat_clade_subset.output.tree,
         gtf=rules.edit_ref_gtf.output.gtf,
@@ -447,7 +480,8 @@ rule extract_pcps_by_clade:
         clade_founder_fasta=os.path.join(config["output_dir"], "clade_founders/{clade}.fa"),
         coding_sites=rules.ref_coding_sites.output.csv
     output:
-        pcps=os.path.join(config["output_dir"], "mat/clades/{clade}_pcps_raw.csv")
+        pcps=os.path.join(config["output_dir"], "pcps/{clade}_pcps.csv"),
+        filtered_branches=os.path.join(config["output_dir"], "pcps/{clade}_filtered_branches.csv")
     params:
         gene_region=config.get("pcp_gene_region", None),
         max_nt_mutations=config.get("pcp_max_nt_mutations", 4),
@@ -465,21 +499,6 @@ rule extract_pcps_by_clade:
         "envs/bte.yml"
     script:
         "scripts/pcp_from_tree.py"
-
-
-rule curate_pcps_by_clade:
-    """Filter PCPs for a clade to remove invalid entries for DASM training."""
-    input:
-        pcps=rules.extract_pcps_by_clade.output.pcps
-    output:
-        curated_pcps=os.path.join(config["output_dir"], "pcps/{clade}_pcps.csv"),
-        filtered_branches=os.path.join(config["output_dir"], "pcps/{clade}_filtered_branches.csv")
-    log:
-        os.path.join(config["output_dir"], "log/curate_pcps_{clade}.log")
-    conda:
-        "envs/default.yml"
-    script:
-        "scripts/curate_pcps_by_clade.py"
 
 
 rule aggregate_clade_pcps:
@@ -503,10 +522,6 @@ rule aggregate_filtered_branches:
     """Aggregate per-clade filtered branch IDs and create curation report."""
     input:
         curated_pcps=rules.aggregate_clade_pcps.output.all_pcps,
-        raw_pcps=lambda wc: expand(
-            os.path.join(config["output_dir"], "mat/clades/{clade}_pcps_raw.csv"),
-            clade=clades_w_adequate_counts(wc)
-        ),
         filtered_branches=lambda wc: expand(
             os.path.join(config["output_dir"], "pcps/{clade}_filtered_branches.csv"),
             clade=clades_w_adequate_counts(wc)

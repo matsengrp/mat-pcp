@@ -6,7 +6,6 @@ import pandas as pd
 
 # Get inputs from snakemake
 curated_pcps_file = snakemake.input.curated_pcps
-raw_pcp_files = snakemake.input.raw_pcps
 filtered_branch_files = snakemake.input.filtered_branches
 output_report = snakemake.output.report
 output_filtered = snakemake.output.filtered_branches
@@ -27,28 +26,30 @@ def main():
     log("Aggregating filtered branches")
     log("=" * 60)
 
-    # Count raw and curated PCPs
-    total_raw = 0
-    for f in raw_pcp_files:
-        df = pd.read_csv(f)
-        total_raw += len(df)
-
+    # Count curated PCPs (kept after extraction-time filtering)
     curated_df = pd.read_csv(curated_pcps_file)
     total_curated = len(curated_df)
 
-    log(f"Total raw PCPs: {total_raw}")
-    log(f"Total curated PCPs: {total_curated}")
-    log(f"Total filtered: {total_raw - total_curated}")
-
-    # Aggregate filtered branches
+    # Aggregate filtered branches across clades
     filtered_dfs = []
+    total_filtered = 0
     for f in filtered_branch_files:
         clade = os.path.basename(f).replace("_filtered_branches.csv", "")
         df = pd.read_csv(f)
+        total_filtered += len(df)
         if len(df) > 0:
             df["clade"] = clade
             filtered_dfs.append(df)
             log(f"  {clade}: {len(df)} filtered branches")
+
+    # `total_raw` equals (kept + filtered) since both come from the same
+    # extraction step. With the v2 fused extraction step there is no separate
+    # `_pcps_raw.csv` file to read.
+    total_raw = total_curated + total_filtered
+
+    log(f"Total raw PCPs: {total_raw}")
+    log(f"Total curated PCPs: {total_curated}")
+    log(f"Total filtered: {total_filtered}")
 
     if filtered_dfs:
         all_filtered = pd.concat(filtered_dfs, ignore_index=True)
@@ -65,7 +66,7 @@ def main():
         f.write("=" * 40 + "\n\n")
         f.write(f"Input PCPs: {total_raw}\n")
         f.write(f"Valid PCPs: {total_curated}\n")
-        f.write(f"Removed: {total_raw - total_curated}\n\n")
+        f.write(f"Removed: {total_filtered}\n\n")
         f.write("Filtered branches by clade:\n")
         for clade in sorted(all_filtered["clade"].unique()) if len(all_filtered) > 0 else []:
             count = len(all_filtered[all_filtered["clade"] == clade])
