@@ -104,6 +104,12 @@ def summarize_spike_founders(spike_founders_dir):
     (Wuhan-Hu-1 reference founder for clade 19A doesn't change), so its md5 is
     a useful cross-version integrity sentinel. Expected md5 for 19A spike:
     ``b948f2a1f20edbce64cfff1dc540c119``.
+
+    NOTE: This helper assumes the v2 single-gene layout where the gene-sliced
+    founder directory is hardcoded to ``clade_founders/spike/``. When v3
+    introduces multi-gene slicing (see the v3 epic), this should fan out over
+    every configured ``gene_slice_outputs`` entry. See the comment block above
+    ``GENE_FOUNDER_DIRNAMES`` in ``workflow/Snakefile`` for the wider context.
     """
     if not os.path.exists(spike_founders_dir):
         return None
