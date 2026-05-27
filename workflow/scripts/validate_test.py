@@ -206,6 +206,14 @@ def compare_summaries(actual, expected):
                     f"dasm_ready aggregate n_train mismatch: expected "
                     f"{exp_agg.get('n_train')}, got {act_agg.get('n_train')}"
                 )
+            # n_val asserted separately so a split bug that flips
+            # membership without changing total count is caught even if
+            # row count and n_train both happen to match.
+            if act_agg.get('n_val') != exp_agg.get('n_val'):
+                differences.append(
+                    f"dasm_ready aggregate n_val mismatch: expected "
+                    f"{exp_agg.get('n_val')}, got {act_agg.get('n_val')}"
+                )
             if act_agg.get('checksum') != exp_agg.get('checksum'):
                 differences.append(
                     f"dasm_ready aggregate md5 mismatch: expected "

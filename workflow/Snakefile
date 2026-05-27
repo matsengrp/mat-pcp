@@ -11,6 +11,13 @@ configfile: "config/config.yaml"
 # Version Management
 # =============================================================================
 
+# Filename of the problematic-codon mask produced by ``rule
+# get_problematic_sites`` and consumed by the DASM-ready filter rules (#80).
+# Kept as a module-level constant so a rename is a one-line change; the
+# rule itself is defined far below the consumers, which is why the
+# consumers use a hardcoded path instead of ``rules.X.output.Y``.
+SPIKE_MASK_FILENAME = "spike_codon_sites_to_mask.txt"
+
 # Read pipeline version from VERSION file
 VERSION_FILE = os.path.join(workflow.basedir, "..", "VERSION")
 with open(VERSION_FILE) as f:
@@ -133,7 +140,7 @@ def get_final_tree():
 # (intermediate files are created automatically as dependencies)
 results_files = [
     "rates_table.csv",
-    "spike_codon_sites_to_mask.txt",
+    SPIKE_MASK_FILENAME,
     "fitness/ntmut_fitness_aggregated.csv",
     "aamut_fitness/all_aamut_fitness.csv",
     "validation/pcp_vs_counts_report.txt",
@@ -561,7 +568,7 @@ rule curate_pcps_for_dasm:
     """Apply DASM-ready filters and train/val split to a single clade's PCPs."""
     input:
         pcps=rules.extract_pcps_by_clade.output.pcps,
-        mask_sites=os.path.join(config["output_dir"], "spike_codon_sites_to_mask.txt")
+        mask_sites=os.path.join(config["output_dir"], SPIKE_MASK_FILENAME)
     output:
         dasm_ready=os.path.join(config["output_dir"], "pcps/{clade}_pcps_dasm_ready.csv"),
         report=os.path.join(config["output_dir"], "pcps/{clade}_dasm_filter_report.txt"),
@@ -585,7 +592,7 @@ rule curate_all_pcps_for_dasm:
     """
     input:
         pcps=rules.aggregate_clade_pcps.output.all_pcps,
-        mask_sites=os.path.join(config["output_dir"], "spike_codon_sites_to_mask.txt")
+        mask_sites=os.path.join(config["output_dir"], SPIKE_MASK_FILENAME)
     output:
         dasm_ready=os.path.join(config["output_dir"], "pcps/all_pcps_dasm_ready.csv"),
         report=os.path.join(config["output_dir"], "pcps/all_dasm_filter_report.txt"),
@@ -1072,7 +1079,7 @@ rule get_problematic_sites:
     input:
         expected_vs_actual=rules.merge_expected_and_actual_counts.output.csv
     output:
-        sites_to_mask=os.path.join(config["output_dir"], "spike_codon_sites_to_mask.txt")
+        sites_to_mask=os.path.join(config["output_dir"], SPIKE_MASK_FILENAME)
     params:
         masking_gene=config.get("masking_gene", "S"),
         additional_sites_to_ignore=config.get("additional_sites_to_ignore", [])

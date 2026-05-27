@@ -156,19 +156,27 @@ def summarize_dasm_ready_pcps(pcps_dir):
         if f.endswith("_pcps_dasm_ready.csv") and not f.startswith("all_")
     )
 
+    # Compute n_train / n_val via bool-equality (not ~) so a hypothetical
+    # NaN in ``in_train`` surfaces as a count mismatch rather than a
+    # TypeError; the empty-input path in curate_pcps_for_dasm.py writes a
+    # header-only file so this branch may see zero rows.
+    has_in_train = "in_train" in agg_df.columns
+    n_train = int((agg_df["in_train"] == True).sum()) if has_in_train else None
+    n_val = int((agg_df["in_train"] == False).sum()) if has_in_train else None
+
     summary = {
         "aggregate": {
             "num_rows": len(agg_df),
             "columns": list(agg_df.columns),
-            "has_in_train": "in_train" in agg_df.columns,
-            "n_train": int(agg_df["in_train"].sum()) if "in_train" in agg_df else None,
-            "n_val": int((~agg_df["in_train"]).sum()) if "in_train" in agg_df else None,
-            "checksum": hashlib.md5(open(aggregate, "rb").read()).hexdigest(),
+            "has_in_train": has_in_train,
+            "n_train": n_train,
+            "n_val": n_val,
+            "checksum": hashlib.md5(Path(aggregate).read_bytes()).hexdigest(),
         },
         "per_clade_files": per_clade_files,
         "per_clade_checksums": {
             os.path.splitext(f)[0]: hashlib.md5(
-                open(os.path.join(pcps_dir, f), "rb").read()
+                Path(pcps_dir, f).read_bytes()
             ).hexdigest()
             for f in per_clade_files
         },
