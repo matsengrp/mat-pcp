@@ -18,11 +18,11 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
-### v2 (unreleased)
+### v2
 
-**Bundled v2 cut** — VERSION bump and tag will land in the final PR of the v2 bundle. Tracks issues [#75](https://github.com/matsengrp/mat-pcp/issues/75), [#76](https://github.com/matsengrp/mat-pcp/issues/76), [#80](https://github.com/matsengrp/mat-pcp/issues/80), and [#81](https://github.com/matsengrp/mat-pcp/issues/81).
+**Bundled v2 cut** — tracks issues [#75](https://github.com/matsengrp/mat-pcp/issues/75), [#76](https://github.com/matsengrp/mat-pcp/issues/76), and [#80](https://github.com/matsengrp/mat-pcp/issues/80). [#81](https://github.com/matsengrp/mat-pcp/issues/81) ships the first three production runs against this version.
 
-**Changes landed so far** (this entry will be appended to as the bundle progresses):
+**Changes**:
 
 - **Fused PCP extraction and curation** ([#75](https://github.com/matsengrp/mat-pcp/issues/75)):
   - The `curate_pcps_by_clade` rule, `workflow/scripts/curate_pcps_by_clade.py`, and `workflow/modules/pcp_validation.py` are removed.
