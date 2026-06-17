@@ -118,6 +118,62 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 | `aamut_fitness/all_aamut_fitness.csv` | Amino acid-level fitness estimates |
 | `validation/pcp_vs_counts_report.txt` | PCP vs counts validation report |
 
+## Fitness Estimation Methodology
+
+"Fitness" in this pipeline measures how often a mutation is **observed** relative to a **neutral baseline** of how often it would be expected by chance. A positive value means the mutation appears more often than the baseline predicts (potentially beneficial); a negative value means it appears less often (potentially deleterious). The pipeline emits several distinct fitness values across three output files, summarized below. Column definitions live in [`OUTPUT_SCHEMA.md`](OUTPUT_SCHEMA.md); the parameters that control these computations are in the [Fitness Estimation](#fitness-estimation) configuration table.
+
+### The fitness values
+
+| Value | File | Baseline | Method |
+|-------|------|----------|--------|
+| `f_max`, `f_mean`, `f_st_dev`, `left_conf_int`, `right_conf_int` | `fitness/ntmut_fitness_aggregated.csv` | `predicted_count` (GLM) | Per-nucleotide **Bayesian Poisson** posterior over the fitness effect `f` |
+| `delta_fitness`, `uncertainty` | `aamut_fitness/all_aamut_fitness.csv` | inherited from the nucleotide estimates | **Inverse-variance weighted average** of the nucleotide `f_mean` values over codon-equivalent mutations |
+| `naive_delta_fitness` | `aamut_fitness/all_aamut_fitness.csv` | `expected_count` (synonymous rates) | Smoothed log-ratio: `log((actual_count + 0.5) / (expected_count + 0.5))` |
+
+### Nucleotide-level Bayesian fitness
+
+For each nucleotide mutation, the observed count is modeled with a Bayesian Poisson model in which the count has rate `predicted_count · exp(f)`, where `f` is the fitness effect. The model also accounts for uncertainty in the expected count via the GLM variance component `tau_squared`. From the resulting posterior over `f`, the pipeline reports the maximum a posteriori estimate (`f_max`), the posterior mean and standard deviation (`f_mean`, `f_st_dev`), and a 68% credible interval (`left_conf_int`, `right_conf_int`). The grid resolution of the posterior integration is set by the config parameters `fitness_N_f` and `fitness_N_n_exp` (both `300` in the shipped config, which the pipeline always passes through; note the underlying `probfit.py` function defaults are `N_f=150`, `N_n_exp=300` when called directly). This logic lives in `workflow/modules/probfit.py`.
+
+### From nucleotide to amino-acid fitness
+
+The amino-acid `delta_fitness` is an **inverse-variance weighted average** of the nucleotide-level `f_mean` estimates across every codon change that produces the same amino-acid substitution (`workflow/modules/aamutfit.py`, `aa_fitness`):
+
+- per-nucleotide weight: `weight = 1 / (f_st_dev² + 0.001)` (the `0.001` is a numerical-stability constant)
+- `delta_fitness = Σ(f_mean · weight) / Σ(weight)`
+- `uncertainty = sqrt(1 / Σ(weight))`
+
+Cross-clade aggregation into `all_aamut_fitness.csv` (`workflow/scripts/aggregate_aamut_fitness.py`) sums the counts and re-applies the same inverse-variance weighting across the contributing clades, weighting each clade's estimate by `1 / (uncertainty² + 0.001)`.
+
+### A note on baselines: expected vs. predicted counts
+
+Two different neutral baselines appear in the outputs:
+
+- `expected_count` — derived from **synonymous mutation rates** only.
+- `predicted_count` — derived from the **GLM**, additionally incorporating sequence context and RNA structure.
+
+The pipeline's `naive_delta_fitness` is a raw log-ratio against `expected_count`, whereas the primary `delta_fitness` is the Bayesian estimate built on `predicted_count` (via the Poisson rate and `tau_squared`) — it is **not** a raw log-ratio of either count.
+
+### Contrast: how a downstream consumer recomputes fitness
+
+A downstream consumer — the `viral_fitness` dashboard in the separate `dasm2-experiments` repository (`dasm2/analysis/viral.py`) — does **not** use the pipeline's `delta_fitness` column. Instead it recomputes its own fitness directly from the pipeline's `actual_count` and `predicted_count` columns:
+
+- per-mutation (`computed_delta_fitness_pseudo`): `log((actual_count + pc) / (predicted_count + pc))`, with the dashboard's default pseudocount `pc = 0.5`.
+- per-site (`sitewise_delta_fitness`): the same ratio computed over counts **summed across all mutations at a site**.
+
+The dashboard then correlates these recomputed values against a neural model's amino-acid selection factors (the cross-clade shift and directional-concordance analysis is outside the scope of this pipeline's outputs).
+
+The two definitions differ as follows:
+
+| | Pipeline `delta_fitness` | Dashboard `computed_delta_fitness_pseudo` |
+|---|---|---|
+| Form | Bayesian hierarchical posterior | Direct smoothed log-ratio |
+| Baseline | `predicted_count` (GLM) | `predicted_count` (GLM) |
+| Uncertainty | reported (`uncertainty`) | none (point estimate) |
+| Pseudocount | n/a (model-based) | `+0.5` in numerator and denominator |
+| Where computed | inside this pipeline | recomputed by the consumer from pipeline counts |
+
+Both rest on the GLM `predicted_count`, but one is a hierarchical Bayesian posterior with quantified uncertainty and the other is a plain pseudocount-smoothed log-ratio.
+
 ## PCP vs matUtils Mutation Count Validation
 
 The pipeline includes a validation step (`validate_pcp_vs_counts`) that cross-checks amino acid mutation counts derived from two independent methods:
