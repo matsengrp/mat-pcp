@@ -132,7 +132,7 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 
 ### Nucleotide-level Bayesian fitness
 
-For each nucleotide mutation, the observed count is modeled with a Bayesian Poisson model in which the count has rate `predicted_count · exp(f)`, where `f` is the fitness effect. The model also accounts for uncertainty in the expected count via the GLM variance component `tau_squared`. From the resulting posterior over `f`, the pipeline reports the maximum a posteriori estimate (`f_max`), the posterior mean and standard deviation (`f_mean`, `f_st_dev`), and a 68% credible interval (`left_conf_int`, `right_conf_int`). The grid resolution of the posterior integration is set by the config parameters `fitness_N_f` and `fitness_N_n_exp` (both default 300). This logic lives in `workflow/modules/probfit.py`.
+For each nucleotide mutation, the observed count is modeled with a Bayesian Poisson model in which the count has rate `predicted_count · exp(f)`, where `f` is the fitness effect. The model also accounts for uncertainty in the expected count via the GLM variance component `tau_squared`. From the resulting posterior over `f`, the pipeline reports the maximum a posteriori estimate (`f_max`), the posterior mean and standard deviation (`f_mean`, `f_st_dev`), and a 68% credible interval (`left_conf_int`, `right_conf_int`). The grid resolution of the posterior integration is set by the config parameters `fitness_N_f` and `fitness_N_n_exp` (both `300` in the shipped config, which the pipeline always passes through; note the underlying `probfit.py` function defaults are `N_f=150`, `N_n_exp=300` when called directly). This logic lives in `workflow/modules/probfit.py`.
 
 ### From nucleotide to amino-acid fitness
 
@@ -142,7 +142,7 @@ The amino-acid `delta_fitness` is an **inverse-variance weighted average** of th
 - `delta_fitness = Σ(f_mean · weight) / Σ(weight)`
 - `uncertainty = sqrt(1 / Σ(weight))`
 
-Cross-clade aggregation into `all_aamut_fitness.csv` (`workflow/scripts/aggregate_aamut_fitness.py`) sums the counts and re-applies the same inverse-variance weighting across the contributing clades.
+Cross-clade aggregation into `all_aamut_fitness.csv` (`workflow/scripts/aggregate_aamut_fitness.py`) sums the counts and re-applies the same inverse-variance weighting across the contributing clades, weighting each clade's estimate by `1 / (uncertainty² + 0.001)`.
 
 ### A note on baselines: expected vs. predicted counts
 
