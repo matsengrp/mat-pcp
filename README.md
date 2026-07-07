@@ -370,10 +370,46 @@ Exclusion flags (`exclude` / `masked_in_usher`) are computed **once**, on the fu
 grid, in `build_count_table` via `workflow/modules/masking.py`. A mutation is excluded if:
 
 1. **VCF mask**: it is at a problematic site from the ProblematicSites_SARS-CoV2 database (sets `masked_in_usher`)
-2. **UShER masks**: it is at a clade-specific problematic site (`data/usher_masked_sites.yaml`) (sets `masked_in_usher`)
+2. **UShER masks**: it is at a clade-specific problematic site, or matches a clade-specific directional reversion mutation, from `data/usher_masked_sites.yaml` (sets `masked_in_usher`)
 3. **Site range**: it is outside the coding region (`site_include_range`)
 4. **Configured exclusions**: it is at a site in `sites_to_exclude`
-5. **Ref-to-founder mutations**: it is a clade-defining ref→founder mutation (always excluded)
+
+#### UShER masks: source and regeneration
+
+`data/usher_masked_sites.yaml` is **generated**, not hand-maintained. It is derived from the
+UCSC branch-specific masking spec (`data/branchSpecificMask.yml`, vendored from the
+[kent repository](https://github.com/ucscGenomeBrowser/kent/blob/master/src/hg/utils/otto/sarscov2phylo/branchSpecificMask.yml);
+see [yatisht/usher#324](https://github.com/yatisht/usher/issues/324)). That upstream spec keys
+masks by **PANGO lineage** and applies them to a representative sample's node and its whole
+subtree, so inheritance is implicit in the tree topology.
+
+`workflow/scripts/generate_usher_masked_sites.py` converts this into the flat,
+**Nextstrain-clade**-keyed file the pipeline consumes:
+
+- It resolves each PANGO clade's representative sample to a tree node (via
+  `matUtils extract --sample-paths`, mirroring the upstream `branchSpecificMask.py`).
+- It uses the tree to find which Nextstrain clades fall under each representative node and
+  accumulates masks down the tree (topology-based inheritance). When a masked PANGO clade is
+  finer than the Nextstrain clade containing it, its mask is widened to the whole Nextstrain
+  clade (conservative **over-mask** policy).
+- `ranges`/`sites` become masked **sites**; `reversions` become masked **mutations**
+  (directional `nt_mutation` strings, excluded at the mutation level rather than masking the
+  whole site). Per-sample `exclusions` cannot be expressed at Nextstrain granularity and are
+  logged and skipped.
+
+The generator asserts the regenerated file is a **superset** of the previous one (every old
+`(clade, site)` mask is preserved). Regenerate against the **full** public MAT (the
+representative samples must be present) after updating the vendored spec:
+
+```bash
+python workflow/scripts/generate_usher_masked_sites.py \
+    --branch-spec data/branchSpecificMask.yml \
+    --tree <full public MAT .pb.gz> \
+    --metadata <matching metadata .tsv.gz> \
+    --old-yaml data/usher_masked_sites.yaml \
+    --output data/usher_masked_sites.yaml \
+    --strict
+```
 
 ### Curation Report
 
