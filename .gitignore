@@ -9,7 +9,6 @@ pixi.lock
 # Data directory (except specific files to track)
 data/*
 !data/usher_masked_sites.yaml
-!data/branchSpecificMask.yml
 !data/lan_2022/
 data/lan_2022/*
 !data/lan_2022/41467_2022_28603_MOESM11_ESM.txt

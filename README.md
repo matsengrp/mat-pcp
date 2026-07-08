@@ -374,42 +374,23 @@ grid, in `build_count_table` via `workflow/modules/masking.py`. A mutation is ex
 3. **Site range**: it is outside the coding region (`site_include_range`)
 4. **Configured exclusions**: it is at a site in `sites_to_exclude`
 
-#### UShER masks: source and regeneration
+#### UShER masks: source
 
-`data/usher_masked_sites.yaml` is **generated**, not hand-maintained. It is derived from the
-UCSC branch-specific masking spec (`data/branchSpecificMask.yml`, vendored from the
-[kent repository](https://github.com/ucscGenomeBrowser/kent/blob/master/src/hg/utils/otto/sarscov2phylo/branchSpecificMask.yml);
-see [yatisht/usher#324](https://github.com/yatisht/usher/issues/324)). That upstream spec keys
-masks by **PANGO lineage** and applies them to a representative sample's node and its whole
-subtree, so inheritance is implicit in the tree topology.
+`data/usher_masked_sites.yaml` is **generated**, not hand-maintained. It is produced by the
+standalone [`s2-clade-mask`](https://github.com/matsengrp/s2-clade-mask) repository, which
+derives it from the UCSC branch-specific masking spec
+([kent repository](https://github.com/ucscGenomeBrowser/kent/blob/master/src/hg/utils/otto/sarscov2phylo/branchSpecificMask.yml);
+see [yatisht/usher#324](https://github.com/yatisht/usher/issues/324)) by resolving each PANGO
+lineage's representative sample to a node on a full gisaid-and-public MAT and coarsening the
+tree-topology-based masks to **Nextstrain clades**. `mat-pcp` simply consumes the resulting
+flat, Nextstrain-clade-keyed file:
 
-`workflow/scripts/generate_usher_masked_sites.py` converts this into the flat,
-**Nextstrain-clade**-keyed file the pipeline consumes:
+- `sites` are masked whole (by exact clade-name match, no tree involved at runtime).
+- `mutations` (optional; directional `nt_mutation` strings) are excluded at the mutation level
+  rather than masking the whole site.
 
-- It resolves each PANGO clade's representative sample to a tree node (via
-  `matUtils extract --sample-paths`, mirroring the upstream `branchSpecificMask.py`).
-- It uses the tree to find which Nextstrain clades fall under each representative node and
-  accumulates masks down the tree (topology-based inheritance). When a masked PANGO clade is
-  finer than the Nextstrain clade containing it, its mask is widened to the whole Nextstrain
-  clade (conservative **over-mask** policy).
-- `ranges`/`sites` become masked **sites**; `reversions` become masked **mutations**
-  (directional `nt_mutation` strings, excluded at the mutation level rather than masking the
-  whole site). Per-sample `exclusions` cannot be expressed at Nextstrain granularity and are
-  logged and skipped.
-
-The generator asserts the regenerated file is a **superset** of the previous one (every old
-`(clade, site)` mask is preserved). Regenerate against the **full** public MAT (the
-representative samples must be present) after updating the vendored spec:
-
-```bash
-python workflow/scripts/generate_usher_masked_sites.py \
-    --branch-spec data/branchSpecificMask.yml \
-    --tree <full public MAT .pb.gz> \
-    --metadata <matching metadata .tsv.gz> \
-    --old-yaml data/usher_masked_sites.yaml \
-    --output data/usher_masked_sites.yaml \
-    --strict
-```
+To refresh the masks, regenerate the file in `s2-clade-mask` and copy it here; see that
+repository's README for the generation algorithm and procedure.
 
 ### Curation Report
 
