@@ -443,6 +443,29 @@ def build_clade_masks(spec, ns_to_pango, log_file=None):
     return clade_masks
 
 
+def restrict_to_include_range(clade_masks, start, end, log_file=None):
+    """Drop sites and reversion mutations outside ``[start, end]`` in place.
+
+    The pipeline only ever considers positions within its ``site_include_range``
+    (everything else -- notably the 5'/3' UTRs -- is discarded by the range
+    filter at runtime). Masking those positions here is redundant, so for
+    simplicity the generated file lists only in-range masks. Returns the number
+    of dropped (clade, site) and (clade, mutation) entries.
+    """
+    dropped_sites = dropped_muts = 0
+    for block in clade_masks.values():
+        in_sites = {s for s in block["sites"] if start <= s <= end}
+        dropped_sites += len(block["sites"]) - len(in_sites)
+        block["sites"] = in_sites
+        in_muts = {m for m in block["mutations"] if start <= int(m[1:-1]) <= end}
+        dropped_muts += len(block["mutations"]) - len(in_muts)
+        block["mutations"] = in_muts
+    log(f"Restricted to site_include_range [{start}, {end}]: dropped "
+        f"{dropped_sites} UTR/out-of-range site entries and {dropped_muts} "
+        f"mutation entries.", log_file)
+    return dropped_sites, dropped_muts
+
+
 # ---------------------------------------------------------------------------
 # 5. Old-scheme recovery check
 # ---------------------------------------------------------------------------
@@ -461,7 +484,8 @@ def load_old_sites(old_yaml):
     return result
 
 
-def check_recovers_old(old_sites, clade_masks, union_old, log_file=None):
+def check_recovers_old(old_sites, clade_masks, union_old, include_range=None,
+                       log_file=None):
     """Verify the new file recovers every old ``(clade, site)`` mask.
 
     An old site is recovered if it is still masked as a **site**, or if it is now
@@ -470,21 +494,38 @@ def check_recovers_old(old_sites, clade_masks, union_old, log_file=None):
     masked whole sites; the new UCSC spec masks specific reversion mutations).
     Only sites recovered by *neither* mechanism are true failures.
 
+    If ``include_range`` is given as ``(start, end)``, old sites outside it (the
+    UTRs) are **intentionally not recovered** -- they are dropped from the new
+    scheme because the pipeline's range filter discards them anyway -- and are
+    reported separately rather than counted as failures.
+
     Returns ``truly_missing`` (``{clade: set(sites)}``).
     """
     truly_missing = defaultdict(set)
     downgraded = defaultdict(set)
+    out_of_range = defaultdict(set)
+    lo, hi = include_range if include_range else (None, None)
     for clade, sites in old_sites.items():
         block = clade_masks.get(clade, {})
         new_site_set = block.get("sites", set())
         new_mut_positions = {int(m[1:-1]) for m in block.get("mutations", set())}
         for site in sites:
+            if include_range and not (lo <= site <= hi):
+                out_of_range[clade].add(site)
+                continue
             if site in new_site_set:
                 continue
             if site in new_mut_positions:
                 downgraded[clade].add(site)
             else:
                 truly_missing[clade].add(site)
+
+    if out_of_range:
+        n = sum(len(v) for v in out_of_range.values())
+        log(f"OLD-SCHEME RECOVERY: {n} old (clade, site) mask(s) fall outside the "
+            f"site_include_range [{lo}, {hi}] and are intentionally NOT recovered "
+            "(UTR sites dropped; discarded by the range filter at runtime).",
+            log_file)
 
     if downgraded:
         n = sum(len(v) for v in downgraded.values())
@@ -532,6 +573,9 @@ def write_output(out_path, clade_masks, spec, provenance, dropped_exclusions):
     lines.append("# against a full public MAT + metadata. Masks are accumulated down the")
     lines.append("# tree (topology-based inheritance) and coarsened to Nextstrain clades")
     lines.append("# (over-mask policy for PANGO clades finer than a Nextstrain clade).")
+    lines.append("# Sites and reversion mutations outside the pipeline's")
+    lines.append("# site_include_range (the UTRs) are omitted for simplicity -- they")
+    lines.append("# are discarded by the range filter at runtime regardless.")
     lines.append("#")
     for line in provenance:
         lines.append(f"# {line}")
@@ -591,6 +635,11 @@ def main(argv=None):
     p.add_argument("--clade-column", default="Nextstrain_clade",
                    help="Metadata column with the Nextstrain clade "
                         "(default: Nextstrain_clade)")
+    p.add_argument("--site-include-start", type=int, default=266,
+                   help="Start of the pipeline site_include_range; masks outside "
+                        "[start, end] (the UTRs) are omitted (default: 266)")
+    p.add_argument("--site-include-end", type=int, default=29674,
+                   help="End of the pipeline site_include_range (default: 29674)")
     p.add_argument("--sample-paths",
                    help="Precomputed matUtils --sample-paths file (skips matUtils)")
     p.add_argument("--clade-paths",
@@ -654,6 +703,8 @@ def main(argv=None):
         ns_to_pango = assign_masks_by_founder(spec, clade_to_node, ns_full_values,
                                               clade_founders, sample_paths, log_file)
         clade_masks = build_clade_masks(spec, ns_to_pango, log_file)
+        restrict_to_include_range(clade_masks, args.site_include_start,
+                                  args.site_include_end, log_file)
     finally:
         if tmp_paths and os.path.exists(tmp_paths):
             os.remove(tmp_paths)
@@ -675,13 +726,18 @@ def main(argv=None):
     missing = {}
     if args.old_yaml:
         old_sites = load_old_sites(args.old_yaml)
-        missing = check_recovers_old(old_sites, clade_masks, args.union_old, log_file)
+        missing = check_recovers_old(
+            old_sites, clade_masks, args.union_old,
+            include_range=(args.site_include_start, args.site_include_end),
+            log_file=log_file)
 
     provenance = [
         f"source spec:   {args.branch_spec}",
         f"tree:          {os.path.basename(args.tree) if args.tree else '(sample-paths supplied)'}",
         f"metadata:      {os.path.basename(args.metadata)}",
         f"clade column:  {args.clade_column}",
+        f"include range: [{args.site_include_start}, {args.site_include_end}] "
+        "(masks outside this range are omitted)",
     ]
     write_output(args.output, clade_masks, spec, provenance, dropped_exclusions)
     log(f"Wrote {args.output}", log_file)

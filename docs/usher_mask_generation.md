@@ -89,7 +89,7 @@ Union the site sets and mutation lists of all PANGO clades assigned to each
 Nextstrain clade; write one `mask_<bare_clade>` block with `clades` / `sites` /
 `mutations`, a `# accumulated from PANGO clades: [...]` provenance comment per
 block, and a file header (source commit, tree, metadata, dropped-exclusion
-note for BA.2.86 site 23599). Result: **43 clade blocks, 6,937 site-entries,
+note for BA.2.86 site 23599). Result: **43 clade blocks, 2,336 site-entries,
 1,126 mutation-entries.**
 
 Mapping of source fields:
@@ -99,6 +99,18 @@ Mapping of source fields:
   `nt_mutation`, *not* expanded to whole sites).
 - `exclusions` → dropped + logged (cannot express per-sample un-masking at
   clade granularity).
+
+### 7. Drop UTR / out-of-range masks (`restrict_to_include_range`)
+
+Sites and reversion mutations outside the pipeline's `site_include_range`
+(`[266, 29674]` by default — everything outside is the 5′/3′ UTR) are removed
+from the generated file. The pipeline already discards those positions via its
+range filter at runtime, so masking them was redundant; omitting them keeps the
+file focused on the masks that actually affect results. The range is
+configurable via `--site-include-start` / `--site-include-end`. This dropped
+4,601 UTR site-entries (no mutations — all reversions fall in the coding
+region). The old-scheme recovery check correspondingly treats old UTR masks as
+intentionally dropped rather than as failures.
 
 ## How the new masks match the old ones
 
