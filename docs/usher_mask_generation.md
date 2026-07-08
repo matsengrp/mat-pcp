@@ -115,9 +115,11 @@ intentionally dropped rather than as failures.
 ## How the new masks match the old ones
 
 The generator enforces an explicit acceptance criterion (`check_recovers_old`):
-the new file must be a **superset** — for every `(clade, site)` in the old file,
-that site must still be masked for that clade. An old site counts as recovered
-if it is either:
+the new file must be a **superset** — for every `(clade, site)` in the old file
+*within the `site_include_range`*, that site must still be masked for that
+clade. (Old masks in the UTRs are intentionally not recovered — see §7 — and are
+reported separately rather than treated as failures.) An old coding site counts
+as recovered if it is either:
 
 1. still masked as a **site**, or
 2. now masked at the **mutation level** — i.e. ≥ 1 new mutation sits at that
@@ -138,6 +140,46 @@ failures. Running with `--old-yaml` reported:
 `--strict` makes any *true* shortfall a hard error; `--union-old` would
 force-include unrecovered old masks — neither was needed since recovery is
 clean.
+
+## Overlap of the new and old masked sites
+
+All counts below are **coding only** (within `site_include_range` `[266, 29674]`;
+UTR masks are excluded from both files — see §7). The tree/metadata snapshot was
+`public-2026-07-01`.
+
+**`(clade, site)` mask pairs**
+
+| | Count |
+|---|--:|
+| Old coding pairs | 406 |
+| New pairs | 2,336 |
+| **Shared** (masked as a site in both) | 265 |
+| Old-only, now masked at the **mutation** level | 141 |
+| Old-only, **not** recovered | 0 |
+| New-only (added coverage) | 2,071 |
+
+So every old coding pair is recovered — 265 still whole-site masks, 141 tightened
+to directional mutation masks — and the new file adds 2,071 pairs on top.
+
+**Distinct genome positions (union across clades)**
+
+| | Count |
+|---|--:|
+| Old whole-site positions | 161 |
+| New whole-site positions | 168 |
+| Shared whole-site positions | 103 |
+| New-only whole-site positions | 65 |
+| Old positions now expressed only as a mutation | 58 |
+| New **mutation-only** positions (no whole-site mask anywhere) | 105 |
+
+**Clade coverage:** 14 clades with masks in the old file → 43 in the new (29
+brand-new, mostly post-2022 lineages: `20B`, `21M`, `23A`–`23I`, `24A`–`24I`,
+`25A`–`25I`).
+
+The bulk of the added coverage is genuine new coding masking accumulated from
+newer PANGO lineages (S-NTD / ORF8 / N deletion regions, amplicon-dropout and
+recurrent-misalignment sites), plus 105 directional single-mutation exclusions
+the old whole-site scheme could not express.
 
 ## Consumer-side changes (backward-compatible)
 
