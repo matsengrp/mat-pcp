@@ -77,7 +77,7 @@ log(f"Processing {len(clades)} clades: {list(clades)}")
 
 # Use the v2-synchronized add_predicted_count function
 # This applies clade-specific normalization factor T
-rates_module.add_predicted_count(
+rates_module.add_expected_count(
     train_df=counts_curated,
     count_df=counts_df,
     clades=clades,
@@ -86,8 +86,8 @@ rates_module.add_predicted_count(
 
 log(f"Added predicted counts and tau_squared to {len(counts_df)} entries")
 log(
-    f"Predicted count range: {counts_df['predicted_count'].min():.2f} - "
-    f"{counts_df['predicted_count'].max():.2f}"
+    f"Predicted count range: {counts_df['expected_count'].min():.2f} - "
+    f"{counts_df['expected_count'].max():.2f}"
 )
 log(
     f"Tau squared range: {counts_df['tau_squared'].min():.4f} - "

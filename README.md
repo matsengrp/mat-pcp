@@ -87,7 +87,7 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 | 2. Clade Processing & PCPs | Identify clades, extract clade subtrees, and emit curated PCPs in one pass (identical-slice branches are dropped during extraction). DASM-training-ready siblings are emitted alongside. | `clade_counts.csv`, `clades/{clade}_tree.pb`, `pcps/{clade}_pcps.csv`, `pcps/all_pcps.csv`, `pcps/{clade}_pcps_dasm_ready.csv`, `pcps/all_pcps_dasm_ready.csv`, `pcp_curation_report.txt` |
 | 3a. Clade Founders | Download and process clade founder sequences (whole-genome + gene-sliced, e.g. Spike) | `clade_founders/{clade}.fa`, `clade_founders/spike/{clade}.fa`, `clade_founder_nts.csv` |
 | 3b. Mutation Counting | Translate mutations, count per-clade mutations (harmonized with PCP filtering) | `mutations/{clade}_mutations.tsv`, `mutation_counts/aggregated.csv` |
-| 4. Expected Counts | Compute synonymous rates and expected mutation counts | `synonymous_mut_rates/`, `expected_vs_actual_mut_counts.csv` |
+| 4. Unified Count Table | Enumerate all possible mutations, join actual counts, compute masking flags once | `counts_all.csv` |
 | 5. GLM Annotation | Annotate counts with RNA structure and sequence context | `glm/annotated_counts.csv`, `glm/curated_counts.csv` |
 | 6. Rate Estimation | Estimate neutral mutation rates via GLM | `glm/master_table.csv`, `rates_table.csv` |
 | 7a. NT Fitness | Compute nucleotide-level fitness estimates | `fitness/ntmut_fitness_aggregated.csv` |
@@ -107,13 +107,13 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 | `mat/clade_counts.csv` | Sample counts per clade |
 | `clade_founder_nts.csv` | Nucleotide at each coding site for all clade founders |
 | `mutation_counts/aggregated.csv` | Aggregated mutation counts across all clades |
-| `expected_vs_actual_mut_counts.csv` | Expected and actual mutation counts |
+| `counts_all.csv` | Per-clade table of all possible mutations with actual counts and masking flags |
 | `glm/annotated_counts.csv` | Mutation counts annotated with RNA structure and context |
 | `glm/curated_counts.csv` | Curated counts for GLM training |
 | `glm/master_table.csv` | Full GLM rate table with light-switch boundaries |
 | `rates_table.csv` | Neutral mutation rates by context |
 | `spike_codon_sites_to_mask.txt` | Problematic codon sites in target gene |
-| `fitness/predicted_counts_by_clade.csv` | GLM-predicted counts per clade |
+| `fitness/predicted_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
 | `aamut_fitness/all_aamut_fitness.csv` | Amino acid-level fitness estimates |
 | `validation/pcp_vs_counts_report.txt` | PCP vs counts validation report |
@@ -126,13 +126,13 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 
 | Value | File | Baseline | Method |
 |-------|------|----------|--------|
-| `f_max`, `f_mean`, `f_st_dev`, `left_conf_int`, `right_conf_int` | `fitness/ntmut_fitness_aggregated.csv` | `predicted_count` (GLM) | Per-nucleotide **Bayesian Poisson** posterior over the fitness effect `f` |
+| `f_max`, `f_mean`, `f_st_dev`, `left_conf_int`, `right_conf_int` | `fitness/ntmut_fitness_aggregated.csv` | `expected_count` (GLM) | Per-nucleotide **Bayesian Poisson** posterior over the fitness effect `f` |
 | `delta_fitness`, `uncertainty` | `aamut_fitness/all_aamut_fitness.csv` | inherited from the nucleotide estimates | **Inverse-variance weighted average** of the nucleotide `f_mean` values over codon-equivalent mutations |
-| `naive_delta_fitness` | `aamut_fitness/all_aamut_fitness.csv` | `expected_count` (synonymous rates) | Smoothed log-ratio: `log((actual_count + 0.5) / (expected_count + 0.5))` |
+| `naive_delta_fitness` | `aamut_fitness/all_aamut_fitness.csv` | `expected_count` (GLM) | Smoothed log-ratio: `log((actual_count + 0.5) / (expected_count + 0.5))` |
 
 ### Nucleotide-level Bayesian fitness
 
-For each nucleotide mutation, the observed count is modeled with a Bayesian Poisson model in which the count has rate `predicted_count · exp(f)`, where `f` is the fitness effect. The model also accounts for uncertainty in the expected count via the GLM variance component `tau_squared`. From the resulting posterior over `f`, the pipeline reports the maximum a posteriori estimate (`f_max`), the posterior mean and standard deviation (`f_mean`, `f_st_dev`), and a 68% credible interval (`left_conf_int`, `right_conf_int`). The grid resolution of the posterior integration is set by the config parameters `fitness_N_f` and `fitness_N_n_exp` (both `300` in the shipped config, which the pipeline always passes through; note the underlying `probfit.py` function defaults are `N_f=150`, `N_n_exp=300` when called directly). This logic lives in `workflow/modules/probfit.py`.
+For each nucleotide mutation, the observed count is modeled with a Bayesian Poisson model in which the count has rate `expected_count · exp(f)`, where `f` is the fitness effect. The model also accounts for uncertainty in the expected count via the GLM variance component `tau_squared`. From the resulting posterior over `f`, the pipeline reports the maximum a posteriori estimate (`f_max`), the posterior mean and standard deviation (`f_mean`, `f_st_dev`), and a 68% credible interval (`left_conf_int`, `right_conf_int`). The grid resolution of the posterior integration is set by the config parameters `fitness_N_f` and `fitness_N_n_exp` (both `300` in the shipped config, which the pipeline always passes through; note the underlying `probfit.py` function defaults are `N_f=150`, `N_n_exp=300` when called directly). This logic lives in `workflow/modules/probfit.py`.
 
 ### From nucleotide to amino-acid fitness
 
@@ -144,35 +144,49 @@ The amino-acid `delta_fitness` is an **inverse-variance weighted average** of th
 
 Cross-clade aggregation into `all_aamut_fitness.csv` (`workflow/scripts/aggregate_aamut_fitness.py`) sums the counts and re-applies the same inverse-variance weighting across the contributing clades, weighting each clade's estimate by `1 / (uncertainty² + 0.001)`.
 
-### A note on baselines: expected vs. predicted counts
+### A note on the neutral baseline
 
-Two different neutral baselines appear in the outputs:
+There is a single neutral baseline: `expected_count`, the **GLM-predicted** neutral count
+(incorporating substitution type, flanking-nucleotide context, RNA secondary structure, and
+light-switch position). Both fitness estimators use it:
 
-- `expected_count` — derived from **synonymous mutation rates** only.
-- `predicted_count` — derived from the **GLM**, additionally incorporating sequence context and RNA structure.
+- `naive_delta_fitness` is a raw pseudocount-smoothed log-ratio against `expected_count`:
+  `log((actual_count + 0.5) / (expected_count + 0.5))`.
+- the primary `delta_fitness` is the Bayesian estimate built on `expected_count` (via the Poisson
+  rate `expected_count · exp(f)` and the GLM variance component `tau_squared`) — it is **not** a
+  raw log-ratio.
 
-The pipeline's `naive_delta_fitness` is a raw log-ratio against `expected_count`, whereas the primary `delta_fitness` is the Bayesian estimate built on `predicted_count` (via the Poisson rate and `tau_squared`) — it is **not** a raw log-ratio of either count.
+> **v3 change:** earlier versions produced a *separate* synonymous-rate `expected_count`
+> alongside the GLM `predicted_count`. As of v3 the synonymous-rate model is removed and the GLM
+> output column is renamed `predicted_count` → **`expected_count`**, which is the sole baseline.
 
 ### Contrast: how a downstream consumer recomputes fitness
 
-A downstream consumer — the `viral_fitness` dashboard in the separate `dasm2-experiments` repository (`dasm2/analysis/viral.py`) — does **not** use the pipeline's `delta_fitness` column. Instead it recomputes its own fitness directly from the pipeline's `actual_count` and `predicted_count` columns:
+A downstream consumer — the `viral_fitness` dashboard in the separate `dasm2-experiments`
+repository (`dasm2/analysis/viral.py`) — does **not** use the pipeline's `delta_fitness` column.
+Instead it recomputes its own fitness directly from the pipeline's `actual_count` and
+`expected_count` columns:
 
-- per-mutation (`computed_delta_fitness_pseudo`): `log((actual_count + pc) / (predicted_count + pc))`, with the dashboard's default pseudocount `pc = 0.5`.
+- per-mutation (`computed_delta_fitness_pseudo`): `log((actual_count + pc) / (expected_count + pc))`,
+  with the dashboard's default pseudocount `pc = 0.5`.
 - per-site (`sitewise_delta_fitness`): the same ratio computed over counts **summed across all mutations at a site**.
 
-The dashboard then correlates these recomputed values against a neural model's amino-acid selection factors (the cross-clade shift and directional-concordance analysis is outside the scope of this pipeline's outputs).
+The dashboard then correlates these recomputed values against a neural model's amino-acid
+selection factors. **Consumers that read the old `predicted_count` column must be updated to
+`expected_count`.**
 
 The two definitions differ as follows:
 
 | | Pipeline `delta_fitness` | Dashboard `computed_delta_fitness_pseudo` |
 |---|---|---|
 | Form | Bayesian hierarchical posterior | Direct smoothed log-ratio |
-| Baseline | `predicted_count` (GLM) | `predicted_count` (GLM) |
+| Baseline | `expected_count` (GLM) | `expected_count` (GLM) |
 | Uncertainty | reported (`uncertainty`) | none (point estimate) |
 | Pseudocount | n/a (model-based) | `+0.5` in numerator and denominator |
 | Where computed | inside this pipeline | recomputed by the consumer from pipeline counts |
 
-Both rest on the GLM `predicted_count`, but one is a hierarchical Bayesian posterior with quantified uncertainty and the other is a plain pseudocount-smoothed log-ratio.
+Both rest on the GLM `expected_count`, but one is a hierarchical Bayesian posterior with
+quantified uncertainty and the other is a plain pseudocount-smoothed log-ratio.
 
 ## PCP vs matUtils Mutation Count Validation
 
@@ -279,7 +293,6 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 | `max_nt_mutations` | Maximum mutations per branch | `4` |
 | `max_reversions_to_ref` | Max reversions to reference | `1` |
 | `max_reversions_to_clade_founder` | Max reversions to clade founder | `1` |
-| `exclude_ref_to_founder_muts` | Exclude ref→founder mutations | `true` |
 | `site_include_range` | Genomic range for mutation counting | `{start: 266, end: 29674}` |
 | `sites_to_exclude` | List of problematic sites | See config |
 
@@ -353,13 +366,14 @@ To ensure consistency between PCP-derived and matUtils-derived mutation counts, 
 
 ### Site-Level Masking
 
-Individual mutation sites are excluded from counting based on:
+Exclusion flags (`exclude` / `masked_in_usher`) are computed **once**, on the full mutation
+grid, in `build_count_table` via `workflow/modules/masking.py`. A mutation is excluded if:
 
-1. **VCF mask**: Problematic sites from the ProblematicSites_SARS-CoV2 database
-2. **UShER masks**: Clade-specific problematic sites (`data/usher_masked_sites.yaml`)
-3. **Site range**: Sites outside the coding region (`site_include_range`)
-4. **Configured exclusions**: Additional sites specified in `sites_to_exclude`
-5. **Ref-to-founder mutations**: Mutations defining the clade founder (when `exclude_ref_to_founder_muts: true`)
+1. **VCF mask**: it is at a problematic site from the ProblematicSites_SARS-CoV2 database (sets `masked_in_usher`)
+2. **UShER masks**: it is at a clade-specific problematic site (`data/usher_masked_sites.yaml`) (sets `masked_in_usher`)
+3. **Site range**: it is outside the coding region (`site_include_range`)
+4. **Configured exclusions**: it is at a site in `sites_to_exclude`
+5. **Ref-to-founder mutations**: it is a clade-defining ref→founder mutation (always excluded)
 
 ### Curation Report
 
@@ -431,19 +445,16 @@ results/
 │   ├── {clade}_sample_paths.tsv   # Sample mutation paths
 │   └── {clade}_nt_mutations.csv   # Nucleotide mutation counts
 ├── mutation_counts/
-│   ├── {clade}.csv                # Per-clade mutation counts
-│   └── aggregated.csv             # Aggregated counts across clades
-├── synonymous_mut_rates/
-│   └── rates_by_clade.csv         # Synonymous mutation rates per clade
-├── expected_mut_counts/
-│   └── expected_counts.csv        # Expected mutation counts
+│   ├── {clade}.csv                # Per-clade mutation counts (raw, no masking)
+│   └── aggregated.csv             # Aggregated counts across clades (raw, no masking)
+├── counts_all.csv                 # Unified grid: all possible mutations + actual counts + masking flags
 ├── glm/
 │   ├── annotated_counts.csv       # Counts with RNA structure context
 │   ├── clade_founder_annotated.csv # Annotated clade founder data
 │   ├── curated_counts.csv         # Curated counts for GLM
 │   └── master_table.csv           # Full GLM rate predictions
 ├── fitness/
-│   ├── predicted_counts_by_clade.csv    # GLM-predicted counts
+│   ├── predicted_counts_by_clade.csv    # GLM-expected counts (expected_count)
 │   ├── ntmut_counts/              # Per-clade nucleotide counts
 │   ├── ntmut_fitness/             # Per-clade nucleotide fitness
 │   └── ntmut_fitness_aggregated.csv     # Aggregated NT fitness

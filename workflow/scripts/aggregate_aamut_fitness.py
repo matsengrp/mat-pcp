@@ -48,7 +48,6 @@ if len(dfs) == 0:
             "aa_site",
             "aa_mutation",
             "expected_count",
-            "predicted_count",
             "actual_count",
             "tau_squared",
             "naive_delta_fitness",
@@ -72,7 +71,7 @@ else:
 
     # Compute aggregated counts and weighted average fitness
     agg_dict = {}
-    for col in ["expected_count", "predicted_count", "actual_count", "tau_squared"]:
+    for col in ["expected_count", "actual_count", "tau_squared"]:
         if col in all_data.columns:
             agg_dict[col] = "sum"
 

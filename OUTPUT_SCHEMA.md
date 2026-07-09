@@ -85,8 +85,7 @@ Amino acid-level fitness estimates aggregated across all clades. Fitness is comp
 | `aa_site` | integer | 1-indexed amino acid position within the gene. |
 | `aa_mutation` | string | Mutation string in standard format (e.g., "D614G"). |
 | `subset_of_ORF1ab` | boolean | True if this entry is for an NSP (ORF1ab subset); False otherwise. |
-| `expected_count` | float | Expected mutation count based on synonymous mutation rates. |
-| `predicted_count` | float | GLM-predicted count incorporating sequence context and RNA structure. |
+| `expected_count` | float | GLM-predicted neutral count (sequence context + RNA structure + position); the baseline for both `naive_delta_fitness` and `delta_fitness`. |
 | `actual_count` | float | Observed mutation count in the data. |
 | `tau_squared` | float | Variance component from the hierarchical model. |
 | `naive_delta_fitness` | float | Simple log-ratio fitness: `log((actual + 0.5) / (expected + 0.5))`. |
@@ -123,8 +122,7 @@ Nucleotide-level fitness estimates. Similar structure to amino acid fitness but 
 | `aa_mutation` | string | Amino acid mutation if nonsynonymous (semicolon-separated if multiple). |
 | `synonymous` | boolean | True if mutation is synonymous. |
 | `actual_count` | float | Observed mutation count. |
-| `expected_count` | float | Expected count from synonymous rates (pre-GLM). |
-| `predicted_count` | float | GLM-predicted count incorporating sequence context. |
+| `expected_count` | float | GLM-predicted neutral count (sequence context + RNA structure + position). |
 | `tau_squared` | float | Variance component from GLM. |
 | `f_max` | float | Maximum a posteriori (MAP) fitness estimate. |
 | `left_conf_int` | float | Left 68% credible interval distance from `f_max`. |
@@ -140,7 +138,9 @@ Nucleotide-level fitness estimates. Similar structure to amino acid fitness but 
 
 ### `mutation_counts/aggregated.csv`
 
-Raw mutation counts aggregated across all clades, with annotations.
+Raw mutation counts aggregated across all clades, with annotations. Masking is no longer
+applied here; the `exclude` / `masked_in_usher` flags are computed once, on the full mutation
+grid, in `counts_all.csv` (see below).
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -157,8 +157,33 @@ Raw mutation counts aggregated across all clades, with annotations.
 | `codon_change` | string | Codon change (e.g., "GAT>GGT"). |
 | `reference_nt` | string | Nucleotide in Wuhan-Hu-1 reference. |
 | `clade_founder_nt` | string | Nucleotide in the clade founder sequence. |
-| `exclude` | boolean | True if this mutation should be excluded from fitness analysis. |
 | `mean_log_size` | float | Mean log of subtree sizes for branches with this mutation. |
+
+### `counts_all.csv`
+
+The unified per-clade count table: every possible mutation in every processed clade (the
+zero-`actual_count` rows are what the GLM trains on), with actual counts joined in and the
+masking flags computed once via `workflow/modules/masking.py`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `clade` | string | Clade name. |
+| `nt_site` | integer | 1-indexed genomic position. |
+| `nt_mutation` | string | Nucleotide mutation (e.g., "A23403G"). |
+| `mut_type` | string | Two-letter substitution type (e.g., "CT"). |
+| `exclude` | boolean | True if the mutation is masked for any reason (config sites, ProblematicSites VCF, UShER yaml, out of `site_include_range`, or a ref→founder clade-defining mutation). |
+| `masked_in_usher` | boolean | True if excluded specifically by an artifactual-site mask (UShER yaml or the ProblematicSites VCF). |
+| `actual_count` | integer | Observed mutation count (0 if unobserved). |
+| `synonymous` | boolean | True if the mutation is synonymous. |
+| `noncoding` | boolean | True if the site is non-coding. |
+
+**Notes:**
+- Additional annotation columns (`gene`, `clade_founder_nt`, `clade_founder_codon`,
+  `mutant_codon`, `mutant_aa`, `aa_mutation`, `codon_position`, `codon_site`,
+  `four_fold_degenerate`, `count_terminal`, `count_non_terminal`, `subset`, `mean_log_size`)
+  are present for internal pipeline use.
+- Replaces the former `expected_vs_actual_mut_counts.csv`; there is no `expected_count` here —
+  the neutral expectation is estimated downstream by the GLM.
 
 ## Clade Founder Sequences
 

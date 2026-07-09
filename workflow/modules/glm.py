@@ -211,7 +211,7 @@ class GeneralLinearModel:
         # Check which mutation types are present in the data
         present_mut_types = df["nt_mutation"].apply(lambda x: x[0] + x[-1]).unique()
 
-        predicted_counts = np.zeros(len(df))
+        expected_counts = np.zeros(len(df))
         remaining_variance = np.zeros(len(df))
 
         for mut_type in present_mut_types:
@@ -247,12 +247,12 @@ class GeneralLinearModel:
                     f"This indicates the model was trained with different features or boundaries."
                 )
 
-            predicted_counts[mask_mut_type] = (X @ w).flatten()
+            expected_counts[mask_mut_type] = (X @ w).flatten()
             remaining_variance[mask_mut_type] = self.tau_squared.get(
                 mut_type, 1.0
             )
 
-        df["predicted_count"] = np.exp(predicted_counts) - LOG_COUNT_OFFSET
+        df["expected_count"] = np.exp(expected_counts) - LOG_COUNT_OFFSET
         df["tau_squared"] = remaining_variance
 
     @staticmethod

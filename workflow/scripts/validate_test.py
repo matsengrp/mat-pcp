@@ -263,8 +263,8 @@ def compare_summaries(actual, expected):
                 )
 
             # Check numerical sums with appropriate tolerances
-            # Integer-like sums (expected_count, actual_count) use tight tolerance
-            for key in ['expected_count_sum', 'actual_count_sum']:
+            # Integer-like sums (actual_count) use tight tolerance
+            for key in ['actual_count_sum']:
                 if key in exp_aa and key in act_aa:
                     if not is_close(act_aa[key], exp_aa[key], rel_tol=1e-6):
                         differences.append(
@@ -272,7 +272,7 @@ def compare_summaries(actual, expected):
                             f"got {act_aa[key]}"
                         )
             # Floating-point sums can vary more across platforms, use looser tolerance
-            for key in ['predicted_count_sum', 'delta_fitness_sum']:
+            for key in ['expected_count_sum', 'delta_fitness_sum']:
                 if key in exp_aa and key in act_aa:
                     if not is_close(act_aa[key], exp_aa[key], rel_tol=0.01):
                         differences.append(

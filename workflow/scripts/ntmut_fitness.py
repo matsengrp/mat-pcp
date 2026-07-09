@@ -53,7 +53,7 @@ counts_df = pd.read_csv(counts_csv)
 log(f"Loaded {len(counts_df)} count entries")
 
 # Check required columns
-required_cols = ["actual_count", "predicted_count", "tau_squared"]
+required_cols = ["actual_count", "expected_count", "tau_squared"]
 missing_cols = [col for col in required_cols if col not in counts_df.columns]
 if missing_cols:
     log(f"ERROR: Missing required columns: {missing_cols}")

@@ -18,6 +18,45 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### v3
+
+**Unify the count table, make the GLM the single neutral expectation, and simplify masking**
+— tracks issue [#101](https://github.com/matsengrp/mat-pcp/issues/101).
+
+**Changes**:
+
+- **Single unified count table** (`build_count_table`, `workflow/scripts/build_count_table.py`):
+  - New `counts_all.csv` replaces `expected_vs_actual_mut_counts.csv`. It enumerates the full
+    grid of all possible mutations per clade (supplying the zero-`actual_count` rows the GLM
+    trains on), joins the aggregated actual counts, and computes `exclude` / `masked_in_usher`
+    **once**.
+  - Removed rules/scripts: `synonymous_mut_rates`, `expected_mut_counts`,
+    `merge_expected_and_actual_counts`, `aggregate_mutations_to_exclude`. Removed intermediates:
+    `synonymous_mut_rates/rates_by_clade.csv`, `expected_mut_counts/expected_counts.csv`,
+    `mutations_to_exclude.csv`, `expected_vs_actual_mut_counts.csv`.
+
+- **Masking computed once** (`workflow/modules/masking.py`):
+  - `count_mutations.py` no longer computes masking; `mutation_counts/{clade}.csv` and
+    `mutation_counts/aggregated.csv` **lose the `exclude` column** (raw counts only).
+  - `exclude` / `masked_in_usher` are computed in `build_count_table` via
+    `masking.compute_exclusions`, from `sites_to_exclude`, the ProblematicSites VCF, the UShER
+    yaml `sites`, `site_include_range`, and per-clade ref→founder mutations.
+  - **ref→founder mutations are now excluded from GLM training** (previously they were excluded
+    only from the synonymous-rate estimation). The `exclude_ref_to_founder_muts` config key is
+    removed (ref→founder exclusion is now unconditional).
+
+- **The GLM is the single neutral-expectation estimator**:
+  - The synonymous 4-fold `expected_count` is gone. The GLM output column `predicted_count` is
+    **renamed `expected_count`** everywhere, and is used as the neutral baseline for **both** the
+    pseudocount (`naive_delta_fitness`) and the Bayesian (`delta_fitness`) estimators.
+  - Fitness outputs (`fitness/*`, `aamut_fitness/*`) carry `expected_count` in place of
+    `predicted_count`; the separate synonymous `expected_count` column no longer exists.
+  - The `synonymous_spectra_min_counts` config key is removed.
+
+- **Behavior:** `naive_delta_fitness` now compares actual counts against the GLM expectation
+  (previously the synonymous-rate expectation); `delta_fitness` shifts slightly because
+  ref→founder mutations are now excluded from GLM training.
+
 ### v2
 
 **Bundled v2 cut** — tracks issues [#75](https://github.com/matsengrp/mat-pcp/issues/75), [#76](https://github.com/matsengrp/mat-pcp/issues/76), and [#80](https://github.com/matsengrp/mat-pcp/issues/80). [#81](https://github.com/matsengrp/mat-pcp/issues/81) ships the first three production runs against this version.

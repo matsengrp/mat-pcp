@@ -70,7 +70,7 @@ curated = counts_df[
 log(f"After filtering: {len(curated)} entries")
 
 # Define columns to aggregate and columns to group by
-sum_cols = ["expected_count", "actual_count", "count_terminal", "count_non_terminal"]
+sum_cols = ["actual_count", "count_terminal", "count_non_terminal"]
 sum_cols = [col for col in sum_cols if col in curated.columns]
 
 # Columns to not include in groupby (will be aggregated or dropped)
