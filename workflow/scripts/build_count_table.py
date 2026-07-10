@@ -25,7 +25,6 @@ import pandas as pd
 # Snakemake inputs / params
 actual_csv = snakemake.input.actual
 clade_founder_nts_csv = snakemake.input.clade_founder_nts_csv
-ref_to_founder_muts_csvs = snakemake.input.ref_to_founder_muts
 site_mask_csv = snakemake.input.site_mask
 usher_masked_sites_yaml = snakemake.input.usher_masked_sites
 output_csv = snakemake.output.csv
@@ -227,20 +226,12 @@ log(f"Joined actual counts: {len(grid)} rows, {(grid['actual_count'] > 0).sum()}
 vcf_masked_sites = pd.read_csv(site_mask_csv)["site"].tolist()
 usher_clade_sites = masking.load_usher_masked_sites(usher_masked_sites_yaml)
 
-ref_to_founder_muts = {}
-for path in ref_to_founder_muts_csvs:
-    clade = os.path.basename(path).replace("_ref_to_founder_muts.csv", "")
-    muts = pd.read_csv(path)
-    ref_to_founder_muts[clade] = set(muts["mutation"]) if "mutation" in muts.columns else set()
-log(f"Loaded ref->founder mutations for {len(ref_to_founder_muts)} clades")
-
 exclude, masked_in_usher = masking.compute_exclusions(
     grid,
     sites_to_exclude=sites_to_exclude,
     vcf_masked_sites=vcf_masked_sites,
     usher_clade_sites=usher_clade_sites,
     site_include_range=site_include_range,
-    ref_to_founder_muts=ref_to_founder_muts,
 )
 grid["exclude"] = exclude
 grid["masked_in_usher"] = masked_in_usher

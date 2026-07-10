@@ -113,7 +113,7 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 | `glm/master_table.csv` | Full GLM rate table with light-switch boundaries |
 | `rates_table.csv` | Neutral mutation rates by context |
 | `spike_codon_sites_to_mask.txt` | Problematic codon sites in target gene |
-| `fitness/predicted_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
+| `fitness/expected_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
 | `aamut_fitness/all_aamut_fitness.csv` | Amino acid-level fitness estimates |
 | `validation/pcp_vs_counts_report.txt` | PCP vs counts validation report |
@@ -454,7 +454,7 @@ results/
 │   ├── curated_counts.csv         # Curated counts for GLM
 │   └── master_table.csv           # Full GLM rate predictions
 ├── fitness/
-│   ├── predicted_counts_by_clade.csv    # GLM-expected counts (expected_count)
+│   ├── expected_counts_by_clade.csv     # GLM-expected counts (expected_count)
 │   ├── ntmut_counts/              # Per-clade nucleotide counts
 │   ├── ntmut_fitness/             # Per-clade nucleotide fitness
 │   └── ntmut_fitness_aggregated.csv     # Aggregated NT fitness

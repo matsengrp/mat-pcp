@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Add GLM-predicted counts to mutation counts for each clade.
+"""Add GLM-expected counts to mutation counts for each clade.
 
 Synchronized with SARS2-mut-fitness-v2 approach:
 1. Train GLM on curated training data with L2 regularization
 2. For each clade, compute clade-specific normalization factor T
-3. Apply normalized predictions to all mutations in the clade
+3. Apply normalized expectations to all mutations in the clade
 """
 
 import sys
@@ -45,7 +45,7 @@ def load_workflow_module(module_name, workflow_dir=None):
     return module
 
 
-log("Adding GLM-predicted counts to mutation counts (v2-synchronized)")
+log("Adding GLM-expected counts to mutation counts (v2-synchronized)")
 
 # Determine workflow directory
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -75,7 +75,7 @@ if missing_cols:
 clades = counts_df["clade"].unique()
 log(f"Processing {len(clades)} clades: {list(clades)}")
 
-# Use the v2-synchronized add_predicted_count function
+# Use the v2-synchronized add_expected_count function
 # This applies clade-specific normalization factor T
 rates_module.add_expected_count(
     train_df=counts_curated,
@@ -84,9 +84,9 @@ rates_module.add_expected_count(
     lightswitch_boundaries=lightswitch_boundaries,
 )
 
-log(f"Added predicted counts and tau_squared to {len(counts_df)} entries")
+log(f"Added expected counts and tau_squared to {len(counts_df)} entries")
 log(
-    f"Predicted count range: {counts_df['expected_count'].min():.2f} - "
+    f"Expected count range: {counts_df['expected_count'].min():.2f} - "
     f"{counts_df['expected_count'].max():.2f}"
 )
 log(

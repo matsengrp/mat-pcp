@@ -1,5 +1,5 @@
 {
-  "_comment": "Expected results with config_test_data.yaml (max_clades=3, subset_frac=0.1). PCPs are curated to remove identical sequences and those with stop codons. Updated for coding-only quality filtering (issue #58): more branches pass filters (8 PCPs vs 5 previously) since noncoding mutations are excluded from quality criteria. Updated for decoupled PCP filtering (issue #59): mutation counting now includes all branches regardless of PCP-specific filters, resulting in more mutations counted (actual_count_sum increased from 32 to 100). Updated paths: PCPs now in pcps/ directory, test data in data/test_data/.",
+  "_comment": "Expected results with config_test_data.yaml (max_clades=3, subset_frac=0.1). Regenerated for v3 (issue #101): single unified count table (counts_all.csv), GLM as the sole neutral expectation with column predicted_count renamed expected_count, and masking computed once. The fitness table no longer has a predicted_count column; expected_count_sum now holds the GLM value (formerly predicted_count_sum). Paths are written unversioned; validate_test.py normalizes the version prefix.",
   "results_directory": "results/test_data",
   "files": {
     "results/test_data/pcps/all_pcps.csv": {
@@ -18,7 +18,7 @@
       "exists": true,
       "size": 67415,
       "lines": null,
-      "checksum": "60767be43b023fc1ce7a093aff42132c"
+      "checksum": "2fed0a458c1a03bb5f53dcc352f682cd"
     },
     "results/test_data/mat/filtered_tree_raw.pb": {
       "exists": true,
@@ -71,19 +71,8 @@
       "TG"
     ],
     "num_motifs": 64,
-    "rate_sum": 233.59591019539877,
-    "checksum": "684414f26013cf9e41cb4f217d974f5b"
-  },
-  "spike_founders_summary": {
-    "num_files": 3,
-    "files": [
-      "19A.fa",
-      "19B.fa",
-      "20A.fa"
-    ],
-    "checksums": {
-      "19A": "b948f2a1f20edbce64cfff1dc540c119"
-    }
+    "rate_sum": 233.59591018968132,
+    "checksum": "357d681e21554afb637e41e3cf1d17c8"
   },
   "clade_founder_nts_summary": {
     "num_rows": 89709,
@@ -104,6 +93,19 @@
     ],
     "num_sites": 29903,
     "checksum": "60641a61a449e4ac087421477e27472f"
+  },
+  "spike_founders_summary": {
+    "num_files": 3,
+    "files": [
+      "19A.fa",
+      "19B.fa",
+      "20A.fa"
+    ],
+    "checksums": {
+      "19A": "b948f2a1f20edbce64cfff1dc540c119",
+      "19B": "66aff5f45e21d8259b2548f2d37bf34a",
+      "20A": "7a7376c7dbdf9ff5dcfc85cee72d8953"
+    }
   },
   "dasm_ready_pcps_summary": {
     "aggregate": {
@@ -143,7 +145,6 @@
       "aa_mutation",
       "subset_of_ORF1ab",
       "expected_count",
-      "predicted_count",
       "actual_count",
       "tau_squared",
       "source_clade",
@@ -157,11 +158,10 @@
       "20A_aamut_fitness.csv"
     ],
     "num_clade_files": 3,
-    "expected_count_sum": 0.0,
+    "expected_count_sum": 166.09129186430397,
     "actual_count_sum": 100.0,
-    "predicted_count_sum": 166.0912918579196,
-    "delta_fitness_sum": -2410.878026250248,
-    "checksum": "1754f0af9a154ffa94ac658d646e52ff"
+    "delta_fitness_sum": -2414.2130335453235,
+    "checksum": "a115b7b9099eac530a3035aede9da7b6"
   },
   "num_clade_sample_files": 3,
   "empty_clade_files": []

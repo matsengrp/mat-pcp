@@ -40,10 +40,11 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
     `mutation_counts/aggregated.csv` **lose the `exclude` column** (raw counts only).
   - `exclude` / `masked_in_usher` are computed in `build_count_table` via
     `masking.compute_exclusions`, from `sites_to_exclude`, the ProblematicSites VCF, the UShER
-    yaml `sites`, `site_include_range`, and per-clade ref→founder mutations.
-  - **ref→founder mutations are now excluded from GLM training** (previously they were excluded
-    only from the synonymous-rate estimation). The `exclude_ref_to_founder_muts` config key is
-    removed (ref→founder exclusion is now unconditional).
+    yaml `sites`, and `site_include_range`.
+  - The `exclude_ref_to_founder_muts` config key is removed. The count grid enumerates only
+    mutations *away from the clade founder* (`nt_mutation` = founder_nt + site + to_nt), so
+    clade-defining ref→founder mutations (`ref_nt` + site + founder_nt) can never appear in it
+    and need no explicit exclusion — including in the GLM training set.
 
 - **The GLM is the single neutral-expectation estimator**:
   - The synonymous 4-fold `expected_count` is gone. The GLM output column `predicted_count` is
@@ -51,6 +52,8 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
     pseudocount (`naive_delta_fitness`) and the Bayesian (`delta_fitness`) estimators.
   - Fitness outputs (`fitness/*`, `aamut_fitness/*`) carry `expected_count` in place of
     `predicted_count`; the separate synonymous `expected_count` column no longer exists.
+  - The `predicted_counts_by_clade` rule and its output `fitness/predicted_counts_by_clade.csv`
+    are renamed to `expected_counts_by_clade` / `fitness/expected_counts_by_clade.csv`.
   - The `synonymous_spectra_min_counts` config key is removed.
 
 - **Behavior:** `naive_delta_fitness` now compares actual counts against the GLM expectation

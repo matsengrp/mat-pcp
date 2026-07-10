@@ -81,7 +81,7 @@ rate.rates["cond_count"] = rate.genome_composition(counts)
 
 # Calculate predicted counts for training data and add to counts
 log("Computing predicted counts...")
-counts["expected_count"] = rate.predicted_counts_by_clade(counts)
+counts["expected_count"] = rate.expected_counts_by_clade(counts)
 
 # Calculate residual variance (tau) per mutation type
 log("Computing residual variance...")

@@ -11,10 +11,14 @@ drift. This module centralizes it. It is applied exactly once, in
   * ``vcf_masked_sites``    -- ProblematicSites VCF sites      -> exclude + masked_in_usher
   * ``usher_clade_sites``   -- {clade: set(sites)} from yaml   -> exclude + masked_in_usher
   * ``site_include_range``  -- {start, end}; outside range     -> exclude
-  * ``ref_to_founder_muts`` -- {clade: set(nt_mutation)}       -> exclude (mutation level)
 
 ``exclude`` is the union of all reasons; ``masked_in_usher`` flags the
 artifactual-site masks (VCF + UShER yaml sites) only.
+
+Exclusion is applied to the full mutation grid, which enumerates only mutations
+*away from the clade founder* (``nt_mutation`` = founder_nt + site + to_nt).
+Clade-defining ref->founder mutations (``ref_nt`` + site + ``founder_nt``) can
+therefore never appear in the grid, so they need no explicit exclusion here.
 """
 
 import pandas as pd
@@ -26,8 +30,8 @@ def load_usher_masked_sites(path):
 
     A block applies to a clade iff the clade is listed in the block's
     ``clades``. Only the site-level ``sites`` masks are read here. (The optional
-    per-clade ``mutations`` list added on the UShER-mask branch is folded into
-    ``ref_to_founder_muts``-style mutation exclusion by the caller when present.)
+    per-clade ``mutations`` list added on the UShER-mask branch is a mutation-level
+    exclusion that the caller folds in when present.)
     """
     with open(path) as f:
         spec = yaml.safe_load(f) or {}
@@ -46,16 +50,14 @@ def compute_exclusions(
     vcf_masked_sites,
     usher_clade_sites,
     site_include_range,
-    ref_to_founder_muts,
 ):
     """Return ``(exclude, masked_in_usher)`` boolean Series aligned to ``df``.
 
-    ``df`` must have columns ``clade``, ``nt_site`` (int-coercible), and
-    ``nt_mutation`` (str). See the module docstring for the source semantics.
+    ``df`` must have columns ``clade`` and ``nt_site`` (int-coercible). See the
+    module docstring for the source semantics.
     """
     site = df["nt_site"].astype(int)
     clade = df["clade"]
-    mut = df["nt_mutation"]
 
     config_sites = {int(s) for s in (sites_to_exclude or [])}
     vcf_sites = {int(s) for s in (vcf_masked_sites or [])}
@@ -69,18 +71,12 @@ def compute_exclusions(
     ]
     in_usher = pd.MultiIndex.from_arrays([clade, site]).isin(usher_pairs)
 
-    # Per-(clade, mutation) membership in the ref->founder set.
-    rf_pairs = [
-        (c, m) for c, muts in ref_to_founder_muts.items() for m in muts
-    ]
-    in_ref_founder = pd.MultiIndex.from_arrays([clade, mut]).isin(rf_pairs)
-
     in_vcf = site.isin(vcf_sites).to_numpy()
     in_config = site.isin(config_sites).to_numpy()
     out_of_range = ((site < start) | (site > end)).to_numpy()
 
     masked_in_usher = in_vcf | in_usher
-    exclude = out_of_range | in_config | masked_in_usher | in_ref_founder
+    exclude = out_of_range | in_config | masked_in_usher
 
     return (
         pd.Series(exclude, index=df.index),
