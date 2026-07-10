@@ -301,7 +301,62 @@ def _load_masking_module():
     return module
 
 
-def validate_usher_mutation_masking(yaml_path="data/usher_masked_sites.yaml"):
+def _load_founder_base_fn(output_dir):
+    """Build ``founder_nt(clade, site)`` from the run's reference + founders.
+
+    Founder base = the reference nt at the site, overridden by the clade's own
+    nucleotide substitutions (Neher primary, Roemer fallback) -- mirroring
+    ``clade_founder_fasta.py``. Reads the FASTA by hand so no biopython dep is
+    needed. Returns ``None`` if the required run outputs aren't present, and the
+    lookup returns ``None`` for clades absent from both founder sources.
+    """
+    ref_path = os.path.join(output_dir, "ref", "ref.fa")
+    neher_path = os.path.join(output_dir, "clade_founders", "clade_founders_neher.json")
+    roemer_path = os.path.join(output_dir, "clade_founders", "clade_founders_roemer.json")
+    if not (os.path.exists(ref_path) and os.path.exists(neher_path)):
+        return None
+
+    seq = []
+    with open(ref_path) as f:
+        for line in f:
+            if not line.startswith(">"):
+                seq.append(line.strip())
+    ref = "".join(seq)
+
+    with open(neher_path) as f:
+        neher = json.load(f)
+    roemer = {}
+    if os.path.exists(roemer_path):
+        with open(roemer_path) as f:
+            roemer = json.load(f)
+
+    def clade_subs(clade):
+        info = neher.get(clade)
+        if info is not None:
+            return info.get("nuc") or info.get("mutations") or info.get("nuc_mutations") or []
+        info = roemer.get(clade)
+        if info is not None:
+            return info.get("nucSubstitutions") or info.get("substitutions") or []
+        return None
+
+    def founder_nt(clade, site):
+        subs = clade_subs(clade)
+        if subs is None or site < 1 or site > len(ref):
+            return None
+        base = ref[site - 1]
+        for mut in subs:
+            try:
+                pos = int(mut[1:-1])
+            except (ValueError, IndexError):
+                continue
+            if pos == site:
+                base = mut[-1]
+        return base
+
+    return founder_nt
+
+
+def validate_usher_mutation_masking(output_dir, yaml_path="data/usher_masked_sites.yaml"):
     """Validate per-clade mutation masking in ``masking.compute_exclusions``.
 
     The pipeline's test clades (19A/19B/20A) carry no per-clade ``mutations:``
@@ -316,6 +371,14 @@ def validate_usher_mutation_masking(yaml_path="data/usher_masked_sites.yaml"):
       * masked at the mutation level, not the whole site: a *different*
         destination base at the same site, in the same clade, must stay
         unmasked (proves the mask is directional).
+
+    The witness is chosen so the reversion is a genuine founder-relative grid
+    row in *both* clades -- i.e. each clade's founder base at the site equals
+    the mutation's "from" base -- so it is a real, countable mutation excluded
+    in one clade but not the other, not merely a synthetic row. This requires
+    the run's reference + founder outputs under ``output_dir``; when they are
+    unavailable the check falls back to a weaker rule-level witness (any clade
+    that masks neither the mutation nor its site) and says so in the summary.
 
     Returns ``(differences, summary)`` where ``summary`` describes the witness
     when the check passes (``None`` on failure / when unverifiable).
@@ -341,30 +404,40 @@ def validate_usher_mutation_masking(yaml_path="data/usher_masked_sites.yaml"):
     def site_of(mut):
         return int(mut[1:-1])
 
-    # Find a witness (clade_A, mutation) masked at the mutation level only
-    # (its site is NOT in clade_A's site masks), plus a clade_B that masks
-    # neither the mutation nor its site. Deterministic (sorted) for stability.
+    founder_nt = _load_founder_base_fn(output_dir)
     all_clades = sorted(set(sites) | set(muts))
-    witness = None
-    for ca in sorted(muts):
-        for mut in sorted(muts[ca]):
-            s = site_of(mut)
-            if s in sites.get(ca, set()):
-                continue
-            for cb in all_clades:
-                if cb == ca or mut in muts.get(cb, set()) or s in sites.get(cb, set()):
+
+    def find_witness(require_founder_valid):
+        """First (clade_A, mut, site, clade_B), sorted for stability.
+
+        clade_A lists the mutation but not its site; clade_B masks neither the
+        mutation nor its site. When ``require_founder_valid``, both clades'
+        founder base at the site must equal the mutation's "from" base, so the
+        reversion is a real founder-relative grid row in each.
+        """
+        for ca in sorted(muts):
+            for mut in sorted(muts[ca]):
+                s = site_of(mut)
+                frm = mut[0]
+                if s in sites.get(ca, set()):
                     continue
-                witness = (ca, mut, s, cb)
-                break
-            if witness:
-                break
-        if witness:
-            break
+                if require_founder_valid and founder_nt(ca, s) != frm:
+                    continue
+                for cb in all_clades:
+                    if cb == ca or mut in muts.get(cb, set()) or s in sites.get(cb, set()):
+                        continue
+                    if require_founder_valid and founder_nt(cb, s) != frm:
+                        continue
+                    return (ca, mut, s, cb)
+        return None
+
+    founder_valid = founder_nt is not None and find_witness(True) is not None
+    witness = find_witness(True) if founder_valid else find_witness(False)
 
     if witness is None:
         return (
-            ["Could not find a site-independent, clade-specific mutation-mask "
-             "witness; mutation masking left unverified"],
+            ["Could not find a clade-specific mutation-mask witness; "
+             "mutation masking left unverified"],
             None,
         )
 
@@ -423,7 +496,14 @@ def validate_usher_mutation_masking(yaml_path="data/usher_masked_sites.yaml"):
             f"(exclude={exclude[2]}, masked_in_usher={masked[2]})"
         )
 
-    summary = None if differences else f"{mut} masked in {ca}, not in {cb}"
+    if differences:
+        summary = None
+    else:
+        qualifier = (
+            "founder-valid grid row in both" if founder_valid
+            else "rule-level; founder data unavailable"
+        )
+        summary = f"{mut} masked in {ca}, not in {cb} ({qualifier})"
     return differences, summary
 
 
@@ -486,7 +566,7 @@ def main():
 
     # Independently validate per-clade UShER mutation masking against the
     # committed yaml (the test clades carry no `mutations:` masks).
-    mut_mask_diffs, mut_mask_summary = validate_usher_mutation_masking()
+    mut_mask_diffs, mut_mask_summary = validate_usher_mutation_masking(output_dir)
     differences += mut_mask_diffs
 
     if differences:
