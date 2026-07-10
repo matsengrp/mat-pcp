@@ -171,8 +171,8 @@ masking flags computed once via `workflow/modules/masking.py`.
 | `nt_site` | integer | 1-indexed genomic position. |
 | `nt_mutation` | string | Nucleotide mutation (e.g., "A23403G"). |
 | `mut_type` | string | Two-letter substitution type (e.g., "CT"). |
-| `exclude` | boolean | True if the mutation is masked for any reason (config sites, ProblematicSites VCF, UShER yaml, or out of `site_include_range`). |
-| `masked_in_usher` | boolean | True if excluded specifically by an artifactual-site mask (UShER yaml or the ProblematicSites VCF). |
+| `exclude` | boolean | True if the mutation is masked for any reason: config `sites_to_exclude`, the ProblematicSites VCF, the UShER yaml (per-clade site or mutation masks), a founder→reference reversion (destination base equals the reference base), or out of `site_include_range`. |
+| `masked_in_usher` | boolean | True if excluded specifically by an artifactual-site mask (UShER yaml or the ProblematicSites VCF). Founder→reference reversions set `exclude` but not this flag. |
 | `actual_count` | integer | Observed mutation count (0 if unobserved). |
 | `synonymous` | boolean | True if the mutation is synonymous. |
 | `noncoding` | boolean | True if the site is non-coding. |

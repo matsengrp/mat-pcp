@@ -925,6 +925,7 @@ rule build_count_table:
     input:
         actual=rules.aggregate_mutation_counts.output.csv,
         clade_founder_nts_csv=rules.clade_founder_nts.output.csv,
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta,
         site_mask=rules.get_site_mask.output.csv,
         usher_masked_sites=config["usher_masked_sites"]
     output:
@@ -973,8 +974,6 @@ rule curate_counts:
         clade_founder=rules.annotate_counts.output.founder_csv
     output:
         curated=os.path.join(config["output_dir"], "glm/curated_counts.csv")
-    params:
-        additional_sites_to_ignore=config.get("additional_sites_to_ignore", [])
     log:
         os.path.join(config["output_dir"], "log/curate_counts.log")
     conda:
@@ -1032,8 +1031,7 @@ rule get_problematic_sites:
     output:
         sites_to_mask=os.path.join(config["output_dir"], SPIKE_MASK_FILENAME)
     params:
-        masking_gene=config.get("masking_gene", "S"),
-        additional_sites_to_ignore=config.get("additional_sites_to_ignore", [])
+        masking_gene=config.get("masking_gene", "S")
     log:
         os.path.join(config["output_dir"], "log/get_problematic_sites.log")
     conda:

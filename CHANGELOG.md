@@ -18,6 +18,44 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### v4
+
+**Overhaul UShER masking, mask all founder→reference reversions, and make the codon mask
+clade-agnostic** — tracks issues [#99](https://github.com/matsengrp/mat-pcp/issues/99) /
+[#100](https://github.com/matsengrp/mat-pcp/pull/100) and
+[#103](https://github.com/matsengrp/mat-pcp/issues/103).
+
+**Changes**:
+
+- **New UShER mask source**: `data/usher_masked_sites.yaml` is now the generated,
+  Nextstrain-clade-keyed file produced by the standalone
+  [`s2-clade-mask`](https://github.com/matsengrp/s2-clade-mask) repository (from the UCSC
+  branch-specific mask), replacing the hand-maintained file. Each block carries whole-site
+  `sites` masks and an optional per-clade `mutations` list of directional reversions;
+  `masking.compute_exclusions` consumes both (site masks and mutation masks set
+  `exclude` + `masked_in_usher`).
+
+- **Mask all founder→reference reversions**: any count-grid mutation whose destination base
+  equals the reference base at that site (`to_nt == reference_nt`) — i.e. a clade-defining
+  base reverting to the reference — is now excluded (`exclude = True`, but **not**
+  `masked_in_usher`). `build_count_table` gains the reference FASTA as an input to supply the
+  per-site reference base. This is unconditional (no config toggle). The GLM is unaffected
+  (these sites are clade-defining, hence non-conserved, and were never in GLM training).
+
+- **Clade-agnostic codon mask**: `get_problematic_sites` now emits a codon site in
+  `spike_codon_sites_to_mask.txt` only if it is excluded **across all clades** (every row at
+  the `nt_site` has `exclude == True`). This keeps clade-independent masks
+  (`site_include_range`, `sites_to_exclude`, ProblematicSites VCF) and drops clade-specific
+  ones (UShER per-clade masks and founder→reference reversions), which should not
+  clade-specifically mask the target gene.
+
+- **Config consolidation**: `additional_sites_to_ignore` is removed; its sites are merged into
+  `sites_to_exclude` (de-duplicated), so all globally-excluded sites follow one downstream
+  path (`exclude = True`). Original upstream comments from `jbloomlab/SARS2-mut-fitness` are
+  restored on `sites_to_exclude`. The merged sites now show `exclude = True` in
+  `counts_all.csv` (previously absent from that flag). GLM training set and the codon mask are
+  otherwise unchanged.
+
 ### v3
 
 **Unify the count table, make the GLM the single neutral expectation, and simplify masking**

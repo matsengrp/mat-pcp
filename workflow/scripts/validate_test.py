@@ -467,6 +467,9 @@ def validate_usher_mutation_masking(output_dir, yaml_path="data/usher_masked_sit
         rows["nt_mutation"].append(other_mut)
 
     df = pd.DataFrame(rows)
+    # reference_nt="N" disables the (separately-tested) founder->reference
+    # reversion path so this check isolates the UShER mutation-mask mechanism.
+    df["reference_nt"] = "N"
     exclude, masked = masking.compute_exclusions(
         df,
         sites_to_exclude=[],
@@ -577,6 +580,9 @@ def validate_usher_site_masking(yaml_path="data/usher_masked_sites.yaml"):
     df = pd.DataFrame(
         {"clade": [ca, cb], "nt_site": [site, site], "nt_mutation": [mut, mut]}
     )
+    # reference_nt="N" disables the founder->reference reversion path so this
+    # check isolates the whole-site UShER mask mechanism.
+    df["reference_nt"] = "N"
     exclude, masked = masking.compute_exclusions(
         df,
         sites_to_exclude=[],
@@ -601,6 +607,115 @@ def validate_usher_site_masking(yaml_path="data/usher_masked_sites.yaml"):
         )
 
     summary = None if differences else f"site {site} masked in {ca}, not in {cb}"
+    return differences, summary
+
+
+def _read_reference(output_dir):
+    """Read the run's reference FASTA (single record) as a plain string."""
+    ref_path = os.path.join(output_dir, "ref", "ref.fa")
+    if not os.path.exists(ref_path):
+        return None
+    seq = []
+    with open(ref_path) as f:
+        for line in f:
+            if not line.startswith(">"):
+                seq.append(line.strip())
+    return "".join(seq)
+
+
+def validate_reversion_masking(output_dir):
+    """Every founder->reference reversion in counts_all.csv must be excluded.
+
+    A reversion is a grid row whose destination base equals the reference base
+    at that site (``nt_mutation[-1] == reference_nt``). Checked against the real
+    ``counts_all.csv`` (the test clades DO have clade-defining sites, e.g. 20A,
+    so reversions are present). Also guards against vacuity (not every row is
+    excluded, and reversions actually exist).
+    """
+    import pandas as pd
+
+    counts_path = os.path.join(output_dir, "counts_all.csv")
+    if not os.path.exists(counts_path):
+        return [f"counts_all.csv not found under {output_dir}"], None
+    ref = _read_reference(output_dir)
+    if ref is None:
+        return [f"ref/ref.fa not found under {output_dir}"], None
+
+    df = pd.read_csv(counts_path)
+    ref_nt = df["nt_site"].map(lambda s: ref[int(s) - 1])
+    is_reversion = df["nt_mutation"].str[-1] == ref_nt
+    n_rev = int(is_reversion.sum())
+    if n_rev == 0:
+        return ["no founder->reference reversion rows in counts_all.csv; "
+                "reversion masking unverified"], None
+
+    excluded = df["exclude"] == True  # noqa: E712
+    leaked = df[is_reversion & ~excluded]
+    differences = []
+    if len(leaked):
+        ex = leaked.iloc[0]
+        differences.append(
+            f"reversion masking: {len(leaked)} founder->reference reversion "
+            f"row(s) are not excluded (e.g. clade {ex['clade']} {ex['nt_mutation']})"
+        )
+    if bool(excluded.all()):
+        differences.append("reversion check is vacuous: every counts_all.csv row is excluded")
+
+    summary = None if differences else (
+        f"{n_rev} founder->reference reversion rows, all exclude=True"
+    )
+    return differences, summary
+
+
+def _parse_codon_sites(series):
+    """Flatten a codon_site column (handles ';'-joined and float values)."""
+    out = set()
+    for site in series.unique():
+        if site is None:
+            continue
+        s = str(site)
+        for part in s.split(";"):
+            part = part.strip()
+            if part.replace(".", "").replace("-", "").isdigit():
+                out.add(int(float(part)))
+    return out
+
+
+def validate_spike_mask_all_clades(output_dir, masking_gene="S"):
+    """The spike codon mask must equal the codon sites excluded in ALL clades.
+
+    Re-derives the expected mask from counts_all.csv using the all-clades rule
+    (a nt_site qualifies iff every row at it has exclude==True) restricted to the
+    masking gene, and asserts the emitted ``spike_codon_sites_to_mask.txt`` matches.
+    This pins the clade-agnostic behavior: a regression to per-clade masking would
+    add clade-specific codon sites and fail here.
+    """
+    import pandas as pd
+
+    counts_path = os.path.join(output_dir, "counts_all.csv")
+    mask_path = os.path.join(output_dir, "spike_codon_sites_to_mask.txt")
+    if not os.path.exists(counts_path):
+        return [f"counts_all.csv not found under {output_dir}"], None
+    if not os.path.exists(mask_path):
+        return [f"spike_codon_sites_to_mask.txt not found under {output_dir}"], None
+
+    df = pd.read_csv(counts_path)
+    site_all_excluded = (df["exclude"] == True).groupby(df["nt_site"]).transform("all")  # noqa: E712
+    in_gene = df["gene"].astype(str).str.contains(masking_gene, na=False)
+    expected = _parse_codon_sites(df[site_all_excluded & in_gene]["codon_site"])
+
+    with open(mask_path) as f:
+        emitted = {int(x) for x in f.read().split() if x.strip().lstrip("-").isdigit()}
+
+    differences = []
+    if emitted != expected:
+        differences.append(
+            f"spike mask mismatch: emitted-only={sorted(emitted - expected)[:10]}, "
+            f"expected-only={sorted(expected - emitted)[:10]}"
+        )
+    summary = None if differences else (
+        f"{len(emitted)} codon sites, all excluded across every clade"
+    )
     return differences, summary
 
 
@@ -667,7 +782,9 @@ def main():
     # another.
     site_mask_diffs, site_mask_summary = validate_usher_site_masking()
     mut_mask_diffs, mut_mask_summary = validate_usher_mutation_masking(output_dir)
-    differences += site_mask_diffs + mut_mask_diffs
+    reversion_diffs, reversion_summary = validate_reversion_masking(output_dir)
+    spike_mask_diffs, spike_mask_summary = validate_spike_mask_all_clades(output_dir)
+    differences += site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
 
     if differences:
         print("VALIDATION FAILED!")
@@ -693,6 +810,10 @@ def main():
             print(f"  - UShER per-clade site mask: {site_mask_summary}")
         if mut_mask_summary:
             print(f"  - UShER per-clade mutation mask: {mut_mask_summary}")
+        if reversion_summary:
+            print(f"  - Founder->reference reversions: {reversion_summary}")
+        if spike_mask_summary:
+            print(f"  - Spike codon mask (all-clades): {spike_mask_summary}")
         sys.exit(0)
 
 

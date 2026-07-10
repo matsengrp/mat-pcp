@@ -7,7 +7,6 @@ import pandas as pd
 expected_vs_actual_csv = snakemake.input.expected_vs_actual
 output_file = snakemake.output.sites_to_mask
 masking_gene = snakemake.params.get("masking_gene", "S")
-additional_sites_to_ignore = snakemake.params.get("additional_sites_to_ignore", [])
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -25,36 +24,26 @@ log(f"Identifying problematic codon sites in gene: {masking_gene}")
 expected_v_actual = pd.read_csv(expected_vs_actual_csv)
 log(f"Loaded {len(expected_v_actual)} count entries")
 
-# Find problematic codon sites:
-# - Sites marked as exclude
-# - Sites masked in UShER
-# - Sites in the additional ignore list
+# Find problematic codon sites to mask in the target gene.
+#
+# A codon site is masked only if it is excluded across ALL clades -- i.e. every
+# row at that ``nt_site`` has ``exclude == True``. This keeps the
+# clade-independent masks (out of ``site_include_range``, config
+# ``sites_to_exclude``, and ProblematicSites VCF sites -- each of which sets
+# ``exclude`` on every row at the site) and drops the clade-specific ones (UShER
+# per-clade ``sites``/``mutations`` masks and founder->reference reversions),
+# which should not clade-specifically mask positions of the target gene.
+if "exclude" not in expected_v_actual.columns:
+    raise KeyError("counts table is missing the required 'exclude' column")
 
-# Build filter conditions
-conditions = []
+excluded = expected_v_actual["exclude"] == True  # noqa: E712
+site_all_excluded = excluded.groupby(expected_v_actual["nt_site"]).transform("all")
 
+mask = site_all_excluded
 if "gene" in expected_v_actual.columns:
-    conditions.append(expected_v_actual["gene"].str.contains(masking_gene, na=False))
+    mask = mask & expected_v_actual["gene"].str.contains(masking_gene, na=False)
 
-# Get sites that should be masked
-mask = conditions[0] if conditions else pd.Series([True] * len(expected_v_actual))
-
-if "exclude" in expected_v_actual.columns:
-    mask_exclude = mask & (
-        (expected_v_actual["exclude"] == True)  # noqa: E712
-        | (expected_v_actual.get("masked_in_usher", pd.Series([False] * len(expected_v_actual))) == True)  # noqa
-    )
-elif "masked_in_usher" in expected_v_actual.columns:
-    mask_exclude = mask & (expected_v_actual["masked_in_usher"] == True)  # noqa
-else:
-    mask_exclude = pd.Series([False] * len(expected_v_actual))
-
-# Also include additional sites to ignore
-if additional_sites_to_ignore and "nt_site" in expected_v_actual.columns:
-    mask_additional = mask & expected_v_actual["nt_site"].isin(additional_sites_to_ignore)
-    mask_exclude = mask_exclude | mask_additional
-
-problematic_sites = expected_v_actual[mask_exclude]
+problematic_sites = expected_v_actual[mask]
 
 # Get unique codon sites
 codon_sites = []

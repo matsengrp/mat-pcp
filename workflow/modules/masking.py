@@ -5,22 +5,30 @@ and ``aggregate_mutations_to_exclude.py``), which duplicated the logic and could
 drift. This module centralizes it. It is applied exactly once, in
 ``build_count_table.py``, against the full mutation grid.
 
-``compute_exclusions`` mirrors the union of the two former implementations:
+``compute_exclusions`` applies every masking reason in one place:
 
   * ``sites_to_exclude``      -- global config sites             -> exclude
   * ``vcf_masked_sites``      -- ProblematicSites VCF sites       -> exclude + masked_in_usher
   * ``usher_clade_sites``     -- {clade: set(sites)} from yaml     -> exclude + masked_in_usher
   * ``usher_clade_mutations`` -- {clade: set(mutations)} from yaml -> exclude + masked_in_usher
+  * ``reference_nt`` column   -- founder->reference reversions     -> exclude
   * ``site_include_range``    -- {start, end}; outside range      -> exclude
 
 ``exclude`` is the union of all reasons; ``masked_in_usher`` flags the
 artifactual masks from the UShER yaml (its ``sites`` and per-clade
-``mutations``) and the ProblematicSites VCF.
+``mutations``) and the ProblematicSites VCF only.
 
 The UShER yaml carries two kinds of mask per block: ``sites`` masks the whole
 nucleotide site clade-wide, while the optional ``mutations`` list masks only a
 specific directional reversion (e.g. ``"G26530A"``, in ``nt_mutation`` format)
 without masking the rest of the site.
+
+A **founder->reference reversion** is any grid row whose destination base equals
+the reference base at that site (``to_nt == reference_nt``); because the grid
+only contains rows with ``to_nt != clade_founder_nt``, this implies the clade
+founder differs from the reference there (a clade-defining site). These
+reversions are enriched for artifacts and are always excluded. They set
+``exclude`` but NOT ``masked_in_usher`` (they are not a UShER/VCF artifact mask).
 """
 
 import pandas as pd
@@ -72,9 +80,17 @@ def compute_exclusions(
 ):
     """Return ``(exclude, masked_in_usher)`` boolean Series aligned to ``df``.
 
-    ``df`` must have columns ``clade``, ``nt_site`` (int-coercible), and
-    ``nt_mutation``. See the module docstring for the source semantics.
+    ``df`` must have columns ``clade``, ``nt_site`` (int-coercible),
+    ``nt_mutation``, and ``reference_nt``. See the module docstring for the
+    source semantics.
     """
+    if "reference_nt" not in df.columns:
+        raise KeyError(
+            "compute_exclusions requires a 'reference_nt' column to flag "
+            "founder->reference reversions; none was supplied. The reference "
+            "base is always available at the call site (build_count_table)."
+        )
+
     site = df["nt_site"].astype(int)
     clade = df["clade"]
 
@@ -101,12 +117,18 @@ def compute_exclusions(
         [clade, df["nt_mutation"]]
     ).isin(usher_mut_pairs)
 
+    # Founder->reference reversion: destination base equals the reference base.
+    # The grid guarantees to_nt != clade_founder_nt, so this only fires at
+    # clade-defining sites (founder != reference). Sets exclude, not masked_in_usher.
+    to_nt = df["nt_mutation"].str[-1]
+    in_reversion = (to_nt == df["reference_nt"]).to_numpy()
+
     in_vcf = site.isin(vcf_sites).to_numpy()
     in_config = site.isin(config_sites).to_numpy()
     out_of_range = ((site < start) | (site > end)).to_numpy()
 
     masked_in_usher = in_vcf | in_usher_site | in_usher_mut
-    exclude = out_of_range | in_config | masked_in_usher
+    exclude = out_of_range | in_config | masked_in_usher | in_reversion
 
     return (
         pd.Series(exclude, index=df.index),

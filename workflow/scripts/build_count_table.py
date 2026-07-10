@@ -20,11 +20,13 @@ import os
 import sys
 from importlib import util as importlib_util
 
+import Bio.SeqIO
 import pandas as pd
 
 # Snakemake inputs / params
 actual_csv = snakemake.input.actual
 clade_founder_nts_csv = snakemake.input.clade_founder_nts_csv
+ref_fasta = snakemake.input.ref_fasta
 site_mask_csv = snakemake.input.site_mask
 usher_masked_sites_yaml = snakemake.input.usher_masked_sites
 output_csv = snakemake.output.csv
@@ -196,6 +198,13 @@ grid = grid.rename(
         "codon": "clade_founder_codon",
     }
 )
+
+# Reference (Wuhan-Hu-1) nucleotide per site, used to flag founder->reference
+# reversions (grid rows whose destination base is the reference base). Mirrors
+# the reference_nt computation in count_mutations.py.
+ref_seq = str(Bio.SeqIO.read(ref_fasta, "fasta").seq)
+grid["reference_nt"] = grid["nt_site"].map(lambda s: ref_seq[s - 1])
+log(f"Loaded reference sequence: {len(ref_seq)} nt")
 
 # ---------------------------------------------------------------------------
 # 2. Join aggregated actual counts (fill 0 where unobserved).

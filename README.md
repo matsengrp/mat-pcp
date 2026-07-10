@@ -13,7 +13,7 @@ This pipeline combines functionality from three previously separate projects:
 
 The pipeline uses simple integer versioning (v1, v2, v3, etc.) to enable reproducibility tracking. The version is automatically appended to output directories to clearly identify which pipeline version produced the outputs.
 
-- **Current Version**: v1 (see [CHANGELOG.md](CHANGELOG.md) for version history)
+- **Current Version**: v4 (see [CHANGELOG.md](CHANGELOG.md) for version history)
 - **Version File**: The pipeline version is stored in the `VERSION` file at the repository root
 - **Output Naming**: Outputs are automatically versioned (e.g., `results/public_2022-06-01_v1`)
 - **Git Tags**: Each version is tagged in git for easy reference (e.g., `git checkout v1`)
@@ -373,6 +373,13 @@ grid, in `build_count_table` via `workflow/modules/masking.py`. A mutation is ex
 2. **UShER masks**: it is at a clade-specific problematic site, or matches a clade-specific directional reversion mutation, from `data/usher_masked_sites.yaml` (sets `masked_in_usher`)
 3. **Site range**: it is outside the coding region (`site_include_range`)
 4. **Configured exclusions**: it is at a site in `sites_to_exclude`
+5. **Founder→reference reversion**: its destination base equals the reference base at that site — i.e. it reverts a clade-defining base back to the reference. These are enriched for artifacts and are always excluded (does **not** set `masked_in_usher`).
+
+The `spike_codon_sites_to_mask.txt` output (the codon mask consumed by DASM) is built from
+this table but includes **only sites masked across all clades** — i.e. every mutation at the
+site is excluded (the clade-independent reasons: `site_include_range`, `sites_to_exclude`, and
+the ProblematicSites VCF). Clade-specific masks (UShER per-clade `sites`/`mutations` and
+founder→reference reversions) are intentionally excluded from the codon mask.
 
 #### UShER masks: source
 
