@@ -98,7 +98,7 @@ class Rates:
 
         self.rates = pd.DataFrame(conditions)
         self.rates["rate"] = np.nan
-        self.rates["predicted_count"] = np.nan
+        self.rates["expected_count"] = np.nan
         self.rates["cond_count"] = 0
         self.rates["residual"] = np.nan
 
@@ -142,7 +142,7 @@ class Rates:
         self.rates.drop(columns=["nt_site"], inplace=True)
 
         # Store raw predicted count as rate
-        self.rates["rate"] = self.rates["predicted_count"]
+        self.rates["rate"] = self.rates["expected_count"]
 
         # Rescale rates by total number of mutations and number of sites
         # (matches v2 populate_rates normalization)
@@ -224,7 +224,7 @@ class Rates:
 
         return T
 
-    def predicted_counts_for_clade(self, df_syn):
+    def expected_counts_for_clade(self, df_syn):
         """
         Update rates with clade-specific predicted counts and genome composition.
 
@@ -238,10 +238,10 @@ class Rates:
 
         assert self.rates.shape[0] == len(gen_comp)
 
-        self.rates["predicted_count"] = T * self.rates["rate"]
+        self.rates["expected_count"] = T * self.rates["rate"]
         self.rates["cond_count"] = gen_comp
 
-    def predicted_counts_by_clade(self, df):
+    def expected_counts_by_clade(self, df):
         """
         Get predicted counts for mutations in a DataFrame using rate lookup.
 
@@ -255,7 +255,7 @@ class Rates:
             np.array of predicted counts
         """
         # Look-up dictionary: condition -> predicted count
-        count_dict = self.rates.set_index("condition")["predicted_count"].to_dict()
+        count_dict = self.rates.set_index("condition")["expected_count"].to_dict()
 
         # List of row-wise conditions
         cond_list = np.column_stack(
@@ -309,7 +309,7 @@ class Rates:
             map(
                 lambda x, y: np.mean((np.log(x + LOG_COUNT_OFFSET) - np.log(y + LOG_COUNT_OFFSET)) ** 2),
                 emp_counts,
-                self.rates.loc[idx, "predicted_count"].to_numpy(),
+                self.rates.loc[idx, "expected_count"].to_numpy(),
             )
         )
 
@@ -360,14 +360,14 @@ class Rates:
         return res
 
 
-def add_predicted_count(train_df, count_df, clades, lightswitch_boundaries=None):
+def add_expected_count(train_df, count_df, clades, lightswitch_boundaries=None):
     """
-    Add predicted counts to count_df for all clades.
+    Add expected counts to count_df for all clades.
 
     This function matches the SARS2-mut-fitness-v2 add_predicted_count function:
     1. Train GLM on training data
     2. For each clade, compute clade-specific normalization factor T
-    3. Apply normalized predictions to all mutations in the clade
+    3. Apply normalized expectations to all mutations in the clade
 
     Args:
         train_df: Training DataFrame with curated synonymous mutations
@@ -383,13 +383,13 @@ def add_predicted_count(train_df, count_df, clades, lightswitch_boundaries=None)
     rate.populate_rates(train_df)
 
     # Compute initial predicted counts for training data
-    train_df["predicted_count"] = rate.predicted_counts_by_clade(train_df)
+    train_df["expected_count"] = rate.expected_counts_by_clade(train_df)
 
     # Compute tau (residual variance) per mutation type from training data
     LOG_COUNT_OFFSET = glm.LOG_COUNT_OFFSET
     tau = train_df.groupby("mut_type").apply(
         lambda x: np.mean(
-            (np.log(x.actual_count + LOG_COUNT_OFFSET) - np.log(x.predicted_count + LOG_COUNT_OFFSET)) ** 2
+            (np.log(x.actual_count + LOG_COUNT_OFFSET) - np.log(x.expected_count + LOG_COUNT_OFFSET)) ** 2
         ),
         include_groups=False,
     )
@@ -410,12 +410,12 @@ def add_predicted_count(train_df, count_df, clades, lightswitch_boundaries=None)
         count_clade_syn = count_clade_syn.loc[count_clade_syn["nt_site"].isin(sites)]
 
         # Compute clade-specific normalization
-        rate.predicted_counts_for_clade(count_clade_syn)
+        rate.expected_counts_for_clade(count_clade_syn)
 
         # Get predicted counts and residuals for all mutations in clade
-        pred_count_clade = rate.predicted_counts_by_clade(count_clade)
+        pred_count_clade = rate.expected_counts_by_clade(count_clade)
         residual_clade = rate.residual_by_clade(count_clade)
 
         # Update count_df with predicted counts and tau_squared
-        count_df.loc[count_clade.index, "predicted_count"] = pred_count_clade
+        count_df.loc[count_clade.index, "expected_count"] = pred_count_clade
         count_df.loc[count_clade.index, "tau_squared"] = residual_clade

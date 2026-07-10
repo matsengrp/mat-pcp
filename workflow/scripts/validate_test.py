@@ -3,6 +3,7 @@
 
 import json
 import math
+import os
 import re
 import sys
 from pathlib import Path
@@ -263,8 +264,8 @@ def compare_summaries(actual, expected):
                 )
 
             # Check numerical sums with appropriate tolerances
-            # Integer-like sums (expected_count, actual_count) use tight tolerance
-            for key in ['expected_count_sum', 'actual_count_sum']:
+            # Integer-like sums (actual_count) use tight tolerance
+            for key in ['actual_count_sum']:
                 if key in exp_aa and key in act_aa:
                     if not is_close(act_aa[key], exp_aa[key], rel_tol=1e-6):
                         differences.append(
@@ -272,15 +273,39 @@ def compare_summaries(actual, expected):
                             f"got {act_aa[key]}"
                         )
             # Floating-point sums can vary more across platforms, use looser tolerance
-            for key in ['predicted_count_sum', 'delta_fitness_sum']:
+            for key in ['expected_count_sum', 'delta_fitness_sum']:
                 if key in exp_aa and key in act_aa:
                     if not is_close(act_aa[key], exp_aa[key], rel_tol=0.01):
+                        rel_diff = (
+                            abs(act_aa[key] - exp_aa[key]) / abs(exp_aa[key])
+                            if exp_aa[key] else float('inf')
+                        )
                         differences.append(
                             f"aamut_fitness {key} mismatch: expected {exp_aa[key]}, "
-                            f"got {act_aa[key]} (rel_diff={abs(act_aa[key] - exp_aa[key]) / abs(exp_aa[key]):.4f})"
+                            f"got {act_aa[key]} (rel_diff={rel_diff:.4f})"
                         )
 
     return differences
+
+
+def default_output_dir():
+    """Best-guess test output dir when none is given.
+
+    The Snakefile appends the ``VERSION`` to ``output_dir`` (e.g.
+    ``results/test_data`` -> ``results/test_data_v3``), so the bare
+    ``results/test_data`` never exists. Prefer the versioned directory, then
+    any ``results/test_data*``, falling back to the unversioned name.
+    """
+    import glob
+    try:
+        with open('VERSION') as vf:
+            versioned = f"results/test_data_{vf.read().strip()}"
+        if os.path.isdir(versioned):
+            return versioned
+    except OSError:
+        pass
+    candidates = sorted(glob.glob('results/test_data*'))
+    return candidates[-1] if candidates else 'results/test_data'
 
 
 def main():
@@ -289,7 +314,10 @@ def main():
     import subprocess
 
     # Determine output directory from args, env var, or default
-    output_dir = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('OUTPUT_DIR', 'results/test_data')
+    output_dir = (
+        sys.argv[1] if len(sys.argv) > 1
+        else os.environ.get('OUTPUT_DIR') or default_output_dir()
+    )
 
     # Generate current summary
     result = subprocess.run(

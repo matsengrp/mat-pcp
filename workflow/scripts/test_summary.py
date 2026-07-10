@@ -211,8 +211,6 @@ def summarize_aamut_fitness(aamut_fitness_dir):
         summary['expected_count_sum'] = float(df['expected_count'].sum())
     if 'actual_count' in df.columns:
         summary['actual_count_sum'] = float(df['actual_count'].sum())
-    if 'predicted_count' in df.columns:
-        summary['predicted_count_sum'] = float(df['predicted_count'].sum())
     if 'delta_fitness' in df.columns:
         summary['delta_fitness_sum'] = float(df['delta_fitness'].sum())
 

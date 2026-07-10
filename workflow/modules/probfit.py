@@ -203,7 +203,7 @@ def add_probabilistic_estimates(dataframe, offset=1.0e-6, N_f=150, N_n_exp=300):
     Add probabilistic fitness estimates to a DataFrame.
 
     Args:
-        dataframe: DataFrame with columns actual_count, predicted_count, tau_squared
+        dataframe: DataFrame with columns actual_count, expected_count, tau_squared
         offset: Small value for numerical stability
         N_f: Grid points for fitness
         N_n_exp: Grid points for expected counts
@@ -213,7 +213,7 @@ def add_probabilistic_estimates(dataframe, offset=1.0e-6, N_f=150, N_n_exp=300):
         try:
             return get_probabilistic_estimate(
                 row.actual_count,
-                row.predicted_count,
+                row.expected_count,
                 row.tau_squared,
                 offset=offset,
                 N_f=N_f,

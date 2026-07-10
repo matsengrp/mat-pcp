@@ -35,7 +35,6 @@ if clade == "all":
         "count_terminal",
         "count_non_terminal",
         "expected_count",
-        "predicted_count",
         "tau_squared",
     ]
     groupby_cols = [col for col in counts_df.columns if col not in agg_cols]
@@ -50,9 +49,9 @@ if clade == "all":
         if col in counts_df.columns:
             agg_dict[col] = "sum"
 
-    # For predicted_count and tau_squared, take mean (they should be similar
-    # across clades for the same mutation context)
-    for col in ["predicted_count", "tau_squared"]:
+    # For tau_squared, take mean (residual variance is similar across clades
+    # for the same mutation context)
+    for col in ["tau_squared"]:
         if col in counts_df.columns:
             agg_dict[col] = "mean"
 

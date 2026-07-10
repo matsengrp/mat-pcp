@@ -99,7 +99,7 @@ def aggregate_counts(df, explode_cols):
     groupby_cols = [c for c in groupby_cols if c in df.columns]
 
     agg_dict = {}
-    for col in ["expected_count", "predicted_count", "actual_count", "tau_squared"]:
+    for col in ["expected_count", "actual_count", "tau_squared"]:
         if col in df.columns:
             agg_dict[col] = "sum"
 

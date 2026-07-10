@@ -404,13 +404,11 @@ jobs:
 
         for clade in adequate[:3]:  # Check first 3 clades (same as we built)
             fasta_file = f'${OUTPUT_DIR}/clade_founders/{clade}.fa'
-            muts_file = f'${OUTPUT_DIR}/clade_founders/{clade}_ref_to_founder_muts.csv'
 
             if os.path.exists(fasta_file):
                 # Check FASTA file size
                 size = os.path.getsize(fasta_file)
-                muts = pd.read_csv(muts_file)
-                print(f'  {clade}: {size} bytes, {len(muts)} mutations')
+                print(f'  {clade}: {size} bytes')
             else:
                 print(f'  {clade}: MISSING - this is an error!')
                 exit(1)
@@ -518,7 +516,7 @@ jobs:
                 print(f'  {clade}: {len(counts_df)} unique mutations')
 
                 # Check expected columns
-                required_cols = ['nt_mutation', 'nt_site', 'count', 'synonymous', 'exclude']
+                required_cols = ['nt_mutation', 'nt_site', 'count', 'synonymous']
                 for col in required_cols:
                     assert col in counts_df.columns, f'Missing column: {col}'
 
@@ -584,44 +582,26 @@ jobs:
         print(f'Sites per clade: {nts.groupby(\"clade\").size().mean():.0f} avg')
         "
 
-    - name: Verify synonymous mutation rates
+    - name: Verify unified count table
       run: |
-        test -f $OUTPUT_DIR/synonymous_mut_rates/rates_by_clade.csv
+        test -f $OUTPUT_DIR/counts_all.csv
         pixi run python -c "
         import pandas as pd
 
-        rates = pd.read_csv('${OUTPUT_DIR}/synonymous_mut_rates/rates_by_clade.csv')
-        print(f'Synonymous rate entries: {len(rates)}')
-
-        # Check columns
-        assert 'clade' in rates.columns
-        assert 'mut_type' in rates.columns
-
-        # Check clade distribution
-        print(f'Clades with rates: {sorted(rates[\"clade\"].unique())}')
-
-        # Check rate is computed for entries with sufficient counts
-        has_rate = rates['rate'].notna()
-        print(f'Entries with computed rates: {has_rate.sum()}')
-        "
-
-    - name: Verify expected vs actual counts
-      run: |
-        test -f $OUTPUT_DIR/expected_vs_actual_mut_counts.csv
-        pixi run python -c "
-        import pandas as pd
-
-        df = pd.read_csv('${OUTPUT_DIR}/expected_vs_actual_mut_counts.csv')
-        print(f'Expected vs actual entries: {len(df)}')
+        df = pd.read_csv('${OUTPUT_DIR}/counts_all.csv')
+        print(f'Count table entries: {len(df)}')
 
         # Check columns
         assert 'clade' in df.columns
         assert 'nt_mutation' in df.columns
-        assert 'expected' in df.columns or 'actual_count' in df.columns
+        assert 'actual_count' in df.columns
+        assert 'exclude' in df.columns
+        assert 'masked_in_usher' in df.columns
 
         # Summary
         print(f'Clades: {sorted(df[\"clade\"].unique())}')
         print(f'Columns: {list(df.columns)}')
+        print(f'Excluded: {df[\"exclude\"].sum()}, masked_in_usher: {df[\"masked_in_usher\"].sum()}')
         "
 
     - name: Verify annotated counts
@@ -748,20 +728,20 @@ jobs:
         print('probfit module syntax valid!')
         "
 
-    - name: Verify predicted counts by clade
+    - name: Verify expected counts by clade
       run: |
-        test -f $OUTPUT_DIR/fitness/predicted_counts_by_clade.csv
+        test -f $OUTPUT_DIR/fitness/expected_counts_by_clade.csv
         pixi run python -c "
         import pandas as pd
 
-        pred = pd.read_csv('${OUTPUT_DIR}/fitness/predicted_counts_by_clade.csv')
-        print(f'Predicted counts: {len(pred)} entries')
+        pred = pd.read_csv('${OUTPUT_DIR}/fitness/expected_counts_by_clade.csv')
+        print(f'Expected counts: {len(pred)} entries')
 
         # Check required columns
-        assert 'predicted_count' in pred.columns, 'Missing predicted_count'
+        assert 'expected_count' in pred.columns, 'Missing expected_count'
         assert 'tau_squared' in pred.columns, 'Missing tau_squared'
 
-        print(f'Predicted count range: {pred[\"predicted_count\"].min():.2f} - {pred[\"predicted_count\"].max():.2f}')
+        print(f'Expected count range: {pred[\"expected_count\"].min():.2f} - {pred[\"expected_count\"].max():.2f}')
         print(f'Tau squared range: {pred[\"tau_squared\"].min():.4f} - {pred[\"tau_squared\"].max():.4f}')
         "
 

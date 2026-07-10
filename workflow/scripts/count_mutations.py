@@ -4,7 +4,6 @@
 import Bio.SeqIO
 import numpy as np
 import pandas as pd
-import yaml
 
 # Get variables from snakemake
 max_nt_mutations = snakemake.params.max_nt_mutations
@@ -13,14 +12,8 @@ max_reversions_to_founder = snakemake.params.max_reversions_to_clade_founder
 input_tsv = snakemake.input.tsv
 input_nt_mut_csv = snakemake.input.nt_mut_csv
 ref_fasta = snakemake.input.ref_fasta
-usher_masked_sites_yaml = snakemake.input.usher_masked_sites
-site_mask_csv = snakemake.input.site_mask
 clade_founder_fasta = snakemake.input.clade_founder_fasta
 clade = snakemake.wildcards.clade
-sites_to_exclude_param = snakemake.params.sites_to_exclude
-site_include_range = snakemake.params.site_include_range
-exclude_ref_to_founder_muts = snakemake.params.exclude_ref_to_founder_muts
-ref_to_founder_muts_csv = snakemake.input.ref_to_founder_muts
 output_csv = snakemake.output.csv
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
@@ -40,28 +33,9 @@ ref = str(Bio.SeqIO.read(ref_fasta, "fasta").seq)
 founder = str(Bio.SeqIO.read(clade_founder_fasta, "fasta").seq)
 log(f"Reference length: {len(ref)}, Founder length: {len(founder)}")
 
-# Build sites to exclude set
-sites_to_exclude = set(sites_to_exclude_param) if sites_to_exclude_param else set()
-masked_sites = set(pd.read_csv(site_mask_csv)["site"])
-sites_to_exclude = sites_to_exclude.union(masked_sites)
-log(f"Sites to exclude: {len(sites_to_exclude)}")
-
-if exclude_ref_to_founder_muts:
-    muts_to_exclude = set(pd.read_csv(ref_to_founder_muts_csv)["mutation"])
-    log(f"Ref-to-founder mutations to exclude: {len(muts_to_exclude)}")
-else:
-    muts_to_exclude = set()
-
-# Apply UShER masks for this clade
-with open(usher_masked_sites_yaml) as f:
-    usher_masked_sites = yaml.safe_load(f)
-
-for mask, mask_dict in usher_masked_sites.items():
-    if clade in mask_dict.get("clades", []):
-        sites_to_exclude = sites_to_exclude.union(mask_dict.get("sites", []))
-        log(
-            f"Applied UShER mask '{mask}' with {len(mask_dict.get('sites', []))} sites"
-        )
+# NOTE: masking / exclusion is no longer applied here. This rule emits raw
+# per-clade counts; the `exclude` / `masked_in_usher` flags are computed once,
+# on the full mutation grid, in build_count_table.py.
 
 # Expected final columns
 final_cols = [
@@ -74,7 +48,6 @@ final_cols = [
     "nt_site",
     "reference_nt",
     "clade_founder_nt",
-    "exclude",
     "count",
     "count_terminal",
     "count_non_terminal",
@@ -230,12 +203,6 @@ else:
             nt_site=lambda x: x["nt_mutation"].str[1:-1].astype(int),
             reference_nt=lambda x: x["nt_site"].map(lambda r: ref[r - 1]),
             clade_founder_nt=lambda x: x["nt_site"].map(lambda r: founder[r - 1]),
-            exclude=lambda x: (
-                x["nt_site"].isin(sites_to_exclude)
-                | x["nt_mutation"].isin(muts_to_exclude)
-                | (x["nt_site"] < site_include_range["start"])
-                | (x["nt_site"] > site_include_range["end"])
-            ),
         )
     )
 

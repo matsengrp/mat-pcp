@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `get_ref_fasta`, `ref_coding_sites` |
 | 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade` |
 | 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
-| 5 | Expected Counts | `synonymous_mut_rates`, `expected_mut_counts`, `merge_expected_and_actual_counts` |
+| 5 | Unified Count Table | `build_count_table` (full mutation grid + actual counts + masking flags, via `modules/masking.py`) |
 | 6 | GLM Rate Estimation | `annotate_counts`, `curate_counts`, `master_table`, `get_rates_table` |
 | 7 | Fitness Estimation | `ntmut_fitness_by_clade`, `aamut_fitness_by_clade`, `aggregate_*_fitness` |
 | 8 | Validation | `extract_mutations_from_pcps`, `validate_pcp_vs_counts` |
@@ -153,8 +153,7 @@ The configuration (`config/config.yaml`) is organized into:
 6. **PCP Extraction**: `pcp_gene_region`, `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`
 7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources)
 8. **Mutation Counting**: `max_nt_mutations`, `max_reversions_*`, `site_include_range`
-9. **Synonymous Rates**: `synonymous_spectra_min_counts`
-10. **GLM**: `rna_structure_data`, `glm_lightswitch_boundaries`
+9. **GLM**: `rna_structure_data`, `glm_lightswitch_boundaries`
 11. **Fitness**: `fitness_pseudocount`, `fitness_N_f`, `fitness_N_n_exp`
 12. **Gene Configuration**: `orf1ab_to_nsps`, `gene_overlaps`, `genes`
 13. **Site Masking**: `masking_gene`, `sites_to_exclude`, `additional_sites_to_ignore`

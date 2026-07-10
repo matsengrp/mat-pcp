@@ -745,7 +745,7 @@ def _gene_sliced_founder_outputs():
 
 
 rule clade_founder_fasta:
-    """Generate FASTA and mutation list for each clade founder.
+    """Generate the founder FASTA for each clade.
 
     Emits the whole-genome founder FASTA and, when ``pcp_gene_region`` is
     configured, a gene-sliced founder FASTA (e.g. ``clade_founders/spike/{clade}.fa``
@@ -758,7 +758,6 @@ rule clade_founder_fasta:
         ref_fasta=rules.get_ref_fasta.output.ref_fasta
     output:
         fasta=os.path.join(config["output_dir"], "clade_founders/{clade}.fa"),
-        muts=os.path.join(config["output_dir"], "clade_founders/{clade}_ref_to_founder_muts.csv"),
         gene_fasta=_gene_sliced_founder_outputs()
     params:
         roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {}),
@@ -856,19 +855,13 @@ rule count_mutations_clade:
         tsv=rules.translate_mat.output.tsv,
         nt_mut_csv=rules.sample_path_to_nt_mutations.output.csv,
         ref_fasta=rules.get_ref_fasta.output.ref_fasta,
-        usher_masked_sites=config["usher_masked_sites"],
-        site_mask=rules.get_site_mask.output.csv,
-        clade_founder_fasta=rules.clade_founder_fasta.output.fasta,
-        ref_to_founder_muts=rules.clade_founder_fasta.output.muts
+        clade_founder_fasta=rules.clade_founder_fasta.output.fasta
     output:
         csv=os.path.join(config["output_dir"], "mutation_counts/{clade}.csv")
     params:
         max_nt_mutations=config.get("max_nt_mutations", 4),
         max_reversions_to_ref=config.get("max_reversions_to_ref", 1),
-        max_reversions_to_clade_founder=config.get("max_reversions_to_clade_founder", 1),
-        sites_to_exclude=config.get("sites_to_exclude", []),
-        site_include_range=config.get("site_include_range", {"start": 266, "end": 29674}),
-        exclude_ref_to_founder_muts=config.get("exclude_ref_to_founder_muts", True)
+        max_reversions_to_clade_founder=config.get("max_reversions_to_clade_founder", 1)
     log:
         os.path.join(config["output_dir"], "log/count_mutations_{clade}.log")
     conda:
@@ -916,77 +909,35 @@ rule clade_founder_nts:
         "scripts/clade_founder_nts.py"
 
 
-rule aggregate_mutations_to_exclude:
-    """Compile comprehensive exclusion list from all sources."""
-    input:
-        ref_fasta=rules.get_ref_fasta.output.ref_fasta,
-        site_mask=rules.get_site_mask.output.csv,
-        usher_masked_sites=config["usher_masked_sites"],
-        clade_counts=rules.get_clades.output.clade_counts
-    output:
-        csv=os.path.join(config["output_dir"], "mutations_to_exclude.csv")
-    params:
-        site_include_range=config["site_include_range"],
-        sites_to_exclude=config.get("sites_to_exclude", []),
-        clade_column=config.get("clade_column", "Nextstrain_clade")
-    log:
-        os.path.join(config["output_dir"], "log/aggregate_mutations_to_exclude.log")
-    conda:
-        "envs/default.yml"
-    script:
-        "scripts/aggregate_mutations_to_exclude.py"
-
-
 # =============================================================================
-# Stage 4: Expected Mutation Counts
+# Stage 4: Unified Count Table
 # =============================================================================
 
-rule synonymous_mut_rates:
-    """Compute synonymous mutation rates and spectra by clade."""
+rule build_count_table:
+    """Build the unified per-clade count table.
+
+    Enumerates the full grid of all possible mutations (supplying the
+    zero-actual-count rows the GLM trains on), joins the aggregated actual
+    counts, and computes the ``exclude`` / ``masked_in_usher`` flags exactly
+    once via ``modules/masking.compute_exclusions``. Replaces the former
+    synonymous-rate expected-count and separate exclusion-aggregation rules.
+    """
     input:
-        mutation_counts_csv=rules.aggregate_mutation_counts.output.csv,
-        clade_founder_nts_csv=rules.clade_founder_nts.output.csv
-    output:
-        rates_by_clade=os.path.join(config["output_dir"], "synonymous_mut_rates/rates_by_clade.csv")
-    params:
-        synonymous_spectra_min_counts=config.get("synonymous_spectra_min_counts", 5000)
-    log:
-        os.path.join(config["output_dir"], "log/synonymous_mut_rates.log")
-    conda:
-        "envs/default.yml"
-    script:
-        "scripts/synonymous_mut_rates.py"
-
-
-rule expected_mut_counts:
-    """Compute expected mutation counts from synonymous rates."""
-    input:
-        rates_by_clade=rules.synonymous_mut_rates.output.rates_by_clade,
-        clade_founder_nts_csv=rules.clade_founder_nts.output.csv
-    output:
-        expected_counts=os.path.join(config["output_dir"], "expected_mut_counts/expected_counts.csv")
-    log:
-        os.path.join(config["output_dir"], "log/expected_mut_counts.log")
-    conda:
-        "envs/default.yml"
-    script:
-        "scripts/expected_mut_counts.py"
-
-
-rule merge_expected_and_actual_counts:
-    """Merge expected and actual mutation counts with exclusion annotations."""
-    input:
-        expected=rules.expected_mut_counts.output.expected_counts,
         actual=rules.aggregate_mutation_counts.output.csv,
-        muts_to_exclude=rules.aggregate_mutations_to_exclude.output.csv
+        clade_founder_nts_csv=rules.clade_founder_nts.output.csv,
+        site_mask=rules.get_site_mask.output.csv,
+        usher_masked_sites=config["usher_masked_sites"]
     output:
-        csv=os.path.join(config["output_dir"], "expected_vs_actual_mut_counts.csv")
+        csv=os.path.join(config["output_dir"], "counts_all.csv")
+    params:
+        sites_to_exclude=config.get("sites_to_exclude", []),
+        site_include_range=config.get("site_include_range", {"start": 266, "end": 29674})
     log:
-        os.path.join(config["output_dir"], "log/merge_expected_and_actual_counts.log")
+        os.path.join(config["output_dir"], "log/build_count_table.log")
     conda:
         "envs/default.yml"
     script:
-        "scripts/merge_expected_and_actual_counts.py"
+        "scripts/build_count_table.py"
 
 
 # =============================================================================
@@ -996,7 +947,7 @@ rule merge_expected_and_actual_counts:
 rule annotate_counts:
     """Annotate counts with RNA structure, sequence context, and other features."""
     input:
-        counts=rules.merge_expected_and_actual_counts.output.csv,
+        counts=rules.build_count_table.output.csv,
         clade_founder=rules.clade_founder_nts.output.csv,
         rna_struct=config["rna_structure_data"]
     output:
@@ -1077,7 +1028,7 @@ rule get_rates_table:
 rule get_problematic_sites:
     """Identify problematic codon sites in target gene for masking."""
     input:
-        expected_vs_actual=rules.merge_expected_and_actual_counts.output.csv
+        expected_vs_actual=rules.build_count_table.output.csv
     output:
         sites_to_mask=os.path.join(config["output_dir"], SPIKE_MASK_FILENAME)
     params:
@@ -1095,29 +1046,29 @@ rule get_problematic_sites:
 # Stage 7: Nucleotide Fitness Estimation
 # =============================================================================
 
-rule predicted_counts_by_clade:
-    """Add GLM-predicted counts to mutation counts for each clade."""
+rule expected_counts_by_clade:
+    """Add GLM-expected counts to mutation counts for each clade."""
     input:
         counts=rules.annotate_counts.output.counts_csv,
         curated=rules.curate_counts.output.curated
     output:
-        csv=os.path.join(config["output_dir"], "fitness/predicted_counts_by_clade.csv")
+        csv=os.path.join(config["output_dir"], "fitness/expected_counts_by_clade.csv")
     params:
         lightswitch_boundaries=config.get("glm_lightswitch_boundaries", {
             "CT": 13467, "AT": 21562, "CG": 21562, "GC": 21562
         })
     log:
-        os.path.join(config["output_dir"], "log/predicted_counts_by_clade.log")
+        os.path.join(config["output_dir"], "log/expected_counts_by_clade.log")
     conda:
         "envs/default.yml"
     script:
-        "scripts/predicted_counts_by_clade.py"
+        "scripts/expected_counts_by_clade.py"
 
 
 rule ntmut_counts_by_clade:
     """Extract nucleotide mutation counts for a specific clade."""
     input:
-        counts=rules.predicted_counts_by_clade.output.csv
+        counts=rules.expected_counts_by_clade.output.csv
     output:
         csv=os.path.join(config["output_dir"], "fitness/ntmut_counts/{clade}_ntmut_counts.csv")
     params:

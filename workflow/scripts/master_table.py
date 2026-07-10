@@ -81,7 +81,7 @@ rate.rates["cond_count"] = rate.genome_composition(counts)
 
 # Calculate predicted counts for training data and add to counts
 log("Computing predicted counts...")
-counts["predicted_count"] = rate.predicted_counts_by_clade(counts)
+counts["expected_count"] = rate.expected_counts_by_clade(counts)
 
 # Calculate residual variance (tau) per mutation type
 log("Computing residual variance...")
@@ -89,7 +89,7 @@ tau = (
     counts.groupby("mut_type")
     .apply(
         lambda x: np.mean(
-            (np.log(x.actual_count + 0.5) - np.log(x.predicted_count + 0.5)) ** 2
+            (np.log(x.actual_count + 0.5) - np.log(x.expected_count + 0.5)) ** 2
         ),
         include_groups=False,
     )
@@ -112,7 +112,7 @@ output_cols = [
     "nt_site_boundary",
     "nt_site_before_boundary",
     "rate",
-    "predicted_count",
+    "expected_count",
     "residual",
 ]
 available_cols = [c for c in output_cols if c in rate.rates.columns]
