@@ -288,6 +288,145 @@ def compare_summaries(actual, expected):
     return differences
 
 
+def _load_masking_module():
+    """Import ``workflow/modules/masking.py`` by path (no package install)."""
+    import importlib.util
+    scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    module_path = os.path.join(
+        os.path.dirname(scripts_dir), "modules", "masking.py"
+    )
+    spec = importlib.util.spec_from_file_location("masking", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def validate_usher_mutation_masking(yaml_path="data/usher_masked_sites.yaml"):
+    """Validate per-clade mutation masking in ``masking.compute_exclusions``.
+
+    The pipeline's test clades (19A/19B/20A) carry no per-clade ``mutations:``
+    masks, so ``counts_all.csv`` never exercises that path. This drives
+    ``compute_exclusions`` directly against the committed UShER yaml with a
+    witness reversion that must be:
+
+      * masked in the clade that lists it (both ``exclude`` and
+        ``masked_in_usher``),
+      * NOT masked in a clade that lists neither the mutation nor its site
+        (proves masking is clade-specific), and
+      * masked at the mutation level, not the whole site: a *different*
+        destination base at the same site, in the same clade, must stay
+        unmasked (proves the mask is directional).
+
+    Returns ``(differences, summary)`` where ``summary`` describes the witness
+    when the check passes (``None`` on failure / when unverifiable).
+    """
+    if not os.path.exists(yaml_path):
+        return [f"UShER masked-sites yaml not found at {yaml_path}"], None
+    try:
+        import pandas as pd
+    except ImportError:
+        return ["pandas unavailable; cannot validate mutation masking"], None
+
+    masking = _load_masking_module()
+    sites = masking.load_usher_masked_sites(yaml_path)
+    muts = masking.load_usher_masked_mutations(yaml_path)
+
+    if not any(muts.values()):
+        return (
+            [f"No per-clade `mutations:` masks found in {yaml_path}; "
+             "mutation-level masking is unverified"],
+            None,
+        )
+
+    def site_of(mut):
+        return int(mut[1:-1])
+
+    # Find a witness (clade_A, mutation) masked at the mutation level only
+    # (its site is NOT in clade_A's site masks), plus a clade_B that masks
+    # neither the mutation nor its site. Deterministic (sorted) for stability.
+    all_clades = sorted(set(sites) | set(muts))
+    witness = None
+    for ca in sorted(muts):
+        for mut in sorted(muts[ca]):
+            s = site_of(mut)
+            if s in sites.get(ca, set()):
+                continue
+            for cb in all_clades:
+                if cb == ca or mut in muts.get(cb, set()) or s in sites.get(cb, set()):
+                    continue
+                witness = (ca, mut, s, cb)
+                break
+            if witness:
+                break
+        if witness:
+            break
+
+    if witness is None:
+        return (
+            ["Could not find a site-independent, clade-specific mutation-mask "
+             "witness; mutation masking left unverified"],
+            None,
+        )
+
+    ca, mut, site, cb = witness
+    from_nt, to_nt = mut[0], mut[-1]
+
+    # A different destination base at the same site, avoiding any base that is
+    # itself masked for clade_A at that site (in case of multiple reversions).
+    masked_tos = {m[-1] for m in muts.get(ca, set()) if site_of(m) == site}
+    other_to = next(
+        (n for n in "ACGT" if n != from_nt and n not in masked_tos), None
+    )
+
+    rows = {
+        "clade": [ca, cb],
+        "nt_site": [site, site],
+        "nt_mutation": [mut, mut],
+    }
+    if other_to is not None:
+        other_mut = f"{from_nt}{site}{other_to}"
+        rows["clade"].append(ca)
+        rows["nt_site"].append(site)
+        rows["nt_mutation"].append(other_mut)
+
+    df = pd.DataFrame(rows)
+    exclude, masked = masking.compute_exclusions(
+        df,
+        sites_to_exclude=[],
+        vcf_masked_sites=[],
+        usher_clade_sites=sites,
+        usher_clade_mutations=muts,
+        site_include_range={"start": 266, "end": 29674},
+    )
+    exclude = [bool(x) for x in exclude]
+    masked = [bool(x) for x in masked]
+
+    differences = []
+    # Row 0: masked in the clade that lists the mutation.
+    if not (exclude[0] and masked[0]):
+        differences.append(
+            f"mutation mask: {mut} should be masked in {ca} "
+            f"(exclude={exclude[0]}, masked_in_usher={masked[0]})"
+        )
+    # Row 1: not masked in a clade that lists neither the mutation nor its site.
+    if exclude[1] or masked[1]:
+        differences.append(
+            f"mutation mask: {mut} should NOT be masked in {cb} "
+            f"(exclude={exclude[1]}, masked_in_usher={masked[1]})"
+        )
+    # Row 2: a different destination base at the same site must stay unmasked
+    # in clade_A (mutation masks are directional, not whole-site).
+    if other_to is not None and (exclude[2] or masked[2]):
+        differences.append(
+            f"mutation mask: {other_mut} should NOT be masked in {ca}; "
+            f"per-clade mutation masks must be directional, not whole-site "
+            f"(exclude={exclude[2]}, masked_in_usher={masked[2]})"
+        )
+
+    summary = None if differences else f"{mut} masked in {ca}, not in {cb}"
+    return differences, summary
+
+
 def default_output_dir():
     """Best-guess test output dir when none is given.
 
@@ -344,7 +483,12 @@ def main():
     
     # Compare
     differences = compare_summaries(actual, expected)
-    
+
+    # Independently validate per-clade UShER mutation masking against the
+    # committed yaml (the test clades carry no `mutations:` masks).
+    mut_mask_diffs, mut_mask_summary = validate_usher_mutation_masking()
+    differences += mut_mask_diffs
+
     if differences:
         print("VALIDATION FAILED!")
         print("\nDifferences found:")
@@ -365,6 +509,8 @@ def main():
         if actual.get('aamut_fitness_summary'):
             print(f"  - AA mutation fitness rows: {actual['aamut_fitness_summary']['num_rows']}")
             print(f"  - AA mutation fitness clade files: {actual['aamut_fitness_summary']['num_clade_files']}")
+        if mut_mask_summary:
+            print(f"  - UShER per-clade mutation mask: {mut_mask_summary}")
         sys.exit(0)
 
 
