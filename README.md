@@ -546,6 +546,11 @@ The validation checks:
 - Total sequences across all clades
 - Presence of expected output files
 - PCP vs mutation count consistency
+- **Per-clade UShER masking** (both site and mutation masks). Because the test clades carry no
+  UShER masks, these drive `masking.compute_exclusions` directly against `data/usher_masked_sites.yaml`
+  with an auto-discovered witness that must be masked in one clade but not another: a whole-site
+  mask (founder-independent), and a directional reversion mask chosen to be a genuine
+  founder-relative grid row in both clades (a real, countable mutation excluded in one clade only).
 
 ## CI/CD
 
