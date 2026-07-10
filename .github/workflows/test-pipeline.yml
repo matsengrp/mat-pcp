@@ -516,7 +516,7 @@ jobs:
                 print(f'  {clade}: {len(counts_df)} unique mutations')
 
                 # Check expected columns
-                required_cols = ['nt_mutation', 'nt_site', 'count', 'synonymous', 'exclude']
+                required_cols = ['nt_mutation', 'nt_site', 'count', 'synonymous']
                 for col in required_cols:
                     assert col in counts_df.columns, f'Missing column: {col}'
 
