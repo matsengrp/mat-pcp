@@ -14,11 +14,6 @@ drift. This module centralizes it. It is applied exactly once, in
 
 ``exclude`` is the union of all reasons; ``masked_in_usher`` flags the
 artifactual-site masks (VCF + UShER yaml sites) only.
-
-Exclusion is applied to the full mutation grid, which enumerates only mutations
-*away from the clade founder* (``nt_mutation`` = founder_nt + site + to_nt).
-Clade-defining ref->founder mutations (``ref_nt`` + site + ``founder_nt``) can
-therefore never appear in the grid, so they need no explicit exclusion here.
 """
 
 import pandas as pd
@@ -29,9 +24,7 @@ def load_usher_masked_sites(path):
     """Parse the UShER masked-sites YAML into ``{clade: set(int sites)}``.
 
     A block applies to a clade iff the clade is listed in the block's
-    ``clades``. Only the site-level ``sites`` masks are read here. (The optional
-    per-clade ``mutations`` list added on the UShER-mask branch is a mutation-level
-    exclusion that the caller folds in when present.)
+    ``clades``. Only the site-level ``sites`` masks are read here.
     """
     with open(path) as f:
         spec = yaml.safe_load(f) or {}

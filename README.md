@@ -436,7 +436,6 @@ results/
 │   └── site_mask.csv              # Problematic sites from VCF
 ├── clade_founders/
 │   ├── {clade}.fa                 # Whole-genome founder sequence for each clade
-│   ├── {clade}_ref_to_founder_muts.csv  # Mutations from ref to founder
 │   ├── spike/{clade}.fa           # Gene-sliced founder (Spike 21563-25381, when pcp_gene_region is set)
 │   ├── clade_founders_neher.json  # Neher lab clade founder data
 │   └── clade_founders_roemer.json # Roemer clade founder data

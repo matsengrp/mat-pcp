@@ -404,13 +404,11 @@ jobs:
 
         for clade in adequate[:3]:  # Check first 3 clades (same as we built)
             fasta_file = f'${OUTPUT_DIR}/clade_founders/{clade}.fa'
-            muts_file = f'${OUTPUT_DIR}/clade_founders/{clade}_ref_to_founder_muts.csv'
 
             if os.path.exists(fasta_file):
                 # Check FASTA file size
                 size = os.path.getsize(fasta_file)
-                muts = pd.read_csv(muts_file)
-                print(f'  {clade}: {size} bytes, {len(muts)} mutations')
+                print(f'  {clade}: {size} bytes')
             else:
                 print(f'  {clade}: MISSING - this is an error!')
                 exit(1)

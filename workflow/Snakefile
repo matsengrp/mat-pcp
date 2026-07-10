@@ -745,7 +745,7 @@ def _gene_sliced_founder_outputs():
 
 
 rule clade_founder_fasta:
-    """Generate FASTA and mutation list for each clade founder.
+    """Generate the founder FASTA for each clade.
 
     Emits the whole-genome founder FASTA and, when ``pcp_gene_region`` is
     configured, a gene-sliced founder FASTA (e.g. ``clade_founders/spike/{clade}.fa``
@@ -758,7 +758,6 @@ rule clade_founder_fasta:
         ref_fasta=rules.get_ref_fasta.output.ref_fasta
     output:
         fasta=os.path.join(config["output_dir"], "clade_founders/{clade}.fa"),
-        muts=os.path.join(config["output_dir"], "clade_founders/{clade}_ref_to_founder_muts.csv"),
         gene_fasta=_gene_sliced_founder_outputs()
     params:
         roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {}),

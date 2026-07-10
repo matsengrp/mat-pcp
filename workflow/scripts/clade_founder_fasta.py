@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate FASTA and mutation list for each clade founder.
+"""Generate the founder FASTA for each clade.
 
 When ``pcp_gene_region`` is set in the pipeline config, a second FASTA file is
 also written containing only the gene-region slice of the founder sequence
@@ -9,7 +9,6 @@ needed for training ParentIndependent DASM models.
 
 import json
 import Bio.SeqIO
-import pandas as pd
 
 
 def write_fasta(filepath, header, seq, line_width=80):
@@ -33,7 +32,6 @@ roemer_nextstrain_to_pango = snakemake.params.roemer_nextstrain_to_pango
 pcp_gene_region = getattr(snakemake.params, "pcp_gene_region", None)
 clade = snakemake.wildcards.clade
 output_fasta = snakemake.output.fasta
-output_muts = snakemake.output.muts
 # ``gene_fasta`` is an empty list in ``snakemake.output`` when
 # ``pcp_gene_region`` is unset (see ``_gene_sliced_founder_outputs`` in the
 # Snakefile). The attribute itself is always present because the rule
@@ -177,26 +175,6 @@ log(f"Founder differs from reference at {n_diffs} positions")
 # Write FASTA
 write_fasta(output_fasta, clade, founder_seq)
 log(f"Wrote founder FASTA to {output_fasta}")
-
-# Write mutations CSV
-if len(mutations) > 0:
-    muts_data = []
-    for mut in mutations:
-        try:
-            from_nt = mut[0]
-            to_nt = mut[-1]
-            site = int(mut[1:-1])
-            muts_data.append(
-                {"mutation": mut, "site": site, "from_nt": from_nt, "to_nt": to_nt}
-            )
-        except (ValueError, IndexError):
-            continue
-    muts_df = pd.DataFrame(muts_data)
-else:
-    muts_df = pd.DataFrame(columns=["mutation", "site", "from_nt", "to_nt"])
-
-muts_df.to_csv(output_muts, index=False)
-log(f"Wrote {len(muts_df)} mutations to {output_muts}")
 
 # Optional gene-sliced founder FASTA
 # ``pcp_gene_region`` boundaries are 1-based inclusive (start/end both included)

@@ -45,6 +45,8 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
     mutations *away from the clade founder* (`nt_mutation` = founder_nt + site + to_nt), so
     clade-defining ref→founder mutations (`ref_nt` + site + founder_nt) can never appear in it
     and need no explicit exclusion — including in the GLM training set.
+  - The now-unused `clade_founders/{clade}_ref_to_founder_muts.csv` output is removed;
+    `clade_founder_fasta` still applies those mutations in-memory to build the founder FASTA.
 
 - **The GLM is the single neutral-expectation estimator**:
   - The synonymous 4-fold `expected_count` is gone. The GLM output column `predicted_count` is
