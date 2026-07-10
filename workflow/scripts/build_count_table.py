@@ -225,12 +225,14 @@ log(f"Joined actual counts: {len(grid)} rows, {(grid['actual_count'] > 0).sum()}
 # ---------------------------------------------------------------------------
 vcf_masked_sites = pd.read_csv(site_mask_csv)["site"].tolist()
 usher_clade_sites = masking.load_usher_masked_sites(usher_masked_sites_yaml)
+usher_clade_mutations = masking.load_usher_masked_mutations(usher_masked_sites_yaml)
 
 exclude, masked_in_usher = masking.compute_exclusions(
     grid,
     sites_to_exclude=sites_to_exclude,
     vcf_masked_sites=vcf_masked_sites,
     usher_clade_sites=usher_clade_sites,
+    usher_clade_mutations=usher_clade_mutations,
     site_include_range=site_include_range,
 )
 grid["exclude"] = exclude

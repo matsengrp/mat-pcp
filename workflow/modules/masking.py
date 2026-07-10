@@ -7,13 +7,20 @@ drift. This module centralizes it. It is applied exactly once, in
 
 ``compute_exclusions`` mirrors the union of the two former implementations:
 
-  * ``sites_to_exclude``    -- global config sites            -> exclude
-  * ``vcf_masked_sites``    -- ProblematicSites VCF sites      -> exclude + masked_in_usher
-  * ``usher_clade_sites``   -- {clade: set(sites)} from yaml   -> exclude + masked_in_usher
-  * ``site_include_range``  -- {start, end}; outside range     -> exclude
+  * ``sites_to_exclude``      -- global config sites             -> exclude
+  * ``vcf_masked_sites``      -- ProblematicSites VCF sites       -> exclude + masked_in_usher
+  * ``usher_clade_sites``     -- {clade: set(sites)} from yaml     -> exclude + masked_in_usher
+  * ``usher_clade_mutations`` -- {clade: set(mutations)} from yaml -> exclude + masked_in_usher
+  * ``site_include_range``    -- {start, end}; outside range      -> exclude
 
 ``exclude`` is the union of all reasons; ``masked_in_usher`` flags the
-artifactual-site masks (VCF + UShER yaml sites) only.
+artifactual masks from the UShER yaml (its ``sites`` and per-clade
+``mutations``) and the ProblematicSites VCF.
+
+The UShER yaml carries two kinds of mask per block: ``sites`` masks the whole
+nucleotide site clade-wide, while the optional ``mutations`` list masks only a
+specific directional reversion (e.g. ``"G26530A"``, in ``nt_mutation`` format)
+without masking the rest of the site.
 """
 
 import pandas as pd
@@ -36,18 +43,37 @@ def load_usher_masked_sites(path):
     return clade_sites
 
 
+def load_usher_masked_mutations(path):
+    """Parse the UShER masked-sites YAML into ``{clade: set(mutation str)}``.
+
+    A block applies to a clade iff the clade is listed in the block's
+    ``clades``. Only the optional mutation-level ``mutations`` masks are read
+    here (directional reversions in ``nt_mutation`` format, e.g. ``"G26530A"``);
+    blocks without a ``mutations`` key contribute nothing.
+    """
+    with open(path) as f:
+        spec = yaml.safe_load(f) or {}
+    clade_mutations = {}
+    for block in spec.values():
+        mutations = block.get("mutations", []) or []
+        for clade in block.get("clades", []) or []:
+            clade_mutations.setdefault(clade, set()).update(str(m) for m in mutations)
+    return clade_mutations
+
+
 def compute_exclusions(
     df,
     *,
     sites_to_exclude,
     vcf_masked_sites,
     usher_clade_sites,
+    usher_clade_mutations=None,
     site_include_range,
 ):
     """Return ``(exclude, masked_in_usher)`` boolean Series aligned to ``df``.
 
-    ``df`` must have columns ``clade`` and ``nt_site`` (int-coercible). See the
-    module docstring for the source semantics.
+    ``df`` must have columns ``clade``, ``nt_site`` (int-coercible), and
+    ``nt_mutation``. See the module docstring for the source semantics.
     """
     site = df["nt_site"].astype(int)
     clade = df["clade"]
@@ -58,17 +84,28 @@ def compute_exclusions(
     start = site_include_range.get("start", 266)
     end = site_include_range.get("end", 29674)
 
-    # Per-(clade, site) membership in the UShER yaml masks.
+    # Per-(clade, site) membership in the UShER yaml site masks.
     usher_pairs = [
         (c, int(s)) for c, sites in usher_clade_sites.items() for s in sites
     ]
-    in_usher = pd.MultiIndex.from_arrays([clade, site]).isin(usher_pairs)
+    in_usher_site = pd.MultiIndex.from_arrays([clade, site]).isin(usher_pairs)
+
+    # Per-(clade, nt_mutation) membership in the optional UShER yaml mutation
+    # masks (directional reversions masked at the mutation level, not the site).
+    usher_mut_pairs = [
+        (c, m)
+        for c, muts in (usher_clade_mutations or {}).items()
+        for m in muts
+    ]
+    in_usher_mut = pd.MultiIndex.from_arrays(
+        [clade, df["nt_mutation"]]
+    ).isin(usher_mut_pairs)
 
     in_vcf = site.isin(vcf_sites).to_numpy()
     in_config = site.isin(config_sites).to_numpy()
     out_of_range = ((site < start) | (site > end)).to_numpy()
 
-    masked_in_usher = in_vcf | in_usher
+    masked_in_usher = in_vcf | in_usher_site | in_usher_mut
     exclude = out_of_range | in_config | masked_in_usher
 
     return (
