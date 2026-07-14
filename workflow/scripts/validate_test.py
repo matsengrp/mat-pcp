@@ -289,14 +289,22 @@ def compare_summaries(actual, expected):
 
 
 def _load_masking_module():
-    """Import ``workflow/modules/masking.py`` by path (no package install)."""
+    """Import ``workflow/modules/masking.py`` by path (no package install).
+
+    Mirrors the established ``load_workflow_module`` helper used by the pipeline
+    scripts (e.g. ``aamut_fitness.py``): guards on a missing module file and
+    registers the module in ``sys.modules``.
+    """
     import importlib.util
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
     module_path = os.path.join(
         os.path.dirname(scripts_dir), "modules", "masking.py"
     )
+    if not os.path.exists(module_path):
+        raise ImportError(f"Cannot find module 'masking' at {module_path}")
     spec = importlib.util.spec_from_file_location("masking", module_path)
     module = importlib.util.module_from_spec(spec)
+    sys.modules["masking"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -310,18 +318,11 @@ def _load_founder_base_fn(output_dir):
     needed. Returns ``None`` if the required run outputs aren't present, and the
     lookup returns ``None`` for clades absent from both founder sources.
     """
-    ref_path = os.path.join(output_dir, "ref", "ref.fa")
     neher_path = os.path.join(output_dir, "clade_founders", "clade_founders_neher.json")
     roemer_path = os.path.join(output_dir, "clade_founders", "clade_founders_roemer.json")
-    if not (os.path.exists(ref_path) and os.path.exists(neher_path)):
+    ref = _read_reference(output_dir)
+    if ref is None or not os.path.exists(neher_path):
         return None
-
-    seq = []
-    with open(ref_path) as f:
-        for line in f:
-            if not line.startswith(">"):
-                seq.append(line.strip())
-    ref = "".join(seq)
 
     with open(neher_path) as f:
         neher = json.load(f)
@@ -391,8 +392,7 @@ def validate_usher_mutation_masking(output_dir, yaml_path="data/usher_masked_sit
         return ["pandas unavailable; cannot validate mutation masking"], None
 
     masking = _load_masking_module()
-    sites = masking.load_usher_masked_sites(yaml_path)
-    muts = masking.load_usher_masked_mutations(yaml_path)
+    sites, muts = masking.load_usher_masks(yaml_path)
 
     if not any(muts.values()):
         return (
@@ -529,8 +529,7 @@ def validate_usher_site_masking(yaml_path="data/usher_masked_sites.yaml"):
         return ["pandas unavailable; cannot validate site masking"], None
 
     masking = _load_masking_module()
-    sites = masking.load_usher_masked_sites(yaml_path)
-    muts = masking.load_usher_masked_mutations(yaml_path)
+    sites, muts = masking.load_usher_masks(yaml_path)
 
     if not any(sites.values()):
         return (

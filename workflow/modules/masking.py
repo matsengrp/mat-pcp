@@ -35,38 +35,32 @@ import pandas as pd
 import yaml
 
 
-def load_usher_masked_sites(path):
-    """Parse the UShER masked-sites YAML into ``{clade: set(int sites)}``.
+def load_usher_masks(path):
+    """Parse the UShER masked-sites YAML in one pass.
+
+    Returns ``(clade_sites, clade_mutations)``:
+
+      * ``clade_sites``     -- ``{clade: set(int sites)}`` from each block's
+        ``sites`` (whole-site clade-wide masks).
+      * ``clade_mutations`` -- ``{clade: set(mutation str)}`` from each block's
+        optional ``mutations`` (directional reversions in ``nt_mutation``
+        format, e.g. ``"G26530A"``); blocks without a ``mutations`` key
+        contribute nothing.
 
     A block applies to a clade iff the clade is listed in the block's
-    ``clades``. Only the site-level ``sites`` masks are read here.
+    ``clades``.
     """
     with open(path) as f:
         spec = yaml.safe_load(f) or {}
     clade_sites = {}
-    for block in spec.values():
-        sites = block.get("sites", []) or []
-        for clade in block.get("clades", []) or []:
-            clade_sites.setdefault(clade, set()).update(int(s) for s in sites)
-    return clade_sites
-
-
-def load_usher_masked_mutations(path):
-    """Parse the UShER masked-sites YAML into ``{clade: set(mutation str)}``.
-
-    A block applies to a clade iff the clade is listed in the block's
-    ``clades``. Only the optional mutation-level ``mutations`` masks are read
-    here (directional reversions in ``nt_mutation`` format, e.g. ``"G26530A"``);
-    blocks without a ``mutations`` key contribute nothing.
-    """
-    with open(path) as f:
-        spec = yaml.safe_load(f) or {}
     clade_mutations = {}
     for block in spec.values():
+        sites = block.get("sites", []) or []
         mutations = block.get("mutations", []) or []
         for clade in block.get("clades", []) or []:
+            clade_sites.setdefault(clade, set()).update(int(s) for s in sites)
             clade_mutations.setdefault(clade, set()).update(str(m) for m in mutations)
-    return clade_mutations
+    return clade_sites, clade_mutations
 
 
 def compute_exclusions(
@@ -121,6 +115,12 @@ def compute_exclusions(
     # The grid guarantees to_nt != clade_founder_nt, so this only fires at
     # clade-defining sites (founder != reference). Sets exclude, not masked_in_usher.
     to_nt = df["nt_mutation"].str[-1]
+    if to_nt.isna().any():
+        raise ValueError(
+            "compute_exclusions: 'nt_mutation' has NaN/empty values, so the "
+            "reversion destination base cannot be determined; the grid must "
+            "supply a well-formed nt_mutation (e.g. 'G26530A') for every row."
+        )
     in_reversion = (to_nt == df["reference_nt"]).to_numpy()
 
     in_vcf = site.isin(vcf_sites).to_numpy()
