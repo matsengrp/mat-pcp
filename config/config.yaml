@@ -104,6 +104,7 @@ site_include_range:
 
 # Sites to exclude globally (problematic hotspots)
 sites_to_exclude:
+  # Sites in Table S1 of https://journals.plos.org/plosgenetics/article?id=10.1371/journal.pgen.1009175
   - 153
   - 1149
   - 2198
@@ -120,11 +121,43 @@ sites_to_exclude:
   - 24389
   - 24390
   - 24933
-  - 5629
-  - 6851
-  - 7328
-  - 28095
-  - 29362
+  # sites specified for exclusion because they have extremely high mutation
+  # frequency in some clade
+  - 5629   # T5629G is much higher (~5% of all) in clade 20A than any other mutation.
+  - 6851   # C6851A and its reversion are top two mutations in 20C at ~5% and ~3% of all mutations
+  - 7328   # ~6% of all mutations in clade 21I, also highly mutated (~4% of all) in several other clades
+  - 28095  # ~11% of all mutations in clade 20I
+  - 29362  # ~30% of all mutations in clade 21C
+  # De Maio et al. homoplastic sites (https://virological.org/t/issues-with-sars-cov-2-sequencing-data/473):
+  # high apparent homoplasy from sequencing artifacts, contamination, or recurrent
+  # mutation. (Sites 4050, 8022, 13402 from this set already appear in Table S1 above.)
+  - 187    # 5' UTR - frequent sequencing artifact
+  - 1059   # nsp2
+  - 2094   # nsp2
+  - 3037   # nsp3 - synonymous C>T, common technical artifact
+  - 3130   # nsp3
+  - 6990   # nsp3
+  - 10323  # nsp5 (3CLpro)
+  - 10741  # nsp5
+  - 11074  # nsp6
+  - 11083  # nsp6
+  - 13408  # nsp12
+  - 14786  # nsp12
+  - 15324  # nsp12
+  - 19684  # nsp15
+  - 20148  # nsp15
+  - 21137  # nsp16
+  - 21575  # Spike
+  - 24034  # Spike
+  - 24378  # Spike
+  - 25563  # ORF3a
+  - 26144  # ORF3a
+  - 26461  # E
+  - 26681  # M
+  - 28077  # ORF8
+  - 28826  # N
+  - 28854  # N
+  - 29700  # 3' UTR
 
 # External masking sources
 site_mask_vcf: "https://raw.githubusercontent.com/W-L/ProblematicSites_SARS-CoV2/master/subset_vcf/problematic_sites_sarsCov2.mask.vcf"
@@ -208,65 +241,6 @@ genes:
 # Site Masking Configuration
 # =============================================================================
 masking_gene: "S"  # Gene for codon mask output
-
-# Sites to exclude from GLM training (in addition to UShER masked and excluded sites)
-# Reference: https://virological.org/t/issues-with-sars-cov-2-sequencing-data/473
-additional_sites_to_ignore:
-  # De Maio et al. homoplastic sites - these sites show high levels of apparent
-  # homoplasy likely due to sequencing artifacts, lab contamination, or recurrent
-  # mutation. Excluding them improves the accuracy of mutation rate estimates.
-
-  # 5' UTR and nsp2
-  - 187    # 5' UTR - frequent sequencing artifact
-  - 1059   # nsp2
-  - 2094   # nsp2
-
-  # nsp3
-  - 3037   # nsp3 - synonymous C>T, common technical artifact
-  - 3130   # nsp3
-  - 4050   # nsp3
-  - 6990   # nsp3
-  - 8022   # nsp3
-
-  # nsp5 (3CLpro)
-  - 10323  # nsp5 (3CLpro)
-  - 10741  # nsp5
-
-  # nsp6
-  - 11074  # nsp6
-  - 11083  # nsp6
-
-  # nsp12 (RdRp)
-  - 13402  # nsp12 (RdRp)
-  - 13408  # nsp12
-  - 14786  # nsp12
-  - 15324  # nsp12
-
-  # nsp15 and nsp16
-  - 19684  # nsp15
-  - 20148  # nsp15
-  - 21137  # nsp16
-
-  # Spike
-  - 21575  # Spike
-  - 24034  # Spike
-  - 24378  # Spike
-
-  # ORF3a
-  - 25563  # ORF3a
-  - 26144  # ORF3a
-
-  # Structural proteins
-  - 26461  # E
-  - 26681  # M
-
-  # ORF8 and N
-  - 28077  # ORF8
-  - 28826  # N
-  - 28854  # N
-
-  # 3' UTR
-  - 29700  # 3' UTR
 
 # =============================================================================
 # Thread Configuration

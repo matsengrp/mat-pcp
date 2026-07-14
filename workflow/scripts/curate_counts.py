@@ -7,7 +7,6 @@ import pandas as pd
 counts_csv = snakemake.input.counts
 founder_csv = snakemake.input.clade_founder
 output_csv = snakemake.output.curated
-additional_sites_to_ignore = snakemake.params.additional_sites_to_ignore or []
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -27,7 +26,6 @@ founder_df = pd.read_csv(founder_csv)
 
 log(f"Loaded {len(counts_df)} count entries")
 log(f"Loaded {len(founder_df)} founder entries")
-log(f"Additional sites to ignore: {len(additional_sites_to_ignore)}")
 
 # Identify conserved sites (same codon and motif across all clades)
 conserved_data = founder_df[
@@ -40,7 +38,9 @@ conserved_sites = site_counts[site_counts == n_clades].index.tolist()
 
 log(f"Conserved sites (present in all {n_clades} clades): {len(conserved_sites)}")
 
-# Sites to ignore: masked, excluded, or in additional list
+# Sites to ignore: masked in UShER or otherwise excluded (config sites_to_exclude,
+# ProblematicSites VCF, out-of-range, and founder->reference reversions all set
+# `exclude`, so they are covered by the excluded_sites branch below).
 sites_to_ignore = []
 
 if "masked_in_usher" in counts_df.columns:
@@ -57,7 +57,6 @@ if "exclude" in counts_df.columns:
     sites_to_ignore.extend(excluded_sites)
     log(f"Excluded sites: {len(excluded_sites)}")
 
-sites_to_ignore.extend(additional_sites_to_ignore)
 sites_to_ignore = list(set(sites_to_ignore))
 log(f"Total sites to ignore: {len(sites_to_ignore)}")
 

@@ -13,7 +13,7 @@ This pipeline combines functionality from three previously separate projects:
 
 The pipeline uses simple integer versioning (v1, v2, v3, etc.) to enable reproducibility tracking. The version is automatically appended to output directories to clearly identify which pipeline version produced the outputs.
 
-- **Current Version**: v1 (see [CHANGELOG.md](CHANGELOG.md) for version history)
+- **Current Version**: v4 (see [CHANGELOG.md](CHANGELOG.md) for version history)
 - **Version File**: The pipeline version is stored in the `VERSION` file at the repository root
 - **Output Naming**: Outputs are automatically versioned (e.g., `results/public_2022-06-01_v1`)
 - **Git Tags**: Each version is tagged in git for easy reference (e.g., `git checkout v1`)
@@ -370,10 +370,34 @@ Exclusion flags (`exclude` / `masked_in_usher`) are computed **once**, on the fu
 grid, in `build_count_table` via `workflow/modules/masking.py`. A mutation is excluded if:
 
 1. **VCF mask**: it is at a problematic site from the ProblematicSites_SARS-CoV2 database (sets `masked_in_usher`)
-2. **UShER masks**: it is at a clade-specific problematic site (`data/usher_masked_sites.yaml`) (sets `masked_in_usher`)
+2. **UShER masks**: it is at a clade-specific problematic site, or matches a clade-specific directional reversion mutation, from `data/usher_masked_sites.yaml` (sets `masked_in_usher`)
 3. **Site range**: it is outside the coding region (`site_include_range`)
 4. **Configured exclusions**: it is at a site in `sites_to_exclude`
-5. **Ref-to-founder mutations**: it is a clade-defining ref→founder mutation (always excluded)
+5. **Founder→reference reversion**: its destination base equals the reference base at that site — i.e. it reverts a clade-defining base back to the reference. These are enriched for artifacts and are always excluded (does **not** set `masked_in_usher`).
+
+The `spike_codon_sites_to_mask.txt` output (the codon mask consumed by DASM) is built from
+this table but includes **only sites masked across all clades** — i.e. every mutation at the
+site is excluded (the clade-independent reasons: `site_include_range`, `sites_to_exclude`, and
+the ProblematicSites VCF). Clade-specific masks (UShER per-clade `sites`/`mutations` and
+founder→reference reversions) are intentionally excluded from the codon mask.
+
+#### UShER masks: source
+
+`data/usher_masked_sites.yaml` is **generated**, not hand-maintained. It is produced by the
+standalone [`s2-clade-mask`](https://github.com/matsengrp/s2-clade-mask) repository, which
+derives it from the UCSC branch-specific masking spec
+([kent repository](https://github.com/ucscGenomeBrowser/kent/blob/master/src/hg/utils/otto/sarscov2phylo/branchSpecificMask.yml);
+see [yatisht/usher#324](https://github.com/yatisht/usher/issues/324)) by resolving each PANGO
+lineage's representative sample to a node on a full gisaid-and-public MAT and coarsening the
+tree-topology-based masks to **Nextstrain clades**. `mat-pcp` simply consumes the resulting
+flat, Nextstrain-clade-keyed file:
+
+- `sites` are masked whole (by exact clade-name match, no tree involved at runtime).
+- `mutations` (optional; directional `nt_mutation` strings) are excluded at the mutation level
+  rather than masking the whole site.
+
+To refresh the masks, regenerate the file in `s2-clade-mask` and copy it here; see that
+repository's README for the generation algorithm and procedure.
 
 ### Curation Report
 
@@ -529,6 +553,11 @@ The validation checks:
 - Total sequences across all clades
 - Presence of expected output files
 - PCP vs mutation count consistency
+- **Per-clade UShER masking** (both site and mutation masks). Because the test clades carry no
+  UShER masks, these drive `masking.compute_exclusions` directly against `data/usher_masked_sites.yaml`
+  with an auto-discovered witness that must be masked in one clade but not another: a whole-site
+  mask (founder-independent), and a directional reversion mask chosen to be a genuine
+  founder-relative grid row in both clades (a real, countable mutation excluded in one clade only).
 
 ## CI/CD
 

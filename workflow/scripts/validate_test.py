@@ -288,6 +288,436 @@ def compare_summaries(actual, expected):
     return differences
 
 
+def _load_masking_module():
+    """Import ``workflow/modules/masking.py`` by path (no package install).
+
+    Mirrors the established ``load_workflow_module`` helper used by the pipeline
+    scripts (e.g. ``aamut_fitness.py``): guards on a missing module file and
+    registers the module in ``sys.modules``.
+    """
+    import importlib.util
+    scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    module_path = os.path.join(
+        os.path.dirname(scripts_dir), "modules", "masking.py"
+    )
+    if not os.path.exists(module_path):
+        raise ImportError(f"Cannot find module 'masking' at {module_path}")
+    spec = importlib.util.spec_from_file_location("masking", module_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["masking"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_founder_base_fn(output_dir):
+    """Build ``founder_nt(clade, site)`` from the run's reference + founders.
+
+    Founder base = the reference nt at the site, overridden by the clade's own
+    nucleotide substitutions (Neher primary, Roemer fallback) -- mirroring
+    ``clade_founder_fasta.py``. Reads the FASTA by hand so no biopython dep is
+    needed. Returns ``None`` if the required run outputs aren't present, and the
+    lookup returns ``None`` for clades absent from both founder sources.
+    """
+    neher_path = os.path.join(output_dir, "clade_founders", "clade_founders_neher.json")
+    roemer_path = os.path.join(output_dir, "clade_founders", "clade_founders_roemer.json")
+    ref = _read_reference(output_dir)
+    if ref is None or not os.path.exists(neher_path):
+        return None
+
+    with open(neher_path) as f:
+        neher = json.load(f)
+    roemer = {}
+    if os.path.exists(roemer_path):
+        with open(roemer_path) as f:
+            roemer = json.load(f)
+
+    def clade_subs(clade):
+        info = neher.get(clade)
+        if info is not None:
+            return info.get("nuc") or info.get("mutations") or info.get("nuc_mutations") or []
+        info = roemer.get(clade)
+        if info is not None:
+            return info.get("nucSubstitutions") or info.get("substitutions") or []
+        return None
+
+    def founder_nt(clade, site):
+        subs = clade_subs(clade)
+        if subs is None or site < 1 or site > len(ref):
+            return None
+        base = ref[site - 1]
+        for mut in subs:
+            try:
+                pos = int(mut[1:-1])
+            except (ValueError, IndexError):
+                continue
+            if pos == site:
+                base = mut[-1]
+        return base
+
+    return founder_nt
+
+
+def validate_usher_mutation_masking(output_dir, yaml_path="data/usher_masked_sites.yaml"):
+    """Validate per-clade mutation masking in ``masking.compute_exclusions``.
+
+    The pipeline's test clades (19A/19B/20A) carry no per-clade ``mutations:``
+    masks, so ``counts_all.csv`` never exercises that path. This drives
+    ``compute_exclusions`` directly against the committed UShER yaml with a
+    witness reversion that must be:
+
+      * masked in the clade that lists it (both ``exclude`` and
+        ``masked_in_usher``),
+      * NOT masked in a clade that lists neither the mutation nor its site
+        (proves masking is clade-specific), and
+      * masked at the mutation level, not the whole site: a *different*
+        destination base at the same site, in the same clade, must stay
+        unmasked (proves the mask is directional).
+
+    The witness is chosen so the reversion is a genuine founder-relative grid
+    row in *both* clades -- i.e. each clade's founder base at the site equals
+    the mutation's "from" base -- so it is a real, countable mutation excluded
+    in one clade but not the other, not merely a synthetic row. This requires
+    the run's reference + founder outputs under ``output_dir``; if they are
+    missing, or no founder-valid witness exists, the check fails (there is no
+    weaker fallback).
+
+    Returns ``(differences, summary)`` where ``summary`` describes the witness
+    when the check passes (``None`` on failure).
+    """
+    if not os.path.exists(yaml_path):
+        return [f"UShER masked-sites yaml not found at {yaml_path}"], None
+    try:
+        import pandas as pd
+    except ImportError:
+        return ["pandas unavailable; cannot validate mutation masking"], None
+
+    masking = _load_masking_module()
+    sites, muts = masking.load_usher_masks(yaml_path)
+
+    if not any(muts.values()):
+        return (
+            [f"No per-clade `mutations:` masks found in {yaml_path}; "
+             "mutation-level masking is unverified"],
+            None,
+        )
+
+    def site_of(mut):
+        return int(mut[1:-1])
+
+    founder_nt = _load_founder_base_fn(output_dir)
+    if founder_nt is None:
+        return (
+            [f"Reference/clade-founder outputs not found under {output_dir}; "
+             "cannot verify mutation masking (need ref/ref.fa and "
+             "clade_founders/clade_founders_neher.json)"],
+            None,
+        )
+    all_clades = sorted(set(sites) | set(muts))
+
+    def find_witness():
+        """First founder-valid (clade_A, mut, site, clade_B), sorted for stability.
+
+        clade_A lists the mutation but not its site; clade_B masks neither the
+        mutation nor its site; and both clades' founder base at the site equals
+        the mutation's "from" base, so the reversion is a real founder-relative
+        grid row in each.
+        """
+        for ca in sorted(muts):
+            for mut in sorted(muts[ca]):
+                s = site_of(mut)
+                frm = mut[0]
+                if s in sites.get(ca, set()) or founder_nt(ca, s) != frm:
+                    continue
+                for cb in all_clades:
+                    if cb == ca or mut in muts.get(cb, set()) or s in sites.get(cb, set()):
+                        continue
+                    if founder_nt(cb, s) != frm:
+                        continue
+                    return (ca, mut, s, cb)
+        return None
+
+    witness = find_witness()
+    if witness is None:
+        return (
+            ["Could not find a founder-valid mutation-mask witness (a reversion "
+             "that is a founder-relative grid row in both a clade that masks it "
+             "and one that does not); mutation masking unverified"],
+            None,
+        )
+
+    ca, mut, site, cb = witness
+    from_nt, to_nt = mut[0], mut[-1]
+
+    # A different destination base at the same site, avoiding any base that is
+    # itself masked for clade_A at that site (in case of multiple reversions).
+    masked_tos = {m[-1] for m in muts.get(ca, set()) if site_of(m) == site}
+    other_to = next(
+        (n for n in "ACGT" if n != from_nt and n not in masked_tos), None
+    )
+
+    rows = {
+        "clade": [ca, cb],
+        "nt_site": [site, site],
+        "nt_mutation": [mut, mut],
+    }
+    if other_to is not None:
+        other_mut = f"{from_nt}{site}{other_to}"
+        rows["clade"].append(ca)
+        rows["nt_site"].append(site)
+        rows["nt_mutation"].append(other_mut)
+
+    df = pd.DataFrame(rows)
+    # reference_nt="N" disables the (separately-tested) founder->reference
+    # reversion path so this check isolates the UShER mutation-mask mechanism.
+    df["reference_nt"] = "N"
+    exclude, masked = masking.compute_exclusions(
+        df,
+        sites_to_exclude=[],
+        vcf_masked_sites=[],
+        usher_clade_sites=sites,
+        usher_clade_mutations=muts,
+        site_include_range={"start": 266, "end": 29674},
+    )
+    exclude = [bool(x) for x in exclude]
+    masked = [bool(x) for x in masked]
+
+    differences = []
+    # Row 0: masked in the clade that lists the mutation.
+    if not (exclude[0] and masked[0]):
+        differences.append(
+            f"mutation mask: {mut} should be masked in {ca} "
+            f"(exclude={exclude[0]}, masked_in_usher={masked[0]})"
+        )
+    # Row 1: not masked in a clade that lists neither the mutation nor its site.
+    if exclude[1] or masked[1]:
+        differences.append(
+            f"mutation mask: {mut} should NOT be masked in {cb} "
+            f"(exclude={exclude[1]}, masked_in_usher={masked[1]})"
+        )
+    # Row 2: a different destination base at the same site must stay unmasked
+    # in clade_A (mutation masks are directional, not whole-site).
+    if other_to is not None and (exclude[2] or masked[2]):
+        differences.append(
+            f"mutation mask: {other_mut} should NOT be masked in {ca}; "
+            f"per-clade mutation masks must be directional, not whole-site "
+            f"(exclude={exclude[2]}, masked_in_usher={masked[2]})"
+        )
+
+    summary = None if differences else (
+        f"{mut} masked in {ca}, not in {cb} (founder-valid grid row in both)"
+    )
+    return differences, summary
+
+
+def validate_usher_site_masking(yaml_path="data/usher_masked_sites.yaml"):
+    """Validate per-clade UShER *site* masking in ``compute_exclusions``.
+
+    Complements the mutation-level check: a whole-site mask must apply in the
+    clade(s) that list it and not in a clade that does not. Founder identity is
+    irrelevant here -- a site mask hits every mutation at the site -- so this
+    drives ``compute_exclusions`` with an arbitrary mutation at the witness site
+    and asserts the site is excluded (``exclude`` + ``masked_in_usher``) in one
+    clade but not another.
+
+    Returns ``(differences, summary)`` (``summary`` is ``None`` on failure).
+    """
+    if not os.path.exists(yaml_path):
+        return [f"UShER masked-sites yaml not found at {yaml_path}"], None
+    try:
+        import pandas as pd
+    except ImportError:
+        return ["pandas unavailable; cannot validate site masking"], None
+
+    masking = _load_masking_module()
+    sites, muts = masking.load_usher_masks(yaml_path)
+
+    if not any(sites.values()):
+        return (
+            [f"No per-clade `sites:` masks found in {yaml_path}; "
+             "site-level masking is unverified"],
+            None,
+        )
+
+    RANGE = {"start": 266, "end": 29674}
+    all_clades = sorted(set(sites) | set(muts))
+
+    # Witness: a site masked in clade_A but not in clade_B, kept inside the
+    # include range so the range filter can't confound clade_B's result.
+    witness = None
+    for ca in sorted(sites):
+        for s in sorted(sites[ca]):
+            if not (RANGE["start"] <= s <= RANGE["end"]):
+                continue
+            for cb in all_clades:
+                if cb == ca or s in sites.get(cb, set()):
+                    continue
+                witness = (ca, s, cb)
+                break
+            if witness:
+                break
+        if witness:
+            break
+
+    if witness is None:
+        return (
+            ["Could not find a site masked in one clade but not another; "
+             "site masking unverified"],
+            None,
+        )
+
+    ca, site, cb = witness
+    # Any mutation at the site works; pick one that is not itself a mutation
+    # mask in either clade so only the site mask can drive exclusion.
+    mut = next(
+        f"{a}{site}{b}"
+        for a in "ACGT" for b in "ACGT"
+        if a != b
+        and f"{a}{site}{b}" not in muts.get(ca, set())
+        and f"{a}{site}{b}" not in muts.get(cb, set())
+    )
+
+    df = pd.DataFrame(
+        {"clade": [ca, cb], "nt_site": [site, site], "nt_mutation": [mut, mut]}
+    )
+    # reference_nt="N" disables the founder->reference reversion path so this
+    # check isolates the whole-site UShER mask mechanism.
+    df["reference_nt"] = "N"
+    exclude, masked = masking.compute_exclusions(
+        df,
+        sites_to_exclude=[],
+        vcf_masked_sites=[],
+        usher_clade_sites=sites,
+        usher_clade_mutations=muts,
+        site_include_range=RANGE,
+    )
+    exclude = [bool(x) for x in exclude]
+    masked = [bool(x) for x in masked]
+
+    differences = []
+    if not (exclude[0] and masked[0]):
+        differences.append(
+            f"site mask: site {site} should be masked in {ca} "
+            f"(exclude={exclude[0]}, masked_in_usher={masked[0]})"
+        )
+    if exclude[1] or masked[1]:
+        differences.append(
+            f"site mask: site {site} should NOT be masked in {cb} "
+            f"(exclude={exclude[1]}, masked_in_usher={masked[1]})"
+        )
+
+    summary = None if differences else f"site {site} masked in {ca}, not in {cb}"
+    return differences, summary
+
+
+def _read_reference(output_dir):
+    """Read the run's reference FASTA (single record) as a plain string."""
+    ref_path = os.path.join(output_dir, "ref", "ref.fa")
+    if not os.path.exists(ref_path):
+        return None
+    seq = []
+    with open(ref_path) as f:
+        for line in f:
+            if not line.startswith(">"):
+                seq.append(line.strip())
+    return "".join(seq)
+
+
+def validate_reversion_masking(output_dir):
+    """Every founder->reference reversion in counts_all.csv must be excluded.
+
+    A reversion is a grid row whose destination base equals the reference base
+    at that site (``nt_mutation[-1] == reference_nt``). Checked against the real
+    ``counts_all.csv`` (the test clades DO have clade-defining sites, e.g. 20A,
+    so reversions are present). Also guards against vacuity (not every row is
+    excluded, and reversions actually exist).
+    """
+    import pandas as pd
+
+    counts_path = os.path.join(output_dir, "counts_all.csv")
+    if not os.path.exists(counts_path):
+        return [f"counts_all.csv not found under {output_dir}"], None
+    ref = _read_reference(output_dir)
+    if ref is None:
+        return [f"ref/ref.fa not found under {output_dir}"], None
+
+    df = pd.read_csv(counts_path)
+    ref_nt = df["nt_site"].map(lambda s: ref[int(s) - 1])
+    is_reversion = df["nt_mutation"].str[-1] == ref_nt
+    n_rev = int(is_reversion.sum())
+    if n_rev == 0:
+        return ["no founder->reference reversion rows in counts_all.csv; "
+                "reversion masking unverified"], None
+
+    excluded = df["exclude"] == True  # noqa: E712
+    leaked = df[is_reversion & ~excluded]
+    differences = []
+    if len(leaked):
+        ex = leaked.iloc[0]
+        differences.append(
+            f"reversion masking: {len(leaked)} founder->reference reversion "
+            f"row(s) are not excluded (e.g. clade {ex['clade']} {ex['nt_mutation']})"
+        )
+    if bool(excluded.all()):
+        differences.append("reversion check is vacuous: every counts_all.csv row is excluded")
+
+    summary = None if differences else (
+        f"{n_rev} founder->reference reversion rows, all exclude=True"
+    )
+    return differences, summary
+
+
+def _parse_codon_sites(series):
+    """Flatten a codon_site column (handles ';'-joined and float values)."""
+    out = set()
+    for site in series.unique():
+        if site is None:
+            continue
+        s = str(site)
+        for part in s.split(";"):
+            part = part.strip()
+            if part.replace(".", "").replace("-", "").isdigit():
+                out.add(int(float(part)))
+    return out
+
+
+def validate_spike_mask_all_clades(output_dir, masking_gene="S"):
+    """The spike codon mask must equal the codon sites excluded in ALL clades.
+
+    Re-derives the expected mask from counts_all.csv using the all-clades rule
+    (a nt_site qualifies iff every row at it has exclude==True) restricted to the
+    masking gene, and asserts the emitted ``spike_codon_sites_to_mask.txt`` matches.
+    This pins the clade-agnostic behavior: a regression to per-clade masking would
+    add clade-specific codon sites and fail here.
+    """
+    import pandas as pd
+
+    counts_path = os.path.join(output_dir, "counts_all.csv")
+    mask_path = os.path.join(output_dir, "spike_codon_sites_to_mask.txt")
+    if not os.path.exists(counts_path):
+        return [f"counts_all.csv not found under {output_dir}"], None
+    if not os.path.exists(mask_path):
+        return [f"spike_codon_sites_to_mask.txt not found under {output_dir}"], None
+
+    df = pd.read_csv(counts_path)
+    site_all_excluded = (df["exclude"] == True).groupby(df["nt_site"]).transform("all")  # noqa: E712
+    in_gene = df["gene"].astype(str).str.contains(masking_gene, na=False)
+    expected = _parse_codon_sites(df[site_all_excluded & in_gene]["codon_site"])
+
+    with open(mask_path) as f:
+        emitted = {int(x) for x in f.read().split() if x.strip().lstrip("-").isdigit()}
+
+    differences = []
+    if emitted != expected:
+        differences.append(
+            f"spike mask mismatch: emitted-only={sorted(emitted - expected)[:10]}, "
+            f"expected-only={sorted(expected - emitted)[:10]}"
+        )
+    summary = None if differences else (
+        f"{len(emitted)} codon sites, all excluded across every clade"
+    )
+    return differences, summary
+
+
 def default_output_dir():
     """Best-guess test output dir when none is given.
 
@@ -344,7 +774,17 @@ def main():
     
     # Compare
     differences = compare_summaries(actual, expected)
-    
+
+    # Independently validate per-clade UShER masking against the committed yaml
+    # (the test clades carry no UShER masks): both whole-site masks and the
+    # optional directional mutation masks, each applied in one clade but not
+    # another.
+    site_mask_diffs, site_mask_summary = validate_usher_site_masking()
+    mut_mask_diffs, mut_mask_summary = validate_usher_mutation_masking(output_dir)
+    reversion_diffs, reversion_summary = validate_reversion_masking(output_dir)
+    spike_mask_diffs, spike_mask_summary = validate_spike_mask_all_clades(output_dir)
+    differences += site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
+
     if differences:
         print("VALIDATION FAILED!")
         print("\nDifferences found:")
@@ -365,6 +805,14 @@ def main():
         if actual.get('aamut_fitness_summary'):
             print(f"  - AA mutation fitness rows: {actual['aamut_fitness_summary']['num_rows']}")
             print(f"  - AA mutation fitness clade files: {actual['aamut_fitness_summary']['num_clade_files']}")
+        if site_mask_summary:
+            print(f"  - UShER per-clade site mask: {site_mask_summary}")
+        if mut_mask_summary:
+            print(f"  - UShER per-clade mutation mask: {mut_mask_summary}")
+        if reversion_summary:
+            print(f"  - Founder->reference reversions: {reversion_summary}")
+        if spike_mask_summary:
+            print(f"  - Spike codon mask (all-clades): {spike_mask_summary}")
         sys.exit(0)
 
 
