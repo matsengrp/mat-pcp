@@ -1,9 +1,25 @@
 # =============================================================================
 # Input/Output Configuration
 # =============================================================================
-output_dir: "results"
-mat: "path/to/tree.pb.gz"
-metadata: "path/to/metadata.tsv.gz"
+# Root for all outputs (optional; defaults to "results"). Each tree is written
+# to {output_root}/{label}_{version}.
+output_root: "results"
+
+# Trees to process. A single `snakemake` invocation builds every tree listed
+# here. The label (e.g. `public_2022-06-01`) becomes a `{tree}` wildcard and the
+# output directory `results/<label>_<version>`. `mat` and `metadata` are
+# required per tree. `max_leaf_date` is the ONLY per-tree-overridable key; when
+# omitted a tree inherits the global `qc_filter_options.max_leaf_date`. Every
+# other setting below is global and shared across all trees.
+trees:
+  public_2022-06-01:                       # -> results/public_2022-06-01_v5
+    mat: "../mat-trees/2022-06-01-public/public-2022-06-01.all.masked.nextclade.pangolin.pb.gz"
+    metadata: "../mat-trees/2022-06-01-public/public-2022-06-01.metadata.tsv.gz"
+    max_leaf_date: "2022-06-01"            # per-tree override (only overridable key)
+  public_2023-01-01:                       # -> results/public_2023-01-01_v5
+    mat: "../mat-trees/2023-01-01-public/public-2023-01-01.all.masked.pb.gz"
+    metadata: "../mat-trees/2023-01-01-public/public-2023-01-01.metadata.tsv.gz"
+    # max_leaf_date omitted -> inherits global 2023-01-01
 
 # =============================================================================
 # Reference Genome Configuration
@@ -20,8 +36,8 @@ add_to_ref_gtf:
 # =============================================================================
 qc_filter_options:
   invalid_date_resolutions: ["MISSING", "MONTH", "YEAR"]
-  min_date: "2019-12-01"
-  datetime_cutoff: "2022-06-01"
+  min_leaf_date: "2019-12-01"
+  max_leaf_date: "2023-01-01"  # global default; a tree may override under its label
   valid_hosts: ["Human", "Homo sapiens"]
   missing_host_is_valid: true
   min_genome_length: 28000

@@ -78,9 +78,9 @@ def main():
     SKIP_QC_FILTERING = snakemake.params.get("skip_qc_filtering", False)
 
     qc_opts = snakemake.params["qc_filter_options"]
-    DATETIME_CUTOFF = qc_opts["datetime_cutoff"]
+    MAX_LEAF_DATE = qc_opts["max_leaf_date"]
     INVALID_DATE_RES = qc_opts["invalid_date_resolutions"]
-    MIN_DATE = qc_opts["min_date"]
+    MIN_LEAF_DATE = qc_opts["min_leaf_date"]
     VALID_HOSTS = qc_opts["valid_hosts"]
     MISSING_HOST_IS_VALID = qc_opts["missing_host_is_valid"]
     MIN_GENOME_LENGTH = qc_opts["min_genome_length"]
@@ -132,12 +132,12 @@ def main():
         meta_df.drop(columns=["date_resolution"], inplace=True)
         meta_df["date"] = meta_df["date"].apply(robust_fromisoformat)
 
-        datetime_cutoff = datetime.fromisoformat(DATETIME_CUTOFF)
+        max_leaf_date = datetime.fromisoformat(MAX_LEAF_DATE)
         valid_dates = ~pd.isna(meta_df["date"])
-        meta_df = meta_df[valid_dates & (meta_df["date"] <= datetime_cutoff)]
+        meta_df = meta_df[valid_dates & (meta_df["date"] <= max_leaf_date)]
 
         invalid_resolution = meta_df["date_resolution_str"].isin(INVALID_DATE_RES)
-        invalid_time = meta_df["date"] < robust_fromisoformat(MIN_DATE)
+        invalid_time = meta_df["date"] < robust_fromisoformat(MIN_LEAF_DATE)
         invalid_date = meta_df[invalid_resolution | invalid_time]
         qc_1_strain_to_drop = invalid_date["strain"].to_list()
         meta_df.drop(invalid_date.index, inplace=True)

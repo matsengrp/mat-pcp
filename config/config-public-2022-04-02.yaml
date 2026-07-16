@@ -8,9 +8,10 @@
 # =============================================================================
 # Input/Output Configuration
 # =============================================================================
-output_dir: "results/public_2022-04-02_v2"
-mat: "../mat-trees/2022-04-02-public/public-2022-04-02.all.masked.pb.gz"
-metadata: "../mat-trees/2022-04-02-public/public-2022-04-02.metadata.tsv.gz"
+trees:
+  public_2022-04-02:                       # -> results/public_2022-04-02_v5
+    mat: "../mat-trees/2022-04-02-public/public-2022-04-02.all.masked.pb.gz"
+    metadata: "../mat-trees/2022-04-02-public/public-2022-04-02.metadata.tsv.gz"
 
 # =============================================================================
 # Reference Genome Configuration
@@ -28,8 +29,8 @@ add_to_ref_gtf:
 # =============================================================================
 qc_filter_options:
   invalid_date_resolutions: ["MISSING", "MONTH", "YEAR"]
-  min_date: "2019-12-01"
-  datetime_cutoff: "2022-04-02"
+  min_leaf_date: "2019-12-01"
+  max_leaf_date: "2022-04-02"
   valid_hosts: ["Human", "Homo sapiens"]
   missing_host_is_valid: true
   min_genome_length: 28000

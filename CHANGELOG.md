@@ -18,6 +18,34 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### v5
+
+**Run multiple trees from one config** — tracks issue
+[#104](https://github.com/matsengrp/mat-pcp/issues/104).
+
+**Changes**:
+
+- **New `trees:` config schema**: the pipeline now processes a mapping of named
+  trees in a single Snakemake invocation. Shared parameters (reference genome,
+  GLM, genes, masking, thresholds, fitness, clade settings, and all
+  `qc_filter_options`) stay at the top level; a new top-level `trees:` mapping is
+  keyed by a short tree **label**, and each entry supplies that tree's `mat` and
+  `metadata` (both required). `max_leaf_date` is the only per-tree-overridable
+  key; when omitted a tree inherits the global `qc_filter_options.max_leaf_date`.
+
+- **`output_dir` removed; derived automatically**: output paths are now
+  `{output_root}/{label}_{version}` (e.g. `results/public_2022-06-01_v5`), where
+  `output_root` is an optional global key defaulting to `results`. The scalar
+  `output_dir`, `mat`, and `metadata` top-level keys no longer exist.
+
+- **Parameter renames** (parallel naming for the two leaf-date bounds):
+  `qc_filter_options.datetime_cutoff` → `max_leaf_date` and
+  `qc_filter_options.min_date` → `min_leaf_date`.
+
+- **Per-tree output layout is byte-identical to v4** apart from the version dir
+  name: a single-tree run writes the same files under
+  `{output_root}/{label}_v5/...` that a v4 run wrote under `{output_dir}_v4/...`.
+
 ### v4
 
 **Overhaul UShER masking, mask all founder→reference reversions, and make the codon mask
