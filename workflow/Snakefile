@@ -50,6 +50,18 @@ def tree_outdir(label):
     return os.path.join(OUTPUT_ROOT, f"{label}_{PIPELINE_VERSION}")
 
 
+# Valid tree-label characters. Single source of truth: used both to validate
+# labels in ``_normalize_trees`` and as the ``tree`` wildcard constraint below.
+TREE_LABEL_PATTERN = r"[A-Za-z0-9_.+-]+"
+
+# Path template for a clade's whole-genome founder FASTA (produced by rule
+# ``clade_founder_fasta``; consumed by ``extract_pcps_by_clade`` and
+# ``clade_founder_nts``). Defined once so a path change tracks in one place --
+# ``rules.clade_founder_fasta.output`` cannot be used at the
+# ``extract_pcps_by_clade`` site because that rule is parsed later in the file.
+CLADE_FOUNDER_FASTA = os.path.join(OUTDIR, "clade_founders/{clade}.fa")
+
+
 def _normalize_trees(cfg):
     """Read and validate the ``trees:`` mapping from the config.
 
@@ -65,10 +77,10 @@ def _normalize_trees(cfg):
     ``max_leaf_dat`` would otherwise be swallowed and the tree would quietly
     inherit the global cutoff.
     """
-    # Mirrors the ``tree`` wildcard constraint below; a label with any other
-    # character (e.g. a space or ``/``) would only fail later with a confusing
-    # MissingInputException, so reject it up front.
-    label_pattern = re.compile(r"[A-Za-z0-9_.+-]+")
+    # ``TREE_LABEL_PATTERN`` is also the ``tree`` wildcard constraint below; a
+    # label with any other character (e.g. a space or ``/``) would only fail
+    # later with a confusing MissingInputException, so reject it up front.
+    label_pattern = re.compile(TREE_LABEL_PATTERN)
     allowed_keys = {"mat", "metadata", "max_leaf_date"}
 
     trees = cfg.get("trees")
@@ -198,7 +210,7 @@ _warn_if_public_config_has_min_clade_size(workflow, config.get("min_clade_size",
 
 wildcard_constraints:
     clade="[A-Za-z0-9_.+-]+",  # Valid clade name characters
-    tree="[A-Za-z0-9_.+-]+",   # Tree label (slash-free by construction)
+    tree=TREE_LABEL_PATTERN,   # Tree label (slash-free by construction)
 
 
 # Disambiguate the aggregate rules from their per-clade counterparts. The
@@ -611,7 +623,7 @@ rule extract_pcps_by_clade:
         tree=rules.mat_clade_subset.output.tree,
         gtf=rules.edit_ref_gtf.output.gtf,
         fasta=rules.get_ref_fasta.output.ref_fasta,
-        clade_founder_fasta=os.path.join(OUTDIR, "clade_founders/{clade}.fa"),
+        clade_founder_fasta=CLADE_FOUNDER_FASTA,
         coding_sites=rules.ref_coding_sites.output.csv
     output:
         pcps=os.path.join(OUTDIR, "pcps/{clade}_pcps.csv"),
@@ -882,7 +894,7 @@ rule clade_founder_fasta:
         roemer_json=rules.clade_founder_jsons.output.roemer_json,
         ref_fasta=rules.get_ref_fasta.output.ref_fasta
     output:
-        fasta=os.path.join(OUTDIR, "clade_founders/{clade}.fa"),
+        fasta=CLADE_FOUNDER_FASTA,
         gene_fasta=_gene_sliced_founder_outputs()
     params:
         roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {}),
@@ -1021,7 +1033,7 @@ rule clade_founder_nts:
     input:
         coding_sites=rules.ref_coding_sites.output.csv,
         fastas=lambda wc: expand(
-            os.path.join(OUTDIR, "clade_founders/{clade}.fa"),
+            CLADE_FOUNDER_FASTA,
             tree=wc.tree, clade=clades_w_adequate_counts(wc)
         )
     output:
