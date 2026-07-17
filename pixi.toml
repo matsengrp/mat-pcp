@@ -12,8 +12,20 @@ CONDARC = ".condarc"
 
 [dependencies]
 snakemake = ">=7.32.4,<8"
-conda = ">=23.7.4,<24"
-mamba = ">=1.5.1,<2"
+# Use conda (not mamba) as the Snakemake conda frontend. conda >=24 ships the
+# libmamba 2.x solver, which correctly parses the current prefix.dev bioconda
+# repodata; the old libmamba 1.5.x stack (pulled by mamba 1.5.x) silently
+# failed to parse it, writing an empty solv cache so every bioconda package
+# (usher, bte, ...) resolved as "does not exist". We intentionally do NOT
+# depend on the `mamba` CLI: mamba 2.x is incompatible with Snakemake 7's env
+# creation ("Non-conda folder exists at prefix"), and dropping it stops
+# Snakemake from auto-selecting it as the frontend. See mat-pcp #105.
+conda = ">=24.1"
+# The libmamba solver plugin for conda. Required explicitly: .condarc sets
+# `solver: libmamba`, and this plugin (not a hard dep of conda) is what makes
+# conda recognize that backend -- without it conda errors "solver backend
+# (libmamba) was not recognized".
+conda-libmamba-solver = ">=24"
 python = ">=3.9,<3.12"
 pandas = ">=1.5.3,<3"
 setuptools = ">=65.0.0,<70"

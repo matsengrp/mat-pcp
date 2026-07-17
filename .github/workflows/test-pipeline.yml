@@ -115,9 +115,8 @@ jobs:
     - name: Dry run pipeline
       run: |
         export CONDARC="$HOME/.condarc"
-        export CONDA_NO_PLUGINS=true
         pixi run snakemake -n --use-conda \
-          --conda-frontend mamba \
+          --conda-frontend conda \
           --configfile config/config_test_data.yaml
 
     - name: Run test pipeline
@@ -131,8 +130,10 @@ jobs:
         export CONDA_REMOTE_READ_TIMEOUT_SECS=180
         export CONDA_REMOTE_MAX_RETRIES=5
 
-        # Disable conda plugins that might interfere with channel selection
-        export CONDA_NO_PLUGINS=true
+        # NOTE: do NOT set CONDA_NO_PLUGINS here. The conda frontend now uses the
+        # libmamba solver, which is a conda *plugin* (conda-libmamba-solver);
+        # disabling plugins makes conda fail with "solver backend (libmamba) was
+        # not recognized". See mat-pcp #105.
 
         # Show conda configuration being used
         echo "Conda configuration:"
@@ -141,7 +142,7 @@ jobs:
 
         # Run pipeline (single attempt with proper timeout)
         pixi run snakemake -j $(nproc) --use-conda \
-          --conda-frontend mamba \
+          --conda-frontend conda \
           --configfile config/config_test_data.yaml
 
     - name: Set output directory variable
@@ -396,6 +397,7 @@ jobs:
         # Build founder files for first 3 clades
         pixi run snakemake $(cat /tmp/founder_targets.txt | tr '\n' ' ') \
           -j 2 --use-conda \
+          --conda-frontend conda \
           --configfile config/config_test_data.yaml
 
     - name: Verify clade founder files
@@ -432,6 +434,7 @@ jobs:
       run: |
         # Build site mask
         pixi run snakemake -j 1 --use-conda $OUTPUT_DIR/ref/site_mask.csv \
+          --conda-frontend conda \
           --configfile config/config_test_data.yaml
 
         # Build mutation translation and sample paths for first 2 clades
@@ -450,6 +453,7 @@ jobs:
 
         pixi run snakemake $(cat /tmp/mutation_targets.txt | tr '\n' ' ') \
           -j 2 --use-conda \
+          --conda-frontend conda \
           --configfile config/config_test_data.yaml
 
     - name: Verify site mask
