@@ -286,7 +286,7 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `qc_filter_options.min_leaf_date` | Earliest sample date | `2019-12-01` |
-| `qc_filter_options.max_leaf_date` | Latest sample date (global default; overridable per tree) | `2022-06-01` |
+| `qc_filter_options.max_leaf_date` | Latest sample date; optional (unset ⇒ no upper cutoff), overridable per tree | `None` (unset) |
 | `qc_filter_options.valid_hosts` | Allowed host species | `["Human", "Homo sapiens"]` |
 | `qc_filter_options.min_genome_length` | Minimum genome length | `28000` |
 | `subset_frac` | Random sampling fraction (1.0 = no sampling) | `1.0` |

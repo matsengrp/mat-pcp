@@ -31,7 +31,9 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
   `qc_filter_options`) stay at the top level; a new top-level `trees:` mapping is
   keyed by a short tree **label**, and each entry supplies that tree's `mat` and
   `metadata` (both required). `max_leaf_date` is the only per-tree-overridable
-  key; when omitted a tree inherits the global `qc_filter_options.max_leaf_date`.
+  key; it is optional and defaults to `None` (no upper date cutoff). When a
+  global `qc_filter_options.max_leaf_date` is set, a tree without its own value
+  inherits it.
 
 - **`output_dir` removed; derived automatically**: output paths are now
   `{output_root}/{label}_{version}` (e.g. `results/public_2022-06-01_v5`), where

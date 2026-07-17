@@ -57,7 +57,8 @@ def _normalize_trees(cfg):
     a fully resolved ``qc_filter_options`` block: the global block with
     ``max_leaf_date`` overridden by the tree's value when present. ``mat`` and
     ``metadata`` are required per tree; ``max_leaf_date`` is the only
-    per-tree-overridable key and must resolve to a value for every tree.
+    per-tree-overridable key and is optional -- when unset (globally and per
+    tree) it resolves to ``None``, meaning no upper date cutoff.
 
     Validates each tree entry explicitly (label characters, allowed keys,
     required keys) rather than silently ignoring mistakes -- e.g. a misspelled
@@ -112,11 +113,10 @@ def _normalize_trees(cfg):
         qc = dict(global_qc)
         if "max_leaf_date" in entry:
             qc["max_leaf_date"] = entry["max_leaf_date"]
-        if not qc.get("max_leaf_date"):
-            raise ValueError(
-                f"Tree '{label}' has no `max_leaf_date`: set it under the tree "
-                f"or provide a global `qc_filter_options.max_leaf_date`."
-            )
+        # max_leaf_date is optional: unset (or null) -> None, i.e. no upper
+        # date cutoff. Set it explicitly so filter_metadata.py always finds
+        # the key.
+        qc.setdefault("max_leaf_date", None)
         entry["qc_filter_options"] = qc
         normalized[label] = entry
     return normalized

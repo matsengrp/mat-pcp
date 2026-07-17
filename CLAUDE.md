@@ -158,7 +158,8 @@ The configuration (`config/config.yaml`) is organized into:
 2. **Reference Genome**: `ref_fasta`, `ref_gtf`, `add_to_ref_gtf`
 3. **Metadata QC**: `qc_filter_options` (date filtering via `min_leaf_date` /
    `max_leaf_date`, host validation, genome length). Global except that a tree
-   may override `max_leaf_date`.
+   may override `max_leaf_date`. `max_leaf_date` is optional; when unset it
+   defaults to `None`, meaning no upper date cutoff.
 4. **Tree Processing**: `optimize_tree`, `mat_subset_kwargs`
 5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
 6. **PCP Extraction**: `pcp_gene_region`, `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`

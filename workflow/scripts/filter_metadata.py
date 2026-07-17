@@ -78,7 +78,7 @@ def main():
     SKIP_QC_FILTERING = snakemake.params.get("skip_qc_filtering", False)
 
     qc_opts = snakemake.params["qc_filter_options"]
-    MAX_LEAF_DATE = qc_opts["max_leaf_date"]
+    MAX_LEAF_DATE = qc_opts.get("max_leaf_date")  # None -> no upper date cutoff
     INVALID_DATE_RES = qc_opts["invalid_date_resolutions"]
     MIN_LEAF_DATE = qc_opts["min_leaf_date"]
     VALID_HOSTS = qc_opts["valid_hosts"]
@@ -132,9 +132,12 @@ def main():
         meta_df.drop(columns=["date_resolution"], inplace=True)
         meta_df["date"] = meta_df["date"].apply(robust_fromisoformat)
 
-        max_leaf_date = datetime.fromisoformat(MAX_LEAF_DATE)
         valid_dates = ~pd.isna(meta_df["date"])
-        meta_df = meta_df[valid_dates & (meta_df["date"] <= max_leaf_date)]
+        if MAX_LEAF_DATE is not None:
+            max_leaf_date = datetime.fromisoformat(MAX_LEAF_DATE)
+            meta_df = meta_df[valid_dates & (meta_df["date"] <= max_leaf_date)]
+        else:
+            meta_df = meta_df[valid_dates]
 
         invalid_resolution = meta_df["date_resolution_str"].isin(INVALID_DATE_RES)
         invalid_time = meta_df["date"] < robust_fromisoformat(MIN_LEAF_DATE)

@@ -65,9 +65,10 @@ jobs:
             for k in ('mat', 'metadata'):
                 assert entry.get(k), f'Tree {label!r} missing required key {k!r}'
 
-        # QC block uses the renamed leaf-date bounds.
-        for k in ('min_leaf_date', 'max_leaf_date'):
-            assert k in config['qc_filter_options'], f'qc_filter_options missing {k!r}'
+        # QC block uses the renamed leaf-date bounds. min_leaf_date is required;
+        # max_leaf_date is optional (unset -> None, i.e. no upper date cutoff).
+        assert 'min_leaf_date' in config['qc_filter_options'], \
+            'qc_filter_options missing min_leaf_date'
 
         print('Config schema validation passed!')
         "
