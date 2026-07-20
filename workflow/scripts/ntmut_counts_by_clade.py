@@ -24,6 +24,22 @@ log(f"Extracting nucleotide mutation counts for clade: {clade}")
 counts_df = pd.read_csv(counts_csv)
 log(f"Loaded {len(counts_df)} count entries")
 
+# Apply masking before computing fitness. The `exclude` flag (built once in
+# build_count_table via modules/masking.py) is a superset of `masked_in_usher`
+# and also covers out-of-range sites, config `sites_to_exclude`, and
+# founder->reference reversions. Dropping these per (clade, mutation) rows here
+# keeps their artifactual actual counts out of both the per-clade fitness and
+# the "all" cross-clade aggregation below (a site masked only in one clade still
+# contributes from clades where it is not masked). The GLM/expected-count
+# machinery is unaffected: it trains on separately curated counts.
+if "exclude" in counts_df.columns:
+    n_before = len(counts_df)
+    counts_df = counts_df[counts_df["exclude"] != True].copy()
+    log(f"Dropped {n_before - len(counts_df)} excluded (masked) mutations; "
+        f"{len(counts_df)} remain")
+else:
+    log("WARNING: no 'exclude' column found; no masking applied to fitness counts")
+
 if clade == "all":
     # Aggregate counts across all clades
     log("Aggregating counts across all clades")

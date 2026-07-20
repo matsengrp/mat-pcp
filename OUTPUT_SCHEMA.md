@@ -97,6 +97,7 @@ Amino acid-level fitness estimates aggregated across all clades. Fitness is comp
 - Positive `delta_fitness` indicates the mutation is observed more often than expected (potentially beneficial).
 - Negative `delta_fitness` indicates the mutation is observed less often than expected (potentially deleterious).
 - The `uncertainty` column can be used to filter for high-confidence estimates.
+- **Masking:** masked mutations (`exclude == True` in the count table) are dropped before fitness is computed (in `ntmut_counts_by_clade`), so no row here reflects counts from masked sites. Because masking is per-clade, a mutation masked only in some clades still contributes to the aggregate from clades where it is not masked.
 
 ### `aamut_fitness/{clade}_aamut_fitness.csv`
 
@@ -133,6 +134,7 @@ Nucleotide-level fitness estimates. Similar structure to amino acid fitness but 
 
 **Notes:**
 - Additional technical columns (e.g., `motif`, `unpaired`, `codon_site`, `mut_class`) are present for internal pipeline use but are not documented here.
+- **Masking:** as with the amino-acid fitness, masked mutations (`exclude == True`) are dropped in `ntmut_counts_by_clade` before nucleotide fitness is computed, so masked sites do not appear here.
 
 ## Mutation Counts
 

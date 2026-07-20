@@ -44,9 +44,26 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
   `qc_filter_options.datetime_cutoff` → `max_leaf_date` and
   `qc_filter_options.min_date` → `min_leaf_date`.
 
-- **Per-tree output layout is byte-identical to v4** apart from the version dir
-  name: a single-tree run writes the same files under
-  `{output_root}/{label}_v5/...` that a v4 run wrote under `{output_dir}_v4/...`.
+- **Site masking now applied to the fitness outputs**
+  ([#106](https://github.com/matsengrp/mat-pcp/issues/106)): masked mutations
+  (`exclude == True` in the count table — the union of UShER/ProblematicSites-VCF
+  masks, config `sites_to_exclude`, sites outside `site_include_range`, and
+  founder→reference reversions) are now dropped in `ntmut_counts_by_clade.py`
+  before nucleotide and amino-acid fitness are computed. Previously the fitness
+  branch flagged but never removed these rows, so `ntmut_fitness_aggregated.csv`
+  and `all_aamut_fitness.csv` included artifactual counts from masked sites; the
+  masking had only ever been applied to the GLM training data (`curate_counts`).
+  Rows for masked mutations no longer appear in the fitness outputs. The
+  filtering is per `(clade, mutation)`, so the `"all"` cross-clade aggregate
+  still counts a mutation from clades where it is not masked.
+
+- **Per-tree output layout is byte-identical to v4 for everything except the
+  fitness outputs**, apart from the version dir name: a single-tree run writes
+  the same files under `{output_root}/{label}_v5/...` that a v4 run wrote under
+  `{output_dir}_v4/...`, except that the fitness files
+  (`fitness/ntmut_counts/*`, `fitness/ntmut_fitness/*`,
+  `fitness/ntmut_fitness_aggregated.csv`, `aamut_fitness/*`) now exclude masked
+  mutations (see above).
 
 - **Multi-tree CI coverage** (test-infra, no schema impact):
   `config/config_test_data_multitree.yaml` and a step in the Test Pipeline job

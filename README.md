@@ -143,6 +143,8 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 
 "Fitness" in this pipeline measures how often a mutation is **observed** relative to a **neutral baseline** of how often it would be expected by chance. A positive value means the mutation appears more often than the baseline predicts (potentially beneficial); a negative value means it appears less often (potentially deleterious). The pipeline emits several distinct fitness values across three output files, summarized below. Column definitions live in [`OUTPUT_SCHEMA.md`](OUTPUT_SCHEMA.md); the parameters that control these computations are in the [Fitness Estimation](#fitness-estimation) configuration table.
 
+Masked mutations are excluded from every fitness output. Any mutation flagged `exclude` in `counts_all.csv` — the union of UShER/ProblematicSites-VCF masks, config `sites_to_exclude`, sites outside `site_include_range`, and founder→reference reversions — is dropped in `ntmut_counts_by_clade` before fitness is computed. Because masking is applied per `(clade, mutation)`, a mutation masked only in some clades still contributes to the cross-clade aggregate from clades where it is not masked.
+
 ### The fitness values
 
 | Value | File | Baseline | Method |
