@@ -57,13 +57,33 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
   filtering is per `(clade, mutation)`, so the `"all"` cross-clade aggregate
   still counts a mutation from clades where it is not masked.
 
+- **`"all"` cross-clade nucleotide aggregation now pools by mutation identity.**
+  `ntmut_counts_by_clade` previously grouped the `"all"` cluster by *every*
+  non-count column, including clade-founder-derived annotations (`motif`,
+  `clade_founder_codon`/`aa`, `mutant_codon`/`aa`, `aa_mutation`, `synonymous`,
+  `four_fold_degenerate`, `mut_class`) that can differ between clades for the
+  same nucleotide mutation. That silently split a mutation into multiple `"all"`
+  rows (one per context) and fragmented its pooled counts. The `"all"` cluster
+  now keys strictly on `(nt_site, nt_mutation)`, summing counts across clades
+  into one row per mutation; the differing annotation columns keep a
+  representative (first contributing clade's) value. Per-clade rows are
+  unchanged. In the test data this collapses 36 fragmented mutations (all
+  zero-count) in `ntmut_fitness_aggregated.csv`.
+
+- **`exclude` / `masked_in_usher` columns removed from the fitness outputs.**
+  After masking is applied, every surviving row has `exclude == False`, so these
+  now-constant flags are dropped in `ntmut_counts_by_clade` rather than carried
+  as uninformative columns into `fitness/ntmut_counts/*`, `fitness/ntmut_fitness/*`,
+  and `fitness/ntmut_fitness_aggregated.csv`. (They remain in `counts_all.csv`.)
+
 - **Per-tree output layout is byte-identical to v4 for everything except the
   fitness outputs**, apart from the version dir name: a single-tree run writes
   the same files under `{output_root}/{label}_v5/...` that a v4 run wrote under
   `{output_dir}_v4/...`, except that the fitness files
   (`fitness/ntmut_counts/*`, `fitness/ntmut_fitness/*`,
   `fitness/ntmut_fitness_aggregated.csv`, `aamut_fitness/*`) now exclude masked
-  mutations (see above).
+  mutations, drop the `exclude`/`masked_in_usher` columns, and pool the `"all"`
+  cluster by nucleotide identity (see above).
 
 - **Multi-tree CI coverage** (test-infra, no schema impact):
   `config/config_test_data_multitree.yaml` and a step in the Test Pipeline job
