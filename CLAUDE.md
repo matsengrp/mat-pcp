@@ -90,6 +90,13 @@ pixi run snakemake -j 2 --use-conda \
 
 # Validate results
 pixi run python workflow/scripts/validate_test.py
+
+# Multi-tree smoke test: two trees in one config that resolve their
+# get_clades checkpoints independently (the earlier max_leaf_date yields
+# fewer clades). CI builds only each tree's clade_counts.csv and asserts
+# the counts differ.
+pixi run snakemake -j 2 --use-conda \
+  --configfile config/config_test_data_multitree.yaml
 ```
 
 ## Architecture

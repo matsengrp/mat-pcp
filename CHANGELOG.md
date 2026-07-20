@@ -48,6 +48,12 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
   name: a single-tree run writes the same files under
   `{output_root}/{label}_v5/...` that a v4 run wrote under `{output_dir}_v4/...`.
 
+- **Multi-tree CI coverage** (test-infra, no schema impact):
+  `config/config_test_data_multitree.yaml` and a step in the Test Pipeline job
+  build two trees from one config and assert their `get_clades` checkpoints
+  resolve independently — guarding against a regression where a per-tree
+  `max_leaf_date` override is ignored.
+
 ### v4
 
 **Overhaul UShER masking, mask all founder→reference reversions, and make the codon mask

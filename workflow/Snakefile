@@ -46,8 +46,13 @@ OUTDIR = os.path.join(OUTPUT_ROOT, f"{{tree}}_{PIPELINE_VERSION}")
 
 
 def tree_outdir(label):
-    """Resolve the concrete output directory for a given tree ``label``."""
-    return os.path.join(OUTPUT_ROOT, f"{label}_{PIPELINE_VERSION}")
+    """Resolve the concrete output directory for a given tree ``label``.
+
+    Formats the ``{tree}`` placeholder in ``OUTDIR`` so this and ``OUTDIR``
+    can never drift -- ``OUTDIR`` is the single source of truth for the
+    output-dir shape.
+    """
+    return OUTDIR.format(tree=label)
 
 
 # Valid tree-label characters. Single source of truth: used both to validate
@@ -81,7 +86,13 @@ def _normalize_trees(cfg):
     # label with any other character (e.g. a space or ``/``) would only fail
     # later with a confusing MissingInputException, so reject it up front.
     label_pattern = re.compile(TREE_LABEL_PATTERN)
-    allowed_keys = {"mat", "metadata", "max_leaf_date"}
+    # Per-tree keys. REQUIRED_TREE_KEYS point at that tree's inputs;
+    # QC_OVERRIDABLE_KEYS override a value *inside* qc_filter_options (see the
+    # merge below). To add a second overridable key later, extend this tuple --
+    # the merge and validation both iterate it, so nothing else needs touching.
+    REQUIRED_TREE_KEYS = ("mat", "metadata")
+    QC_OVERRIDABLE_KEYS = ("max_leaf_date",)
+    allowed_keys = {*REQUIRED_TREE_KEYS, *QC_OVERRIDABLE_KEYS}
 
     trees = cfg.get("trees")
     if not trees:
@@ -113,22 +124,22 @@ def _normalize_trees(cfg):
                 f"only {sorted(allowed_keys)} are per-tree settings (every "
                 f"other setting is global)."
             )
-        for required in ("mat", "metadata"):
+        for required in REQUIRED_TREE_KEYS:
             if not entry.get(required):
                 raise ValueError(
                     f"Tree '{label}' is missing required key '{required}'."
                 )
-        # Merge qc_filter_options: global block with per-tree max_leaf_date
-        # override. This is the one gotcha -- max_leaf_date lives *inside*
-        # qc_filter_options (consumed by filter_metadata.py); without this
-        # merge every tree would silently share the global cutoff.
+        # Merge qc_filter_options: the global block, with each overridable key
+        # replaced by this tree's value when present. The keys live *inside*
+        # qc_filter_options (consumed by filter_metadata.py), so without this
+        # merge every tree would silently share the global value. Each key is
+        # optional: unset (or null) -> None, set explicitly so
+        # filter_metadata.py always finds it (None means no cutoff).
         qc = dict(global_qc)
-        if "max_leaf_date" in entry:
-            qc["max_leaf_date"] = entry["max_leaf_date"]
-        # max_leaf_date is optional: unset (or null) -> None, i.e. no upper
-        # date cutoff. Set it explicitly so filter_metadata.py always finds
-        # the key.
-        qc.setdefault("max_leaf_date", None)
+        for key in QC_OVERRIDABLE_KEYS:
+            if key in entry:
+                qc[key] = entry[key]
+            qc.setdefault(key, None)
         entry["qc_filter_options"] = qc
         normalized[label] = entry
     return normalized
@@ -548,6 +559,22 @@ def clades_w_adequate_counts(wildcards):
     return clades
 
 
+def per_clade_inputs(path_template, wildcards, extra_clades=()):
+    """Expand ``path_template`` over this tree's adequate-count clades.
+
+    ``path_template`` carries both the ``{tree}`` and ``{clade}`` wildcards
+    (e.g. ``os.path.join(OUTDIR, "pcps/{clade}_pcps.csv")`` or
+    ``CLADE_FOUNDER_FASTA``). Used in ``input:`` lambdas of the aggregate
+    rules so every per-clade fan-out resolves the checkpoint the same way.
+    ``extra_clades`` appends non-checkpoint clades such as ``"all"``.
+    """
+    return expand(
+        path_template,
+        tree=wildcards.tree,
+        clade=clades_w_adequate_counts(wildcards) + list(extra_clades),
+    )
+
+
 rule samples_by_clade:
     """Extract sample names for a specific clade."""
     input:
@@ -650,9 +677,8 @@ rule extract_pcps_by_clade:
 rule aggregate_clade_pcps:
     """Aggregate all clade-specific PCPs into a single file."""
     input:
-        pcps=lambda wc: expand(
-            os.path.join(OUTDIR, "pcps/{clade}_pcps.csv"),
-            tree=wc.tree, clade=clades_w_adequate_counts(wc)
+        pcps=lambda wc: per_clade_inputs(
+            os.path.join(OUTDIR, "pcps/{clade}_pcps.csv"), wc
         )
     output:
         all_pcps=os.path.join(OUTDIR, "pcps/all_pcps.csv")
@@ -668,9 +694,8 @@ rule aggregate_filtered_branches:
     """Aggregate per-clade filtered branch IDs and create curation report."""
     input:
         curated_pcps=rules.aggregate_clade_pcps.output.all_pcps,
-        filtered_branches=lambda wc: expand(
-            os.path.join(OUTDIR, "pcps/{clade}_filtered_branches.csv"),
-            tree=wc.tree, clade=clades_w_adequate_counts(wc)
+        filtered_branches=lambda wc: per_clade_inputs(
+            os.path.join(OUTDIR, "pcps/{clade}_filtered_branches.csv"), wc
         )
     output:
         report=os.path.join(OUTDIR, "pcps/pcp_curation_report.txt"),
@@ -1010,9 +1035,8 @@ rule count_mutations_clade:
 rule aggregate_mutation_counts:
     """Aggregate mutation counts across all clades."""
     input:
-        counts=lambda wc: expand(
-            os.path.join(OUTDIR, "mutation_counts/{clade}.csv"),
-            tree=wc.tree, clade=clades_w_adequate_counts(wc)
+        counts=lambda wc: per_clade_inputs(
+            os.path.join(OUTDIR, "mutation_counts/{clade}.csv"), wc
         )
     output:
         csv=os.path.join(OUTDIR, "mutation_counts/aggregated.csv")
@@ -1032,10 +1056,7 @@ rule clade_founder_nts:
     """Get nucleotide at each coding site for all clade founders."""
     input:
         coding_sites=rules.ref_coding_sites.output.csv,
-        fastas=lambda wc: expand(
-            CLADE_FOUNDER_FASTA,
-            tree=wc.tree, clade=clades_w_adequate_counts(wc)
-        )
+        fastas=lambda wc: per_clade_inputs(CLADE_FOUNDER_FASTA, wc)
     output:
         csv=os.path.join(OUTDIR, "clade_founder_nts.csv")
     log:
@@ -1242,10 +1263,9 @@ rule ntmut_fitness_by_clade:
 rule aggregate_ntmut_fitness:
     """Aggregate nucleotide fitness across all clades."""
     input:
-        fitness_files=lambda wc: expand(
+        fitness_files=lambda wc: per_clade_inputs(
             os.path.join(OUTDIR, "fitness/ntmut_fitness/{clade}_ntmut_fitness.csv"),
-            tree=wc.tree,
-            clade=clades_w_adequate_counts(wc) + ["all"]
+            wc, extra_clades=["all"]
         )
     output:
         csv=os.path.join(OUTDIR, "fitness/ntmut_fitness_aggregated.csv")
@@ -1288,9 +1308,8 @@ rule aamut_fitness_by_clade:
 rule aggregate_aamut_fitness:
     """Aggregate amino acid fitness across all clades."""
     input:
-        fitness_files=lambda wc: expand(
-            os.path.join(OUTDIR, "aamut_fitness/{clade}_aamut_fitness.csv"),
-            tree=wc.tree, clade=clades_w_adequate_counts(wc)
+        fitness_files=lambda wc: per_clade_inputs(
+            os.path.join(OUTDIR, "aamut_fitness/{clade}_aamut_fitness.csv"), wc
         )
     output:
         csv=os.path.join(OUTDIR, "aamut_fitness/all_aamut_fitness.csv")
@@ -1329,9 +1348,8 @@ rule validate_pcp_vs_counts:
     """Validate PCP-derived AA counts match aamut_fitness actual_count."""
     input:
         pcp_counts=rules.extract_mutations_from_pcps.output.aa_counts,
-        aamut_fitness_files=lambda wc: expand(
-            os.path.join(OUTDIR, "aamut_fitness/{clade}_aamut_fitness.csv"),
-            tree=wc.tree, clade=clades_w_adequate_counts(wc)
+        aamut_fitness_files=lambda wc: per_clade_inputs(
+            os.path.join(OUTDIR, "aamut_fitness/{clade}_aamut_fitness.csv"), wc
         ),
         all_aamut_fitness=rules.aggregate_aamut_fitness.output.csv
     output:
