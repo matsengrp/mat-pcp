@@ -1,10 +1,16 @@
 """Top-level Snakemake file that runs the unified MAT pipeline."""
 
 import os
+import re
 import pandas as pd
 import yaml
 
-configfile: "config/config.yaml"
+# The pipeline is always run with exactly one explicit ``--configfile`` (e.g.
+# ``--configfile config/config.yaml``). There is deliberately no ``configfile:``
+# directive here: a default directive would always be loaded and Snakemake would
+# deep-merge any ``--configfile`` on top of it, causing dict keys like ``trees``
+# to *union* across configs rather than be replaced. Requiring a single explicit
+# config keeps ``config["trees"]`` exactly what the user passed.
 
 
 # =============================================================================
@@ -23,22 +29,139 @@ VERSION_FILE = os.path.join(workflow.basedir, "..", "VERSION")
 with open(VERSION_FILE) as f:
     PIPELINE_VERSION = f.read().strip()
 
-# Append version to output_dir if not already present
-output_dir = config["output_dir"]
-if not output_dir.endswith(f"_{PIPELINE_VERSION}"):
-    config["output_dir"] = f"{output_dir}_{PIPELINE_VERSION}"
-    print(f"Pipeline version {PIPELINE_VERSION}: Output directory set to {config['output_dir']}")
+# =============================================================================
+# Tree Table and Output Directory Template
+# =============================================================================
+#
+# The pipeline processes a mapping of named trees (``trees:`` in the config),
+# building all of them in one Snakemake invocation. Each tree's label becomes a
+# ``{tree}`` wildcard, so every output path lives under
+# ``{output_root}/{tree}_{version}/...``. ``output_root`` defaults to
+# ``results``. ``OUTDIR`` is a module-level template string carrying the
+# ``{tree}`` placeholder; it is used everywhere an output/log/benchmark path is
+# built, exactly like the ``{clade}`` wildcard used further down.
+
+OUTPUT_ROOT = config.get("output_root", "results")
+OUTDIR = os.path.join(OUTPUT_ROOT, f"{{tree}}_{PIPELINE_VERSION}")
+
+
+def tree_outdir(label):
+    """Resolve the concrete output directory for a given tree ``label``.
+
+    Formats the ``{tree}`` placeholder in ``OUTDIR`` so this and ``OUTDIR``
+    can never drift -- ``OUTDIR`` is the single source of truth for the
+    output-dir shape.
+    """
+    return OUTDIR.format(tree=label)
+
+
+# Valid tree-label characters. Single source of truth: used both to validate
+# labels in ``_normalize_trees`` and as the ``tree`` wildcard constraint below.
+TREE_LABEL_PATTERN = r"[A-Za-z0-9_.+-]+"
+
+# Path template for a clade's whole-genome founder FASTA (produced by rule
+# ``clade_founder_fasta``; consumed by ``extract_pcps_by_clade`` and
+# ``clade_founder_nts``). Defined once so a path change tracks in one place --
+# ``rules.clade_founder_fasta.output`` cannot be used at the
+# ``extract_pcps_by_clade`` site because that rule is parsed later in the file.
+CLADE_FOUNDER_FASTA = os.path.join(OUTDIR, "clade_founders/{clade}.fa")
+
+
+def _normalize_trees(cfg):
+    """Read and validate the ``trees:`` mapping from the config.
+
+    Returns a dict keyed by tree label. Each value is the per-tree config with
+    a fully resolved ``qc_filter_options`` block: the global block with
+    ``max_leaf_date`` overridden by the tree's value when present. ``mat`` and
+    ``metadata`` are required per tree; ``max_leaf_date`` is the only
+    per-tree-overridable key and is optional -- when unset (globally and per
+    tree) it resolves to ``None``, meaning no upper date cutoff.
+
+    Validates each tree entry explicitly (label characters, allowed keys,
+    required keys) rather than silently ignoring mistakes -- e.g. a misspelled
+    ``max_leaf_dat`` would otherwise be swallowed and the tree would quietly
+    inherit the global cutoff.
+    """
+    # ``TREE_LABEL_PATTERN`` is also the ``tree`` wildcard constraint below; a
+    # label with any other character (e.g. a space or ``/``) would only fail
+    # later with a confusing MissingInputException, so reject it up front.
+    label_pattern = re.compile(TREE_LABEL_PATTERN)
+    # Per-tree keys. REQUIRED_TREE_KEYS point at that tree's inputs;
+    # QC_OVERRIDABLE_KEYS override a value *inside* qc_filter_options (see the
+    # merge below). To add a second overridable key later, extend this tuple --
+    # the merge and validation both iterate it, so nothing else needs touching.
+    REQUIRED_TREE_KEYS = ("mat", "metadata")
+    QC_OVERRIDABLE_KEYS = ("max_leaf_date",)
+    allowed_keys = {*REQUIRED_TREE_KEYS, *QC_OVERRIDABLE_KEYS}
+
+    trees = cfg.get("trees")
+    if not trees:
+        raise ValueError(
+            "Config must define a top-level `trees:` mapping keyed by tree "
+            "label, with `mat` and `metadata` per tree. Run with exactly one "
+            "`--configfile` (e.g. --configfile config/config.yaml)."
+        )
+
+    global_qc = dict(cfg.get("qc_filter_options", {}))
+    normalized = {}
+    for label, entry in trees.items():
+        if not label_pattern.fullmatch(str(label)):
+            raise ValueError(
+                f"Tree label '{label}' has invalid characters; allowed: "
+                f"letters, digits, and '_.+-' (it becomes a directory name "
+                f"and the '{{tree}}' wildcard)."
+            )
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"Tree '{label}' must be a mapping with `mat`/`metadata` keys, "
+                f"got {type(entry).__name__}."
+            )
+        entry = dict(entry)
+        unknown = set(entry) - allowed_keys
+        if unknown:
+            raise ValueError(
+                f"Tree '{label}' has unexpected key(s) {sorted(unknown)}; "
+                f"only {sorted(allowed_keys)} are per-tree settings (every "
+                f"other setting is global)."
+            )
+        for required in REQUIRED_TREE_KEYS:
+            if not entry.get(required):
+                raise ValueError(
+                    f"Tree '{label}' is missing required key '{required}'."
+                )
+        # Merge qc_filter_options: the global block, with each overridable key
+        # replaced by this tree's value when present. The keys live *inside*
+        # qc_filter_options (consumed by filter_metadata.py), so without this
+        # merge every tree would silently share the global value. Each key is
+        # optional: unset (or null) -> None, set explicitly so
+        # filter_metadata.py always finds it (None means no cutoff).
+        qc = dict(global_qc)
+        for key in QC_OVERRIDABLE_KEYS:
+            if key in entry:
+                qc[key] = entry[key]
+            qc.setdefault(key, None)
+        entry["qc_filter_options"] = qc
+        normalized[label] = entry
+    return normalized
+
+
+TREES = _normalize_trees(config)
+TREE_LABELS = list(TREES)
+
+
+def tree_cfg(label):
+    """Return the normalized per-tree config for ``label``."""
+    return TREES[label]
 
 
 # =============================================================================
 # Config Validation
 # =============================================================================
 
-# Required configuration parameters
+# Required configuration parameters. ``mat``/``metadata`` are enforced per tree
+# in ``_normalize_trees`` (above); ``output_dir`` no longer exists (it is derived
+# from ``output_root`` + the ``{tree}`` label). The rest are global.
 REQUIRED_CONFIG_PARAMS = [
-    "mat",
-    "metadata",
-    "output_dir",
     "clade_column",
     "ref_fasta",
     "ref_gtf",
@@ -98,6 +221,21 @@ _warn_if_public_config_has_min_clade_size(workflow, config.get("min_clade_size",
 
 wildcard_constraints:
     clade="[A-Za-z0-9_.+-]+",  # Valid clade name characters
+    tree=TREE_LABEL_PATTERN,   # Tree label (slash-free by construction)
+
+
+# Disambiguate the aggregate rules from their per-clade counterparts. The
+# aggregate outputs (``aggregated.csv``, ``all_pcps.csv``, ``all_*_dasm_*``,
+# ``all_aamut_fitness.csv``) live in the same directory as a ``{clade}`` output
+# and their filenames are valid ``{clade}`` matches (``clade=aggregated`` /
+# ``clade=all``). Before the multi-tree refactor these aggregate paths were
+# fully concrete strings, so Snakemake auto-preferred them over the wildcarded
+# per-clade rules; now that every path carries the ``{tree}`` wildcard, that
+# implicit tie-break is gone and we must state the preference explicitly.
+ruleorder: aggregate_mutation_counts > count_mutations_clade
+ruleorder: aggregate_clade_pcps > extract_pcps_by_clade
+ruleorder: curate_all_pcps_for_dasm > curate_pcps_for_dasm
+ruleorder: aggregate_aamut_fitness > aamut_fitness_by_clade
 
 
 # =============================================================================
@@ -125,11 +263,14 @@ def get_threads(rule_name):
 
 
 def get_final_tree():
-    """Get the final tree path based on whether optimization is enabled."""
-    output_dir = config["output_dir"]
+    """Get the final tree path based on whether optimization is enabled.
+
+    Returns a template carrying the ``{tree}`` placeholder (via ``OUTDIR``), so
+    it resolves per tree when used as a rule input.
+    """
     if config.get("optimize_tree", False):
-        return f"{output_dir}/mat/filtered_tree.pb"
-    return f"{output_dir}/mat/filtered_tree_raw.pb"
+        return os.path.join(OUTDIR, "mat/filtered_tree.pb")
+    return os.path.join(OUTDIR, "mat/filtered_tree_raw.pb")
 
 
 # =============================================================================
@@ -152,9 +293,13 @@ results_files = [
 
 
 rule all:
-    """Default target: produce all primary pipeline outputs."""
+    """Default target: produce all primary pipeline outputs for every tree."""
     input:
-        [os.path.join(config["output_dir"], f) for f in results_files]
+        expand(
+            os.path.join(OUTDIR, "{f}"),
+            tree=TREE_LABELS,
+            f=results_files,
+        )
 
 
 # =============================================================================
@@ -164,14 +309,14 @@ rule all:
 rule link_inputs:
     """Create symlinks to input MAT tree and metadata files."""
     params:
-        mat=config["mat"],
-        metadata=config["metadata"],
-        output_dir=config["output_dir"],
+        mat=lambda wc: tree_cfg(wc.tree)["mat"],
+        metadata=lambda wc: tree_cfg(wc.tree)["metadata"],
+        output_dir=lambda wc: tree_outdir(wc.tree),
     output:
-        mat=os.path.join(config["output_dir"], "mat/mat_tree.pb.gz"),
-        metadata=os.path.join(config["output_dir"], "mat/metadata.tsv.gz")
+        mat=os.path.join(OUTDIR, "mat/mat_tree.pb.gz"),
+        metadata=os.path.join(OUTDIR, "mat/metadata.tsv.gz")
     log:
-        os.path.join(config["output_dir"], "log/link_inputs.log")
+        os.path.join(OUTDIR, "log/link_inputs.log")
     conda:
         "envs/default.yml"
     shell:
@@ -189,14 +334,14 @@ rule filter_metadata:
     input:
         metadata=rules.link_inputs.output.metadata
     output:
-        filtered_metadata=os.path.join(config["output_dir"], "mat/filtered_metadata.tsv.gz")
+        filtered_metadata=os.path.join(OUTDIR, "mat/filtered_metadata.tsv.gz")
     params:
-        qc_filter_options=config["qc_filter_options"],
+        qc_filter_options=lambda wc: tree_cfg(wc.tree)["qc_filter_options"],
         subset_frac=config.get("subset_frac", 1.0),
         skip_qc_filtering=config.get("skip_qc_filtering", False),
     threads: get_threads("filter_metadata")
     log:
-        invalid_strains=os.path.join(config["output_dir"], "log/invalid_strains.txt")
+        invalid_strains=os.path.join(OUTDIR, "log/invalid_strains.txt")
     conda:
         "envs/default.yml"
     script:
@@ -209,17 +354,17 @@ rule filter_mat_tree:
         mat_tree=rules.link_inputs.output.mat,
         filtered_metadata=rules.filter_metadata.output.filtered_metadata
     output:
-        filtered_pb=os.path.join(config["output_dir"], "mat/filtered_tree_raw.pb")
+        filtered_pb=os.path.join(OUTDIR, "mat/filtered_tree_raw.pb")
     threads: get_threads("filter_mat_tree")
     resources:
         mem_mb=16000,
         runtime=120
     benchmark:
-        os.path.join(config["output_dir"], "benchmarks/filter_mat_tree.tsv")
+        os.path.join(OUTDIR, "benchmarks/filter_mat_tree.tsv")
     log:
-        stderr=os.path.join(config["output_dir"], "log/filter_mat_tree.stderr"),
-        stdout=os.path.join(config["output_dir"], "log/filter_mat_tree.stdout"),
-        valid_strains=os.path.join(config["output_dir"], "log/valid_strains.txt"),
+        stderr=os.path.join(OUTDIR, "log/filter_mat_tree.stderr"),
+        stdout=os.path.join(OUTDIR, "log/filter_mat_tree.stdout"),
+        valid_strains=os.path.join(OUTDIR, "log/valid_strains.txt"),
     conda:
         "envs/usher.yml"
     params:
@@ -257,16 +402,16 @@ rule optimize_mat_tree:
     input:
         tree=rules.filter_mat_tree.output.filtered_pb
     output:
-        optimized_tree=os.path.join(config["output_dir"], "mat/filtered_tree.pb")
+        optimized_tree=os.path.join(OUTDIR, "mat/filtered_tree.pb")
     threads: get_threads("optimize_mat_tree")
     resources:
         mem_mb=32000,
         runtime=480
     benchmark:
-        os.path.join(config["output_dir"], "benchmarks/optimize_mat_tree.tsv")
+        os.path.join(OUTDIR, "benchmarks/optimize_mat_tree.tsv")
     log:
-        stderr=os.path.join(config["output_dir"], "log/optimize_mat_tree.stderr"),
-        stdout=os.path.join(config["output_dir"], "log/optimize_mat_tree.stdout")
+        stderr=os.path.join(OUTDIR, "log/optimize_mat_tree.stderr"),
+        stdout=os.path.join(OUTDIR, "log/optimize_mat_tree.stdout")
     conda:
         "envs/usher.yml"
     shell:
@@ -288,9 +433,9 @@ rule get_ref_fasta:
     params:
         url=config["ref_fasta"],
     output:
-        ref_fasta=os.path.join(config["output_dir"], "ref/ref.fa"),
+        ref_fasta=os.path.join(OUTDIR, "ref/ref.fa"),
     log:
-        os.path.join(config["output_dir"], "log/get_ref_fasta.log")
+        os.path.join(OUTDIR, "log/get_ref_fasta.log")
     conda:
         "envs/default.yml"
     shell:
@@ -307,9 +452,9 @@ rule get_ref_gtf:
     params:
         url=config["ref_gtf"],
     output:
-        ref_gtf=os.path.join(config["output_dir"], "ref/original_ref.gtf"),
+        ref_gtf=os.path.join(OUTDIR, "ref/original_ref.gtf"),
     log:
-        os.path.join(config["output_dir"], "log/get_ref_gtf.log")
+        os.path.join(OUTDIR, "log/get_ref_gtf.log")
     conda:
         "envs/default.yml"
     shell:
@@ -326,11 +471,11 @@ rule edit_ref_gtf:
     input:
         gtf=rules.get_ref_gtf.output.ref_gtf
     output:
-        gtf=os.path.join(config["output_dir"], "ref/edited_ref.gtf"),
+        gtf=os.path.join(OUTDIR, "ref/edited_ref.gtf"),
     params:
         edits=config.get("add_to_ref_gtf", {}),
     log:
-        os.path.join(config["output_dir"], "log/edit_ref_gtf.log")
+        os.path.join(OUTDIR, "log/edit_ref_gtf.log")
     conda:
         "envs/default.yml"
     script:
@@ -343,10 +488,10 @@ rule ref_coding_sites:
         gtf=rules.edit_ref_gtf.output.gtf,
         fasta=rules.get_ref_fasta.output.ref_fasta,
     output:
-        csv=os.path.join(config["output_dir"], "ref/coding_sites.csv"),
+        csv=os.path.join(OUTDIR, "ref/coding_sites.csv"),
     threads: get_threads("ref_coding_sites")
     log:
-        os.path.join(config["output_dir"], "log/ref_coding_sites.log")
+        os.path.join(OUTDIR, "log/ref_coding_sites.log")
     conda:
         "envs/default.yml"
     script:
@@ -362,9 +507,9 @@ checkpoint get_clades:
     input:
         metadata=rules.filter_metadata.output.filtered_metadata
     output:
-        clade_counts=os.path.join(config["output_dir"], "mat/clade_counts.csv")
+        clade_counts=os.path.join(OUTDIR, "mat/clade_counts.csv")
     log:
-        os.path.join(config["output_dir"], "log/get_clades.log")
+        os.path.join(OUTDIR, "log/get_clades.log")
     params:
         min_clade_size=config.get("min_clade_size", 100),
         clade_column=config.get("clade_column", "Nextstrain_clade")
@@ -392,14 +537,16 @@ checkpoint get_clades:
         """
 
 
-def clades_w_adequate_counts(wildcards=None):
+def clades_w_adequate_counts(wildcards):
     """
-    Get list of clades with adequate sample counts.
+    Get list of clades with adequate sample counts for a given tree.
 
     This function is used with Snakemake checkpoints to dynamically determine
-    which clades have enough samples for analysis.
+    which clades have enough samples for analysis. It resolves the checkpoint
+    per tree via ``wildcards.tree``; ``clade_column``/``clades_to_exclude``/
+    ``max_clades`` are read from the global config (they are not per-tree).
     """
-    checkpoint_output = checkpoints.get_clades.get().output.clade_counts
+    checkpoint_output = checkpoints.get_clades.get(tree=wildcards.tree).output.clade_counts
     clades_df = pd.read_csv(checkpoint_output)
     clade_col = config.get("clade_column", "Nextstrain_clade")
     clades = clades_df[clades_df['adequate_sample_counts'] == True][clade_col].tolist()
@@ -412,14 +559,30 @@ def clades_w_adequate_counts(wildcards=None):
     return clades
 
 
+def per_clade_inputs(path_template, wildcards, extra_clades=()):
+    """Expand ``path_template`` over this tree's adequate-count clades.
+
+    ``path_template`` carries both the ``{tree}`` and ``{clade}`` wildcards
+    (e.g. ``os.path.join(OUTDIR, "pcps/{clade}_pcps.csv")`` or
+    ``CLADE_FOUNDER_FASTA``). Used in ``input:`` lambdas of the aggregate
+    rules so every per-clade fan-out resolves the checkpoint the same way.
+    ``extra_clades`` appends non-checkpoint clades such as ``"all"``.
+    """
+    return expand(
+        path_template,
+        tree=wildcards.tree,
+        clade=clades_w_adequate_counts(wildcards) + list(extra_clades),
+    )
+
+
 rule samples_by_clade:
     """Extract sample names for a specific clade."""
     input:
         metadata=rules.filter_metadata.output.filtered_metadata
     output:
-        samples=os.path.join(config["output_dir"], "mat/clades/{clade}_samples.txt")
+        samples=os.path.join(OUTDIR, "mat/clades/{clade}_samples.txt")
     log:
-        os.path.join(config["output_dir"], "log/samples_by_clade_{clade}.log")
+        os.path.join(OUTDIR, "log/samples_by_clade_{clade}.log")
     params:
         clade="{clade}",
         clade_column=config.get("clade_column", "Nextstrain_clade")
@@ -445,16 +608,16 @@ rule mat_clade_subset:
         tree=get_final_tree(),
         samples=rules.samples_by_clade.output.samples
     output:
-        tree=os.path.join(config["output_dir"], "mat/clades/{clade}_tree.pb")
+        tree=os.path.join(OUTDIR, "mat/clades/{clade}_tree.pb")
     threads: get_threads("mat_clade_subset")
     resources:
         mem_mb=8000,
         runtime=60
     benchmark:
-        os.path.join(config["output_dir"], "benchmarks/mat_clade_subset_{clade}.tsv")
+        os.path.join(OUTDIR, "benchmarks/mat_clade_subset_{clade}.tsv")
     log:
-        stderr=os.path.join(config["output_dir"], "log/mat_clade_subset_{clade}.stderr"),
-        stdout=os.path.join(config["output_dir"], "log/mat_clade_subset_{clade}.stdout")
+        stderr=os.path.join(OUTDIR, "log/mat_clade_subset_{clade}.stderr"),
+        stdout=os.path.join(OUTDIR, "log/mat_clade_subset_{clade}.stdout")
     conda:
         "envs/usher.yml"
     shell:
@@ -487,11 +650,11 @@ rule extract_pcps_by_clade:
         tree=rules.mat_clade_subset.output.tree,
         gtf=rules.edit_ref_gtf.output.gtf,
         fasta=rules.get_ref_fasta.output.ref_fasta,
-        clade_founder_fasta=os.path.join(config["output_dir"], "clade_founders/{clade}.fa"),
+        clade_founder_fasta=CLADE_FOUNDER_FASTA,
         coding_sites=rules.ref_coding_sites.output.csv
     output:
-        pcps=os.path.join(config["output_dir"], "pcps/{clade}_pcps.csv"),
-        filtered_branches=os.path.join(config["output_dir"], "pcps/{clade}_filtered_branches.csv")
+        pcps=os.path.join(OUTDIR, "pcps/{clade}_pcps.csv"),
+        filtered_branches=os.path.join(OUTDIR, "pcps/{clade}_filtered_branches.csv")
     params:
         gene_region=config.get("pcp_gene_region", None),
         max_nt_mutations=config.get("pcp_max_nt_mutations", 4),
@@ -502,9 +665,9 @@ rule extract_pcps_by_clade:
         mem_mb=8000,
         runtime=120
     benchmark:
-        os.path.join(config["output_dir"], "benchmarks/extract_pcps_{clade}.tsv")
+        os.path.join(OUTDIR, "benchmarks/extract_pcps_{clade}.tsv")
     log:
-        os.path.join(config["output_dir"], "log/extract_pcps_{clade}.log")
+        os.path.join(OUTDIR, "log/extract_pcps_{clade}.log")
     conda:
         "envs/bte.yml"
     script:
@@ -514,14 +677,13 @@ rule extract_pcps_by_clade:
 rule aggregate_clade_pcps:
     """Aggregate all clade-specific PCPs into a single file."""
     input:
-        pcps=lambda wc: expand(
-            os.path.join(config["output_dir"], "pcps/{clade}_pcps.csv"),
-            clade=clades_w_adequate_counts(wc)
+        pcps=lambda wc: per_clade_inputs(
+            os.path.join(OUTDIR, "pcps/{clade}_pcps.csv"), wc
         )
     output:
-        all_pcps=os.path.join(config["output_dir"], "pcps/all_pcps.csv")
+        all_pcps=os.path.join(OUTDIR, "pcps/all_pcps.csv")
     log:
-        os.path.join(config["output_dir"], "log/aggregate_clade_pcps.log")
+        os.path.join(OUTDIR, "log/aggregate_clade_pcps.log")
     conda:
         "envs/default.yml"
     script:
@@ -532,15 +694,14 @@ rule aggregate_filtered_branches:
     """Aggregate per-clade filtered branch IDs and create curation report."""
     input:
         curated_pcps=rules.aggregate_clade_pcps.output.all_pcps,
-        filtered_branches=lambda wc: expand(
-            os.path.join(config["output_dir"], "pcps/{clade}_filtered_branches.csv"),
-            clade=clades_w_adequate_counts(wc)
+        filtered_branches=lambda wc: per_clade_inputs(
+            os.path.join(OUTDIR, "pcps/{clade}_filtered_branches.csv"), wc
         )
     output:
-        report=os.path.join(config["output_dir"], "pcps/pcp_curation_report.txt"),
-        filtered_branches=os.path.join(config["output_dir"], "pcps/filtered_branch_ids.csv")
+        report=os.path.join(OUTDIR, "pcps/pcp_curation_report.txt"),
+        filtered_branches=os.path.join(OUTDIR, "pcps/filtered_branch_ids.csv")
     log:
-        os.path.join(config["output_dir"], "log/aggregate_filtered_branches.log")
+        os.path.join(OUTDIR, "log/aggregate_filtered_branches.log")
     conda:
         "envs/default.yml"
     script:
@@ -568,16 +729,16 @@ rule curate_pcps_for_dasm:
     """Apply DASM-ready filters and train/val split to a single clade's PCPs."""
     input:
         pcps=rules.extract_pcps_by_clade.output.pcps,
-        mask_sites=os.path.join(config["output_dir"], SPIKE_MASK_FILENAME)
+        mask_sites=os.path.join(OUTDIR, SPIKE_MASK_FILENAME)
     output:
-        dasm_ready=os.path.join(config["output_dir"], "pcps/{clade}_pcps_dasm_ready.csv"),
-        report=os.path.join(config["output_dir"], "pcps/{clade}_dasm_filter_report.txt"),
-        stats=os.path.join(config["output_dir"], "pcps/{clade}_dasm_filter_stats.json")
+        dasm_ready=os.path.join(OUTDIR, "pcps/{clade}_pcps_dasm_ready.csv"),
+        report=os.path.join(OUTDIR, "pcps/{clade}_dasm_filter_report.txt"),
+        stats=os.path.join(OUTDIR, "pcps/{clade}_dasm_filter_stats.json")
     params:
         seed=1729,
         val_fraction=0.10
     log:
-        os.path.join(config["output_dir"], "log/curate_pcps_for_dasm_{clade}.log")
+        os.path.join(OUTDIR, "log/curate_pcps_for_dasm_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -592,16 +753,16 @@ rule curate_all_pcps_for_dasm:
     """
     input:
         pcps=rules.aggregate_clade_pcps.output.all_pcps,
-        mask_sites=os.path.join(config["output_dir"], SPIKE_MASK_FILENAME)
+        mask_sites=os.path.join(OUTDIR, SPIKE_MASK_FILENAME)
     output:
-        dasm_ready=os.path.join(config["output_dir"], "pcps/all_pcps_dasm_ready.csv"),
-        report=os.path.join(config["output_dir"], "pcps/all_dasm_filter_report.txt"),
-        stats=os.path.join(config["output_dir"], "pcps/all_dasm_filter_stats.json")
+        dasm_ready=os.path.join(OUTDIR, "pcps/all_pcps_dasm_ready.csv"),
+        report=os.path.join(OUTDIR, "pcps/all_dasm_filter_report.txt"),
+        stats=os.path.join(OUTDIR, "pcps/all_dasm_filter_stats.json")
     params:
         seed=42,
         val_fraction=0.10
     log:
-        os.path.join(config["output_dir"], "log/curate_all_pcps_for_dasm.log")
+        os.path.join(OUTDIR, "log/curate_all_pcps_for_dasm.log")
     conda:
         "envs/default.yml"
     script:
@@ -611,7 +772,8 @@ rule curate_all_pcps_for_dasm:
 def _dasm_ready_per_clade_outputs(wildcards):
     """Per-clade dasm-ready outputs - fans out over clades_w_adequate_counts."""
     return expand(
-        os.path.join(config["output_dir"], "pcps/{clade}_pcps_dasm_ready.csv"),
+        os.path.join(OUTDIR, "pcps/{clade}_pcps_dasm_ready.csv"),
+        tree=wildcards.tree,
         clade=clades_w_adequate_counts(wildcards),
     )
 
@@ -625,7 +787,7 @@ rule dasm_ready_pcps_all_clades:
     input:
         _dasm_ready_per_clade_outputs
     output:
-        sentinel=os.path.join(config["output_dir"], "pcps/dasm_ready_per_clade.done")
+        sentinel=os.path.join(OUTDIR, "pcps/dasm_ready_per_clade.done")
     shell:
         "touch {output.sentinel}"
 
@@ -640,10 +802,10 @@ rule clade_founder_jsons:
         neher_json=config["clade_founders"]["neher_json"],
         roemer_json=config["clade_founders"]["roemer_json"]
     output:
-        neher_json=os.path.join(config["output_dir"], "clade_founders/clade_founders_neher.json"),
-        roemer_json=os.path.join(config["output_dir"], "clade_founders/clade_founders_roemer.json")
+        neher_json=os.path.join(OUTDIR, "clade_founders/clade_founders_neher.json"),
+        roemer_json=os.path.join(OUTDIR, "clade_founders/clade_founders_roemer.json")
     log:
-        os.path.join(config["output_dir"], "log/clade_founder_jsons.log")
+        os.path.join(OUTDIR, "log/clade_founder_jsons.log")
     shell:
         """
         mkdir -p $(dirname {output.neher_json})
@@ -739,7 +901,7 @@ def _gene_sliced_founder_outputs():
         return []
     return [
         os.path.join(
-            config["output_dir"], "clade_founders", dirname, "{clade}.fa"
+            OUTDIR, "clade_founders", dirname, "{clade}.fa"
         )
     ]
 
@@ -757,13 +919,13 @@ rule clade_founder_fasta:
         roemer_json=rules.clade_founder_jsons.output.roemer_json,
         ref_fasta=rules.get_ref_fasta.output.ref_fasta
     output:
-        fasta=os.path.join(config["output_dir"], "clade_founders/{clade}.fa"),
+        fasta=CLADE_FOUNDER_FASTA,
         gene_fasta=_gene_sliced_founder_outputs()
     params:
         roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {}),
         pcp_gene_region=config.get("pcp_gene_region")
     log:
-        os.path.join(config["output_dir"], "log/clade_founder_{clade}.log")
+        os.path.join(OUTDIR, "log/clade_founder_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -779,9 +941,9 @@ rule get_site_mask:
     params:
         url=config["site_mask_vcf"]
     output:
-        csv=os.path.join(config["output_dir"], "ref/site_mask.csv")
+        csv=os.path.join(OUTDIR, "ref/site_mask.csv")
     log:
-        os.path.join(config["output_dir"], "log/get_site_mask.log")
+        os.path.join(OUTDIR, "log/get_site_mask.log")
     conda:
         "envs/default.yml"
     script:
@@ -795,9 +957,9 @@ rule translate_mat:
         ref_fasta=rules.get_ref_fasta.output.ref_fasta,
         ref_gtf=rules.edit_ref_gtf.output.gtf
     output:
-        tsv=os.path.join(config["output_dir"], "mutations/{clade}_mutations.tsv")
+        tsv=os.path.join(OUTDIR, "mutations/{clade}_mutations.tsv")
     log:
-        os.path.join(config["output_dir"], "log/translate_mat_{clade}.log")
+        os.path.join(OUTDIR, "log/translate_mat_{clade}.log")
     conda:
         "envs/usher.yml"
     shell:
@@ -818,9 +980,9 @@ rule mat_sample_paths:
     input:
         mat=rules.mat_clade_subset.output.tree
     output:
-        tsv=os.path.join(config["output_dir"], "mutations/{clade}_sample_paths.tsv")
+        tsv=os.path.join(OUTDIR, "mutations/{clade}_sample_paths.tsv")
     log:
-        os.path.join(config["output_dir"], "log/mat_sample_paths_{clade}.log")
+        os.path.join(OUTDIR, "log/mat_sample_paths_{clade}.log")
     conda:
         "envs/usher.yml"
     shell:
@@ -836,9 +998,9 @@ rule sample_path_to_nt_mutations:
     input:
         tsv=rules.mat_sample_paths.output.tsv
     output:
-        csv=os.path.join(config["output_dir"], "mutations/{clade}_nt_mutations.csv")
+        csv=os.path.join(OUTDIR, "mutations/{clade}_nt_mutations.csv")
     log:
-        os.path.join(config["output_dir"], "log/sample_path_to_nt_mutations_{clade}.log")
+        os.path.join(OUTDIR, "log/sample_path_to_nt_mutations_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -857,13 +1019,13 @@ rule count_mutations_clade:
         ref_fasta=rules.get_ref_fasta.output.ref_fasta,
         clade_founder_fasta=rules.clade_founder_fasta.output.fasta
     output:
-        csv=os.path.join(config["output_dir"], "mutation_counts/{clade}.csv")
+        csv=os.path.join(OUTDIR, "mutation_counts/{clade}.csv")
     params:
         max_nt_mutations=config.get("max_nt_mutations", 4),
         max_reversions_to_ref=config.get("max_reversions_to_ref", 1),
         max_reversions_to_clade_founder=config.get("max_reversions_to_clade_founder", 1)
     log:
-        os.path.join(config["output_dir"], "log/count_mutations_{clade}.log")
+        os.path.join(OUTDIR, "log/count_mutations_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -873,14 +1035,13 @@ rule count_mutations_clade:
 rule aggregate_mutation_counts:
     """Aggregate mutation counts across all clades."""
     input:
-        counts=lambda wc: expand(
-            os.path.join(config["output_dir"], "mutation_counts/{clade}.csv"),
-            clade=clades_w_adequate_counts(wc)
+        counts=lambda wc: per_clade_inputs(
+            os.path.join(OUTDIR, "mutation_counts/{clade}.csv"), wc
         )
     output:
-        csv=os.path.join(config["output_dir"], "mutation_counts/aggregated.csv")
+        csv=os.path.join(OUTDIR, "mutation_counts/aggregated.csv")
     log:
-        os.path.join(config["output_dir"], "log/aggregate_mutation_counts.log")
+        os.path.join(OUTDIR, "log/aggregate_mutation_counts.log")
     conda:
         "envs/default.yml"
     script:
@@ -895,14 +1056,11 @@ rule clade_founder_nts:
     """Get nucleotide at each coding site for all clade founders."""
     input:
         coding_sites=rules.ref_coding_sites.output.csv,
-        fastas=lambda wc: expand(
-            os.path.join(config["output_dir"], "clade_founders/{clade}.fa"),
-            clade=clades_w_adequate_counts(wc)
-        )
+        fastas=lambda wc: per_clade_inputs(CLADE_FOUNDER_FASTA, wc)
     output:
-        csv=os.path.join(config["output_dir"], "clade_founder_nts.csv")
+        csv=os.path.join(OUTDIR, "clade_founder_nts.csv")
     log:
-        os.path.join(config["output_dir"], "log/clade_founder_nts.log")
+        os.path.join(OUTDIR, "log/clade_founder_nts.log")
     conda:
         "envs/default.yml"
     script:
@@ -929,12 +1087,12 @@ rule build_count_table:
         site_mask=rules.get_site_mask.output.csv,
         usher_masked_sites=config["usher_masked_sites"]
     output:
-        csv=os.path.join(config["output_dir"], "counts_all.csv")
+        csv=os.path.join(OUTDIR, "counts_all.csv")
     params:
         sites_to_exclude=config.get("sites_to_exclude", []),
         site_include_range=config.get("site_include_range", {"start": 266, "end": 29674})
     log:
-        os.path.join(config["output_dir"], "log/build_count_table.log")
+        os.path.join(OUTDIR, "log/build_count_table.log")
     conda:
         "envs/default.yml"
     script:
@@ -952,15 +1110,15 @@ rule annotate_counts:
         clade_founder=rules.clade_founder_nts.output.csv,
         rna_struct=config["rna_structure_data"]
     output:
-        counts_csv=os.path.join(config["output_dir"], "glm/annotated_counts.csv"),
-        founder_csv=os.path.join(config["output_dir"], "glm/clade_founder_annotated.csv")
+        counts_csv=os.path.join(OUTDIR, "glm/annotated_counts.csv"),
+        founder_csv=os.path.join(OUTDIR, "glm/clade_founder_annotated.csv")
     params:
         reference_clade=config.get("reference_clade", "19A"),
         lightswitch_boundaries=config.get("glm_lightswitch_boundaries", {
             "CT": 13467, "AT": 21562, "CG": 21562, "GC": 21562
         })
     log:
-        os.path.join(config["output_dir"], "log/annotate_counts.log")
+        os.path.join(OUTDIR, "log/annotate_counts.log")
     conda:
         "envs/default.yml"
     script:
@@ -973,9 +1131,9 @@ rule curate_counts:
         counts=rules.annotate_counts.output.counts_csv,
         clade_founder=rules.annotate_counts.output.founder_csv
     output:
-        curated=os.path.join(config["output_dir"], "glm/curated_counts.csv")
+        curated=os.path.join(OUTDIR, "glm/curated_counts.csv")
     log:
-        os.path.join(config["output_dir"], "log/curate_counts.log")
+        os.path.join(OUTDIR, "log/curate_counts.log")
     conda:
         "envs/default.yml"
     script:
@@ -991,7 +1149,7 @@ rule master_table:
     input:
         curated_counts=rules.curate_counts.output.curated
     output:
-        master_table=os.path.join(config["output_dir"], "glm/master_table.csv")
+        master_table=os.path.join(OUTDIR, "glm/master_table.csv")
     params:
         lightswitch_boundaries=config.get("glm_lightswitch_boundaries", {
             "CT": 13467, "AT": 21562, "CG": 21562, "GC": 21562
@@ -1001,9 +1159,9 @@ rule master_table:
         mem_mb=8000,
         runtime=60
     benchmark:
-        os.path.join(config["output_dir"], "benchmarks/master_table.tsv")
+        os.path.join(OUTDIR, "benchmarks/master_table.tsv")
     log:
-        os.path.join(config["output_dir"], "log/master_table.log")
+        os.path.join(OUTDIR, "log/master_table.log")
     conda:
         "envs/default.yml"
     script:
@@ -1015,9 +1173,9 @@ rule get_rates_table:
     input:
         master_table=rules.master_table.output.master_table
     output:
-        rates_table=os.path.join(config["output_dir"], "rates_table.csv")
+        rates_table=os.path.join(OUTDIR, "rates_table.csv")
     log:
-        os.path.join(config["output_dir"], "log/get_rates_table.log")
+        os.path.join(OUTDIR, "log/get_rates_table.log")
     conda:
         "envs/default.yml"
     script:
@@ -1029,11 +1187,11 @@ rule get_problematic_sites:
     input:
         expected_vs_actual=rules.build_count_table.output.csv
     output:
-        sites_to_mask=os.path.join(config["output_dir"], SPIKE_MASK_FILENAME)
+        sites_to_mask=os.path.join(OUTDIR, SPIKE_MASK_FILENAME)
     params:
         masking_gene=config.get("masking_gene", "S")
     log:
-        os.path.join(config["output_dir"], "log/get_problematic_sites.log")
+        os.path.join(OUTDIR, "log/get_problematic_sites.log")
     conda:
         "envs/default.yml"
     script:
@@ -1050,13 +1208,13 @@ rule expected_counts_by_clade:
         counts=rules.annotate_counts.output.counts_csv,
         curated=rules.curate_counts.output.curated
     output:
-        csv=os.path.join(config["output_dir"], "fitness/expected_counts_by_clade.csv")
+        csv=os.path.join(OUTDIR, "fitness/expected_counts_by_clade.csv")
     params:
         lightswitch_boundaries=config.get("glm_lightswitch_boundaries", {
             "CT": 13467, "AT": 21562, "CG": 21562, "GC": 21562
         })
     log:
-        os.path.join(config["output_dir"], "log/expected_counts_by_clade.log")
+        os.path.join(OUTDIR, "log/expected_counts_by_clade.log")
     conda:
         "envs/default.yml"
     script:
@@ -1068,11 +1226,11 @@ rule ntmut_counts_by_clade:
     input:
         counts=rules.expected_counts_by_clade.output.csv
     output:
-        csv=os.path.join(config["output_dir"], "fitness/ntmut_counts/{clade}_ntmut_counts.csv")
+        csv=os.path.join(OUTDIR, "fitness/ntmut_counts/{clade}_ntmut_counts.csv")
     params:
         clade="{clade}"
     log:
-        os.path.join(config["output_dir"], "log/ntmut_counts_{clade}.log")
+        os.path.join(OUTDIR, "log/ntmut_counts_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1084,7 +1242,7 @@ rule ntmut_fitness_by_clade:
     input:
         counts=rules.ntmut_counts_by_clade.output.csv
     output:
-        csv=os.path.join(config["output_dir"], "fitness/ntmut_fitness/{clade}_ntmut_fitness.csv")
+        csv=os.path.join(OUTDIR, "fitness/ntmut_fitness/{clade}_ntmut_fitness.csv")
     params:
         N_f=config.get("fitness_N_f", 300),
         N_n_exp=config.get("fitness_N_n_exp", 300)
@@ -1093,9 +1251,9 @@ rule ntmut_fitness_by_clade:
         mem_mb=2000,
         runtime=30
     benchmark:
-        os.path.join(config["output_dir"], "benchmarks/ntmut_fitness_{clade}.tsv")
+        os.path.join(OUTDIR, "benchmarks/ntmut_fitness_{clade}.tsv")
     log:
-        os.path.join(config["output_dir"], "log/ntmut_fitness_{clade}.log")
+        os.path.join(OUTDIR, "log/ntmut_fitness_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1105,14 +1263,14 @@ rule ntmut_fitness_by_clade:
 rule aggregate_ntmut_fitness:
     """Aggregate nucleotide fitness across all clades."""
     input:
-        fitness_files=lambda wc: expand(
-            os.path.join(config["output_dir"], "fitness/ntmut_fitness/{clade}_ntmut_fitness.csv"),
-            clade=clades_w_adequate_counts(wc) + ["all"]
+        fitness_files=lambda wc: per_clade_inputs(
+            os.path.join(OUTDIR, "fitness/ntmut_fitness/{clade}_ntmut_fitness.csv"),
+            wc, extra_clades=["all"]
         )
     output:
-        csv=os.path.join(config["output_dir"], "fitness/ntmut_fitness_aggregated.csv")
+        csv=os.path.join(OUTDIR, "fitness/ntmut_fitness_aggregated.csv")
     log:
-        os.path.join(config["output_dir"], "log/aggregate_ntmut_fitness.log")
+        os.path.join(OUTDIR, "log/aggregate_ntmut_fitness.log")
     conda:
         "envs/default.yml"
     script:
@@ -1128,7 +1286,7 @@ rule aamut_fitness_by_clade:
     input:
         ntmut_fitness=rules.ntmut_fitness_by_clade.output.csv
     output:
-        csv=os.path.join(config["output_dir"], "aamut_fitness/{clade}_aamut_fitness.csv")
+        csv=os.path.join(OUTDIR, "aamut_fitness/{clade}_aamut_fitness.csv")
     params:
         orf1ab_to_nsps=config.get("orf1ab_to_nsps", {}),
         gene_overlaps=config.get("gene_overlaps", {"retain": [], "exclude": []}),
@@ -1138,9 +1296,9 @@ rule aamut_fitness_by_clade:
         mem_mb=2000,
         runtime=30
     benchmark:
-        os.path.join(config["output_dir"], "benchmarks/aamut_fitness_{clade}.tsv")
+        os.path.join(OUTDIR, "benchmarks/aamut_fitness_{clade}.tsv")
     log:
-        os.path.join(config["output_dir"], "log/aamut_fitness_{clade}.log")
+        os.path.join(OUTDIR, "log/aamut_fitness_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1150,14 +1308,13 @@ rule aamut_fitness_by_clade:
 rule aggregate_aamut_fitness:
     """Aggregate amino acid fitness across all clades."""
     input:
-        fitness_files=lambda wc: expand(
-            os.path.join(config["output_dir"], "aamut_fitness/{clade}_aamut_fitness.csv"),
-            clade=clades_w_adequate_counts(wc)
+        fitness_files=lambda wc: per_clade_inputs(
+            os.path.join(OUTDIR, "aamut_fitness/{clade}_aamut_fitness.csv"), wc
         )
     output:
-        csv=os.path.join(config["output_dir"], "aamut_fitness/all_aamut_fitness.csv")
+        csv=os.path.join(OUTDIR, "aamut_fitness/all_aamut_fitness.csv")
     log:
-        os.path.join(config["output_dir"], "log/aggregate_aamut_fitness.log")
+        os.path.join(OUTDIR, "log/aggregate_aamut_fitness.log")
     conda:
         "envs/default.yml"
     script:
@@ -1174,13 +1331,13 @@ rule extract_mutations_from_pcps:
         pcps=rules.aggregate_clade_pcps.output.all_pcps,
         ref_fasta=rules.get_ref_fasta.output.ref_fasta
     output:
-        aa_counts=os.path.join(config["output_dir"], "validation/pcp_aa_counts.csv")
+        aa_counts=os.path.join(OUTDIR, "validation/pcp_aa_counts.csv")
     params:
         pcp_gene_region=config.get("pcp_gene_region", None),
         max_nt_mutations=config["max_nt_mutations"],
         max_reversions_to_ref=config["max_reversions_to_ref"]
     log:
-        os.path.join(config["output_dir"], "log/extract_mutations_from_pcps.log")
+        os.path.join(OUTDIR, "log/extract_mutations_from_pcps.log")
     conda:
         "envs/default.yml"
     script:
@@ -1191,18 +1348,17 @@ rule validate_pcp_vs_counts:
     """Validate PCP-derived AA counts match aamut_fitness actual_count."""
     input:
         pcp_counts=rules.extract_mutations_from_pcps.output.aa_counts,
-        aamut_fitness_files=lambda wc: expand(
-            os.path.join(config["output_dir"], "aamut_fitness/{clade}_aamut_fitness.csv"),
-            clade=clades_w_adequate_counts(wc)
+        aamut_fitness_files=lambda wc: per_clade_inputs(
+            os.path.join(OUTDIR, "aamut_fitness/{clade}_aamut_fitness.csv"), wc
         ),
         all_aamut_fitness=rules.aggregate_aamut_fitness.output.csv
     output:
-        report=os.path.join(config["output_dir"], "validation/pcp_vs_counts_report.txt"),
-        discrepancies=os.path.join(config["output_dir"], "validation/pcp_vs_counts_discrepancies.csv")
+        report=os.path.join(OUTDIR, "validation/pcp_vs_counts_report.txt"),
+        discrepancies=os.path.join(OUTDIR, "validation/pcp_vs_counts_discrepancies.csv")
     params:
         pcp_gene_name=config.get("pcp_gene_region", {}).get("gene", None) if config.get("pcp_gene_region") else None
     log:
-        os.path.join(config["output_dir"], "log/validate_pcp_vs_counts.log")
+        os.path.join(OUTDIR, "log/validate_pcp_vs_counts.log")
     conda:
         "envs/default.yml"
     script:

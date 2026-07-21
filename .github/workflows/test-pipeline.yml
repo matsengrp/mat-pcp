@@ -47,14 +47,28 @@ jobs:
         with open('config/config.yaml') as f:
             config = yaml.safe_load(f)
 
-        # Check required top-level keys exist
+        # Check required top-level keys exist. 'trees' replaces the old scalar
+        # 'output_dir'/'mat'/'metadata'; 'output_root' is optional (defaults to
+        # 'results').
         required_keys = [
-            'output_dir', 'ref_fasta', 'ref_gtf', 'qc_filter_options',
+            'trees', 'ref_fasta', 'ref_gtf', 'qc_filter_options',
             'clade_column', 'min_clade_size', 'max_nt_mutations',
             'site_include_range', 'clade_founders', 'threads'
         ]
         for key in required_keys:
             assert key in config, f'Missing required config key: {key}'
+
+        # Each tree needs mat + metadata; max_leaf_date is optional per tree.
+        trees = config['trees']
+        assert isinstance(trees, dict) and trees, 'trees must be a non-empty mapping'
+        for label, entry in trees.items():
+            for k in ('mat', 'metadata'):
+                assert entry.get(k), f'Tree {label!r} missing required key {k!r}'
+
+        # QC block uses the renamed leaf-date bounds. min_leaf_date is required;
+        # max_leaf_date is optional (unset -> None, i.e. no upper date cutoff).
+        assert 'min_leaf_date' in config['qc_filter_options'], \
+            'qc_filter_options missing min_leaf_date'
 
         print('Config schema validation passed!')
         "
@@ -102,9 +116,8 @@ jobs:
     - name: Dry run pipeline
       run: |
         export CONDARC="$HOME/.condarc"
-        export CONDA_NO_PLUGINS=true
         pixi run snakemake -n --use-conda \
-          --conda-frontend mamba \
+          --conda-frontend conda \
           --configfile config/config_test_data.yaml
 
     - name: Run test pipeline
@@ -118,8 +131,10 @@ jobs:
         export CONDA_REMOTE_READ_TIMEOUT_SECS=180
         export CONDA_REMOTE_MAX_RETRIES=5
 
-        # Disable conda plugins that might interfere with channel selection
-        export CONDA_NO_PLUGINS=true
+        # NOTE: do NOT set CONDA_NO_PLUGINS here. The conda frontend now uses the
+        # libmamba solver, which is a conda *plugin* (conda-libmamba-solver);
+        # disabling plugins makes conda fail with "solver backend (libmamba) was
+        # not recognized". See mat-pcp #105.
 
         # Show conda configuration being used
         echo "Conda configuration:"
@@ -128,7 +143,7 @@ jobs:
 
         # Run pipeline (single attempt with proper timeout)
         pixi run snakemake -j $(nproc) --use-conda \
-          --conda-frontend mamba \
+          --conda-frontend conda \
           --configfile config/config_test_data.yaml
 
     - name: Set output directory variable
@@ -228,6 +243,42 @@ jobs:
       run: |
         # Check that snakemake created the conda environments
         ls -la .snakemake/conda/ || echo "Conda envs in default location"
+
+    - name: Multi-tree independence smoke test
+      run: |
+        # The single-tree run above already exercises the {tree} machinery
+        # end-to-end for one tree. This step proves *independence*: two trees
+        # in one config resolve their get_clades checkpoints separately, with
+        # neither leaking into the other. It only builds each tree's
+        # clade_counts.csv (link_inputs -> filter_metadata -> get_clades),
+        # reusing the conda envs already built above -- seconds, not a second
+        # full pipeline run. The two trees share identical global config and
+        # the same input data, differing only in max_leaf_date, so a
+        # difference in clade counts can only come from per-tree resolution.
+        pixi run snakemake \
+          results/test_data_v5/mat/clade_counts.csv \
+          results/test_data_early_v5/mat/clade_counts.csv \
+          -j $(nproc) --use-conda --conda-frontend conda \
+          --configfile config/config_test_data_multitree.yaml
+        pixi run python -c "
+        import pandas as pd
+        def adequate(p):
+            df = pd.read_csv(p)
+            return int(df['adequate_sample_counts'].sum()), len(df)
+        a_ok, a_tot = adequate('results/test_data_v5/mat/clade_counts.csv')
+        e_ok, e_tot = adequate('results/test_data_early_v5/mat/clade_counts.csv')
+        print(f'test_data (max_leaf_date 2022-06-01): {a_tot} clades, {a_ok} adequate')
+        print(f'test_data_early (max_leaf_date 2021-06-01): {e_tot} clades, {e_ok} adequate')
+        # Independence: the earlier cutoff must yield FEWER clades. Equal counts
+        # would mean the per-tree max_leaf_date override was ignored (the trees
+        # share a single resolution) -- the exact regression this test guards.
+        assert e_tot < a_tot, (
+            f'Expected the earlier-cutoff tree to have fewer clades, '
+            f'got early={e_tot} vs default={a_tot} -- trees did not resolve '
+            f'independently.'
+        )
+        print('Multi-tree independence verified: checkpoints resolved separately.')
+        "
 
     - name: Verify clade counts checkpoint
       run: |
@@ -383,6 +434,7 @@ jobs:
         # Build founder files for first 3 clades
         pixi run snakemake $(cat /tmp/founder_targets.txt | tr '\n' ' ') \
           -j 2 --use-conda \
+          --conda-frontend conda \
           --configfile config/config_test_data.yaml
 
     - name: Verify clade founder files
@@ -419,6 +471,7 @@ jobs:
       run: |
         # Build site mask
         pixi run snakemake -j 1 --use-conda $OUTPUT_DIR/ref/site_mask.csv \
+          --conda-frontend conda \
           --configfile config/config_test_data.yaml
 
         # Build mutation translation and sample paths for first 2 clades
@@ -437,6 +490,7 @@ jobs:
 
         pixi run snakemake $(cat /tmp/mutation_targets.txt | tr '\n' ' ') \
           -j 2 --use-conda \
+          --conda-frontend conda \
           --configfile config/config_test_data.yaml
 
     - name: Verify site mask

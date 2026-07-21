@@ -31,7 +31,7 @@ To use a specific pipeline version:
 ```bash
 git checkout v1  # or v2, v3, etc.
 pixi install
-pixi run snakemake -j 4 --use-conda
+pixi run snakemake -j 4 --use-conda --configfile config/config.yaml
 ```
 
 ## Pipeline DAG
@@ -58,25 +58,46 @@ pixi install
 
 ### Configuration
 
-Edit `config/config.yaml` to specify your inputs:
+Edit `config/config.yaml` to specify your inputs. The pipeline processes a
+**mapping of named trees** in a single run: shared parameters stay at the top
+level, and a `trees:` block lists one entry per tree, keyed by a short label.
+Each entry requires `mat` and `metadata`; `max_leaf_date` may be overridden
+per tree (it is the only per-tree-overridable key) and otherwise inherits the
+global `qc_filter_options.max_leaf_date`.
 
 ```yaml
-mat: "path/to/your/tree.pb.gz"
-metadata: "path/to/your/metadata.tsv.gz"
-output_dir: "results"
+# Optional; defaults to "results". Each tree writes to
+# {output_root}/{label}_{version}, e.g. results/public_2022-06-01_v5.
+output_root: "results"
+
+trees:
+  public_2022-06-01:                       # -> results/public_2022-06-01_v5
+    mat: "path/to/2022-06-01/tree.pb.gz"
+    metadata: "path/to/2022-06-01/metadata.tsv.gz"
+    max_leaf_date: "2022-06-01"            # per-tree override
+  public_2023-01-01:                       # -> results/public_2023-01-01_v5
+    mat: "path/to/2023-01-01/tree.pb.gz"
+    metadata: "path/to/2023-01-01/metadata.tsv.gz"
+    # max_leaf_date omitted -> inherits the global default
 ```
+
+`output_dir` is no longer specified; it is derived from `output_root` and each
+tree's label. A single `snakemake` invocation builds every tree listed.
 
 ### Running the Pipeline
 
+Every run requires exactly one explicit `--configfile`.
+
 ```bash
 # Dry run to see what will be executed
-pixi run snakemake -n
+pixi run snakemake -n --configfile config/config.yaml
 
 # Run with 4 cores
-pixi run snakemake -j 4 --use-conda
+pixi run snakemake -j 4 --use-conda --configfile config/config.yaml
 
-# Run specific target
-pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
+# Run specific target (per-tree output path)
+pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
+  results/public_2022-06-01_v5/aamut_fitness/all_aamut_fitness.csv
 ```
 
 ## Pipeline Stages
@@ -121,6 +142,8 @@ pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
 ## Fitness Estimation Methodology
 
 "Fitness" in this pipeline measures how often a mutation is **observed** relative to a **neutral baseline** of how often it would be expected by chance. A positive value means the mutation appears more often than the baseline predicts (potentially beneficial); a negative value means it appears less often (potentially deleterious). The pipeline emits several distinct fitness values across three output files, summarized below. Column definitions live in [`OUTPUT_SCHEMA.md`](OUTPUT_SCHEMA.md); the parameters that control these computations are in the [Fitness Estimation](#fitness-estimation) configuration table.
+
+Masked mutations are excluded from every fitness output. Any mutation flagged `exclude` in `counts_all.csv` — the union of UShER/ProblematicSites-VCF masks, config `sites_to_exclude`, sites outside `site_include_range`, and founder→reference reversions — is dropped in `ntmut_counts_by_clade` before fitness is computed. Because masking is applied per `(clade, mutation)`, a mutation masked only in some clades still contributes to the cross-clade aggregate from clades where it is not masked.
 
 ### The fitness values
 
@@ -246,9 +269,11 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `output_dir` | Output directory | `results` |
-| `mat` | Path to input MAT tree (.pb or .pb.gz) | - |
-| `metadata` | Path to sample metadata (.tsv or .tsv.gz) | - |
+| `output_root` | Root dir for outputs; each tree writes to `{output_root}/{label}_{version}` | `results` |
+| `trees` | Mapping of tree label → per-tree config (`mat`, `metadata`, optional `max_leaf_date`) | - |
+| `trees.<label>.mat` | Path to that tree's input MAT (.pb or .pb.gz) | - |
+| `trees.<label>.metadata` | Path to that tree's sample metadata (.tsv or .tsv.gz) | - |
+| `trees.<label>.max_leaf_date` | Per-tree override of the latest sample date (only overridable key) | global value |
 
 ### Reference Genome
 
@@ -262,8 +287,8 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `qc_filter_options.min_date` | Earliest sample date | `2019-12-01` |
-| `qc_filter_options.datetime_cutoff` | Latest sample date | `2022-06-01` |
+| `qc_filter_options.min_leaf_date` | Earliest sample date | `2019-12-01` |
+| `qc_filter_options.max_leaf_date` | Latest sample date; optional (unset ⇒ no upper cutoff), overridable per tree | `None` (unset) |
 | `qc_filter_options.valid_hosts` | Allowed host species | `["Human", "Homo sapiens"]` |
 | `qc_filter_options.min_genome_length` | Minimum genome length | `28000` |
 | `subset_frac` | Random sampling fraction (1.0 = no sampling) | `1.0` |
@@ -509,8 +534,8 @@ mat-pcp/
 │   ├── README.md                # Archive documentation (tracked)
 │   └── ...                      # Historical runs
 └── config/
-    ├── config.yaml              # Default config (output_dir: "results")
-    ├── config_test_data.yaml    # Test config (output_dir: "results/test_data")
+    ├── config.yaml              # Default config (multi-tree template)
+    ├── config_test_data.yaml    # Test config (trees: test_data)
     └── config-public-2022-06-01.yaml  # Production config
 ```
 

@@ -18,6 +18,89 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### v5
+
+**Run multiple trees from one config** — tracks issue
+[#104](https://github.com/matsengrp/mat-pcp/issues/104).
+
+**Changes**:
+
+- **New `trees:` config schema**: the pipeline now processes a mapping of named
+  trees in a single Snakemake invocation. Shared parameters (reference genome,
+  GLM, genes, masking, thresholds, fitness, clade settings, and all
+  `qc_filter_options`) stay at the top level; a new top-level `trees:` mapping is
+  keyed by a short tree **label**, and each entry supplies that tree's `mat` and
+  `metadata` (both required). `max_leaf_date` is the only per-tree-overridable
+  key; it is optional and defaults to `None` (no upper date cutoff). When a
+  global `qc_filter_options.max_leaf_date` is set, a tree without its own value
+  inherits it.
+
+- **`output_dir` removed; derived automatically**: output paths are now
+  `{output_root}/{label}_{version}` (e.g. `results/public_2022-06-01_v5`), where
+  `output_root` is an optional global key defaulting to `results`. The scalar
+  `output_dir`, `mat`, and `metadata` top-level keys no longer exist.
+
+- **Parameter renames** (parallel naming for the two leaf-date bounds):
+  `qc_filter_options.datetime_cutoff` → `max_leaf_date` and
+  `qc_filter_options.min_date` → `min_leaf_date`.
+
+- **Site masking now applied to the fitness outputs**
+  ([#106](https://github.com/matsengrp/mat-pcp/issues/106)): masked mutations
+  (`exclude == True` in the count table — the union of UShER/ProblematicSites-VCF
+  masks, config `sites_to_exclude`, sites outside `site_include_range`, and
+  founder→reference reversions) are now dropped in `ntmut_counts_by_clade.py`
+  before nucleotide and amino-acid fitness are computed. Previously the fitness
+  branch flagged but never removed these rows, so `ntmut_fitness_aggregated.csv`
+  and `all_aamut_fitness.csv` included artifactual counts from masked sites; the
+  masking had only ever been applied to the GLM training data (`curate_counts`).
+  Rows for masked mutations no longer appear in the fitness outputs. The
+  filtering is per `(clade, mutation)`, so the `"all"` cross-clade aggregate
+  still counts a mutation from clades where it is not masked.
+
+- **`"all"` cross-clade nucleotide aggregation now pools by mutation identity.**
+  `ntmut_counts_by_clade` previously grouped the `"all"` cluster by *every*
+  non-count column, including clade-founder-derived annotations (`motif`,
+  `clade_founder_codon`/`aa`, `mutant_codon`/`aa`, `aa_mutation`, `synonymous`,
+  `four_fold_degenerate`, `mut_class`) that can differ between clades for the
+  same nucleotide mutation. That silently split a mutation into multiple `"all"`
+  rows (one per context) and fragmented its pooled counts. The `"all"` cluster
+  now keys strictly on `(nt_site, nt_mutation)`, summing counts across clades
+  into one row per mutation; the differing annotation columns keep a
+  representative (first contributing clade's) value. Per-clade rows are
+  unchanged. In the test data this collapses 36 fragmented mutations (all
+  zero-count) in `ntmut_fitness_aggregated.csv`.
+
+- **`exclude` / `masked_in_usher` columns removed from the fitness outputs.**
+  After masking is applied, every surviving row has `exclude == False`, so these
+  now-constant flags are dropped in `ntmut_counts_by_clade` rather than carried
+  as uninformative columns into `fitness/ntmut_counts/*`, `fitness/ntmut_fitness/*`,
+  and `fitness/ntmut_fitness_aggregated.csv`. (They remain in `counts_all.csv`.)
+
+- **`tau_squared` removed from the amino-acid fitness outputs**
+  (`aamut_fitness/{clade}_aamut_fitness.csv`, `aamut_fitness/all_aamut_fitness.csv`).
+  `tau_squared` is a nucleotide-level log-scale variance of the neutral expected
+  count, consumed only by `probfit` when estimating nucleotide fitness. It never
+  fed the amino-acid `delta_fitness` (an inverse-variance weighted average of the
+  nucleotide estimates) or `naive_delta_fitness` (from summed counts); it was
+  merely summed over the constituent nucleotide mutations and carried as an
+  unused column. It remains in the nucleotide outputs
+  (`fitness/ntmut_fitness_aggregated.csv`), where it is used.
+
+- **Per-tree output layout is byte-identical to v4 for everything except the
+  fitness outputs**, apart from the version dir name: a single-tree run writes
+  the same files under `{output_root}/{label}_v5/...` that a v4 run wrote under
+  `{output_dir}_v4/...`, except that the fitness files
+  (`fitness/ntmut_counts/*`, `fitness/ntmut_fitness/*`,
+  `fitness/ntmut_fitness_aggregated.csv`, `aamut_fitness/*`) now exclude masked
+  mutations, drop the `exclude`/`masked_in_usher` columns, and pool the `"all"`
+  cluster by nucleotide identity (see above).
+
+- **Multi-tree CI coverage** (test-infra, no schema impact):
+  `config/config_test_data_multitree.yaml` and a step in the Test Pipeline job
+  build two trees from one config and assert their `get_clades` checkpoints
+  resolve independently — guarding against a regression where a per-tree
+  `max_leaf_date` override is ignored.
+
 ### v4
 
 **Overhaul UShER masking, mask all founder→reference reversions, and make the codon mask

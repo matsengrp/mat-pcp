@@ -29,7 +29,7 @@ The pipeline uses simple integer versioning (v1, v2, v3, etc.) for reproducibili
 ### Version Management
 
 - **Version File**: `VERSION` in the repository root contains the current pipeline version
-- **Automatic Versioning**: The Snakefile automatically appends the version to `output_dir` (e.g., `results/public_2022-06-01_v1`)
+- **Automatic Versioning**: The Snakefile derives each tree's output directory as `{output_root}/{label}_{version}` (e.g., `results/public_2022-06-01_v5`)
 - **Git Tags**: Each version should be tagged in git (e.g., `git tag v1`) when the branch is ready to merge
 - **Changelog**: All output schema changes must be documented in `CHANGELOG.md`
 
@@ -63,18 +63,23 @@ When making changes that will affect outputs:
 ## Development Commands
 
 ### Running the Pipeline
+
+Every run requires exactly one explicit `--configfile` (there is no default
+`configfile:` directive; see the Snakefile header for why).
+
 ```bash
 # Run with pixi (recommended)
-pixi run snakemake -j 4 --use-conda
+pixi run snakemake -j 4 --use-conda --configfile config/config.yaml
 
 # Dry run
-pixi run snakemake -n
+pixi run snakemake -n --configfile config/config.yaml
 
-# Run specific target
-pixi run snakemake -j 4 --use-conda results/aamut_fitness/all_aamut_fitness.csv
+# Run specific target (per-tree output path)
+pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
+  results/public_2022-06-01_v5/aamut_fitness/all_aamut_fitness.csv
 
 # Clean all outputs
-pixi run snakemake --delete-all-output
+pixi run snakemake --delete-all-output --configfile config/config.yaml
 ```
 
 ### Testing
@@ -85,6 +90,13 @@ pixi run snakemake -j 2 --use-conda \
 
 # Validate results
 pixi run python workflow/scripts/validate_test.py
+
+# Multi-tree smoke test: two trees in one config that resolve their
+# get_clades checkpoints independently (the earlier max_leaf_date yields
+# fewer clades). CI builds only each tree's clade_counts.csv and asserts
+# the counts differ.
+pixi run snakemake -j 2 --use-conda \
+  --configfile config/config_test_data_multitree.yaml
 ```
 
 ## Architecture
@@ -145,9 +157,16 @@ mat-pcp/
 
 The configuration (`config/config.yaml`) is organized into:
 
-1. **Input/Output**: `output_dir`, `mat`, `metadata`
+1. **Input/Output**: `output_root` (optional, default `results`) and `trees` (a
+   mapping of tree **label** → per-tree config). Each tree requires `mat` and
+   `metadata`; `max_leaf_date` is the only per-tree-overridable key. Output dirs
+   are derived as `{output_root}/{label}_{version}` — there is no `output_dir`
+   key. A single run builds every tree in `trees`.
 2. **Reference Genome**: `ref_fasta`, `ref_gtf`, `add_to_ref_gtf`
-3. **Metadata QC**: `qc_filter_options` (date filtering, host validation, genome length)
+3. **Metadata QC**: `qc_filter_options` (date filtering via `min_leaf_date` /
+   `max_leaf_date`, host validation, genome length). Global except that a tree
+   may override `max_leaf_date`. `max_leaf_date` is optional; when unset it
+   defaults to `None`, meaning no upper date cutoff.
 4. **Tree Processing**: `optimize_tree`, `mat_subset_kwargs`
 5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
 6. **PCP Extraction**: `pcp_gene_region`, `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`
@@ -161,7 +180,7 @@ The configuration (`config/config.yaml`) is organized into:
 
 ### Output Organization
 
-Results are stored in `{output_dir}/`:
+Results are stored per tree in `{output_root}/{label}_{version}/`:
 - `mat/`: Filtered trees, clade subtrees
 - `pcps/`: Curated parent-child pairs
 - `ref/`: Reference genome, coding sites

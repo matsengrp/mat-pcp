@@ -87,7 +87,6 @@ Amino acid-level fitness estimates aggregated across all clades. Fitness is comp
 | `subset_of_ORF1ab` | boolean | True if this entry is for an NSP (ORF1ab subset); False otherwise. |
 | `expected_count` | float | GLM-predicted neutral count (sequence context + RNA structure + position); the baseline for both `naive_delta_fitness` and `delta_fitness`. |
 | `actual_count` | float | Observed mutation count in the data. |
-| `tau_squared` | float | Variance component from the hierarchical model. |
 | `naive_delta_fitness` | float | Simple log-ratio fitness: `log((actual + 0.5) / (expected + 0.5))`. |
 | `delta_fitness` | float | Bayesian fitness estimate accounting for uncertainty. |
 | `uncertainty` | float | Standard error of the `delta_fitness` estimate. |
@@ -97,6 +96,7 @@ Amino acid-level fitness estimates aggregated across all clades. Fitness is comp
 - Positive `delta_fitness` indicates the mutation is observed more often than expected (potentially beneficial).
 - Negative `delta_fitness` indicates the mutation is observed less often than expected (potentially deleterious).
 - The `uncertainty` column can be used to filter for high-confidence estimates.
+- **Masking:** masked mutations (`exclude == True` in the count table) are dropped before fitness is computed (in `ntmut_counts_by_clade`), so no row here reflects counts from masked sites. Because masking is per-clade, a mutation masked only in some clades still contributes to the aggregate from clades where it is not masked.
 
 ### `aamut_fitness/{clade}_aamut_fitness.csv`
 
@@ -133,6 +133,8 @@ Nucleotide-level fitness estimates. Similar structure to amino acid fitness but 
 
 **Notes:**
 - Additional technical columns (e.g., `motif`, `unpaired`, `codon_site`, `mut_class`) are present for internal pipeline use but are not documented here.
+- **Masking:** as with the amino-acid fitness, masked mutations (`exclude == True`) are dropped in `ntmut_counts_by_clade` before nucleotide fitness is computed, so masked sites do not appear here. The `exclude` / `masked_in_usher` flag columns from `counts_all.csv` are not carried into this file.
+- **`cluster == "all"` rows are pooled per nucleotide mutation.** The cross-clade aggregate keys on `(nt_site, nt_mutation)` and sums counts across clades, so there is exactly one `"all"` row per mutation. Annotation columns that derive from the clade founder and can differ between clades (`motif`, `clade_founder_codon`/`aa`, `mutant_codon`/`aa`, `aa_mutation`, `synonymous`, …) hold a representative (first contributing clade's) value on the `"all"` row; the per-clade rows retain the exact per-clade values.
 
 ## Mutation Counts
 

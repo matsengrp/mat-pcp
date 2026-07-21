@@ -136,7 +136,7 @@
     }
   },
   "aamut_fitness_summary": {
-    "num_rows": 121290,
+    "num_rows": 120770,
     "columns": [
       "gene",
       "clade_founder_aa",
@@ -146,7 +146,6 @@
       "subset_of_ORF1ab",
       "expected_count",
       "actual_count",
-      "tau_squared",
       "source_clade",
       "delta_fitness",
       "uncertainty",
@@ -158,10 +157,10 @@
       "20A_aamut_fitness.csv"
     ],
     "num_clade_files": 3,
-    "expected_count_sum": 166.09129186430397,
-    "actual_count_sum": 100.0,
-    "delta_fitness_sum": -2414.2130335453235,
-    "checksum": "a115b7b9099eac530a3035aede9da7b6"
+    "expected_count_sum": 165.0119396361689,
+    "actual_count_sum": 91.0,
+    "delta_fitness_sum": -2414.839219695058,
+    "checksum": "d8db1a8fd48c8d993fd2ba9462819aa9"
   },
   "num_clade_sample_files": 3,
   "empty_clade_files": []

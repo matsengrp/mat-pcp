@@ -8,9 +8,10 @@
 # =============================================================================
 # Input/Output Configuration
 # =============================================================================
-output_dir: "results/gisaid-and-public_2023-01-01_v2"
-mat: "../mat-trees/2023-01-01-gisaid-and-public/gisaidAndPublic.2023-01-01.masked.pb.gz"
-metadata: "../mat-trees/2023-01-01-gisaid-and-public/gisaidAndPublic.2023-01-01.metadata.tsv.gz"
+trees:
+  gisaid-and-public_2023-01-01:            # -> results/gisaid-and-public_2023-01-01_v5
+    mat: "../mat-trees/2023-01-01-gisaid-and-public/gisaidAndPublic.2023-01-01.masked.pb.gz"
+    metadata: "../mat-trees/2023-01-01-gisaid-and-public/gisaidAndPublic.2023-01-01.metadata.tsv.gz"
 
 # =============================================================================
 # Reference Genome Configuration
@@ -28,8 +29,8 @@ add_to_ref_gtf:
 # =============================================================================
 qc_filter_options:
   invalid_date_resolutions: ["MISSING", "MONTH", "YEAR"]
-  min_date: "2019-12-01"
-  datetime_cutoff: "2023-01-01"
+  min_leaf_date: "2019-12-01"
+  max_leaf_date: "2023-01-01"
   valid_hosts: ["Human", "Homo sapiens"]
   missing_host_is_valid: true
   min_genome_length: 28000

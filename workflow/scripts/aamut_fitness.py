@@ -72,7 +72,6 @@ if len(ntmut_fit) == 0 or len(explode_cols) == 0:
             "aa_mutation",
             "expected_count",
             "actual_count",
-            "tau_squared",
             "naive_delta_fitness",
             "subset_of_ORF1ab",
             "delta_fitness",

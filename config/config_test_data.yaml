@@ -1,9 +1,13 @@
 # =============================================================================
 # Input/Output Configuration
 # =============================================================================
-output_dir: "results/test_data"
-mat: "data/test_data/filtered_tree_raw.pb.gz"
-metadata: "data/test_data/filtered_metadata.tsv.gz"
+# Trees to process (one Snakemake run builds all of them). Each tree's label
+# becomes an output dir {output_root}/{label}_{version}; output_root defaults to
+# "results", so this writes to results/test_data_v5.
+trees:
+  test_data:
+    mat: "data/test_data/filtered_tree_raw.pb.gz"
+    metadata: "data/test_data/filtered_metadata.tsv.gz"
 
 # =============================================================================
 # Reference Genome Configuration
@@ -20,8 +24,8 @@ add_to_ref_gtf:
 # =============================================================================
 qc_filter_options:
   invalid_date_resolutions: ["MISSING", "MONTH", "YEAR"]
-  min_date: "2019-12-01"
-  datetime_cutoff: "2022-06-01"
+  min_leaf_date: "2019-12-01"
+  max_leaf_date: "2022-06-01"  # global default; a tree may override under its label
   valid_hosts: ["Human", "Homo sapiens"]
   missing_host_is_valid: true
   min_genome_length: 28000
