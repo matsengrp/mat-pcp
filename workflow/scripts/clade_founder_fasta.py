@@ -8,7 +8,25 @@ needed for training ParentIndependent DASM models.
 """
 
 import json
+import os
+import sys
+from importlib import util as importlib_util
+
 import Bio.SeqIO
+
+
+def load_workflow_module(module_name):
+    """Load a module from the workflow's modules directory."""
+    workflow_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    module_path = os.path.join(workflow_dir, "modules", f"{module_name}.py")
+    spec = importlib_util.spec_from_file_location(module_name, module_path)
+    module = importlib_util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+sequences = load_workflow_module("sequences")
 
 
 def write_fasta(filepath, header, seq, line_width=80):
@@ -180,13 +198,13 @@ log(f"Wrote founder FASTA to {output_fasta}")
 # ``pcp_gene_region`` boundaries are 1-based inclusive (start/end both included)
 # relative to the Wuhan-Hu-1 (NC_045512.2) reference. For Spike, end=25381
 # excludes the trailing stop codon by convention (positions 21563-25381 ->
-# 3819 nt = 1273 codons). We use [start-1:end] for half-open Python slicing
-# that yields the same inclusive nt range.
+# 3819 nt = 1273 codons). Slicing is delegated to ``sequences.slice_cds``
+# (see ``workflow/modules/sequences.py``), which yields the same inclusive nt range.
 if output_gene_fasta and pcp_gene_region:
     gene_name = pcp_gene_region.get("gene") or "gene"
     start = pcp_gene_region["start"]
     end = pcp_gene_region["end"]
-    gene_seq = founder_seq[start - 1 : end]
+    gene_seq = sequences.slice_cds(founder_seq, [(start, end)])
     expected_len = end - start + 1
     assert len(gene_seq) == expected_len, (
         f"Gene slice length {len(gene_seq)} != expected {expected_len} "

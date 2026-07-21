@@ -13,11 +13,29 @@ Outputs:
                     were dropped because the slice was identical.
 """
 
-from pandas import DataFrame as DF
+import os
+import sys
 from collections import defaultdict
-import bte
+from importlib import util as importlib_util
 from time import time
+
+import bte
 import pandas as pd
+from pandas import DataFrame as DF
+
+
+def load_workflow_module(module_name):
+    """Load a module from the workflow's modules directory."""
+    workflow_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    module_path = os.path.join(workflow_dir, "modules", f"{module_name}.py")
+    spec = importlib_util.spec_from_file_location(module_name, module_path)
+    module = importlib_util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+sequences = load_workflow_module("sequences")
 
 # Get inputs from snakemake
 tree_path = snakemake.input.tree
@@ -207,9 +225,9 @@ class PCPHelper:
         reference (NC_045512.2). For Spike, ``(21563, 25381)`` excludes the
         trailing stop codon by convention and yields 3819 nt (1273 codons).
 
-        The Python expression ``seq[start - 1 : end]`` converts the 1-based
-        inclusive range to a half-open Python slice that returns the same
-        inclusive nucleotide range.
+        Slicing is delegated to ``sequences.slice_cds`` (see
+        ``workflow/modules/sequences.py``), which converts the 1-based
+        inclusive range to the equivalent half-open Python slice.
         """
 
         def mut_dict(muts):
@@ -221,8 +239,8 @@ class PCPHelper:
         def slice_seq(seq):
             if gene_slice_boundaries is None:
                 return seq
-            # 1-based inclusive -> Python half-open slice
-            return seq[gene_slice_boundaries[0] - 1 : gene_slice_boundaries[1]]
+            # 1-based inclusive -> Python half-open slice, via the shared helper.
+            return sequences.slice_cds(seq, [gene_slice_boundaries])
 
         cols = ["parent_name", "child_name", "parent", "child", "branch_length"]
         rows = (
