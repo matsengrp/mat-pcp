@@ -49,7 +49,6 @@ if len(dfs) == 0:
             "aa_mutation",
             "expected_count",
             "actual_count",
-            "tau_squared",
             "naive_delta_fitness",
             "subset_of_ORF1ab",
             "delta_fitness",
@@ -70,8 +69,11 @@ else:
     groupby_cols = [c for c in groupby_cols if c in all_data.columns]
 
     # Compute aggregated counts and weighted average fitness
+    # tau_squared is intentionally not carried into the aa outputs (see
+    # aamutfit.aggregate_counts / CHANGELOG v5): it is a nucleotide-level
+    # quantity that never feeds the aa fitness estimates.
     agg_dict = {}
-    for col in ["expected_count", "actual_count", "tau_squared"]:
+    for col in ["expected_count", "actual_count"]:
         if col in all_data.columns:
             agg_dict[col] = "sum"
 

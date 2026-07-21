@@ -87,7 +87,6 @@ Amino acid-level fitness estimates aggregated across all clades. Fitness is comp
 | `subset_of_ORF1ab` | boolean | True if this entry is for an NSP (ORF1ab subset); False otherwise. |
 | `expected_count` | float | GLM-predicted neutral count (sequence context + RNA structure + position); the baseline for both `naive_delta_fitness` and `delta_fitness`. |
 | `actual_count` | float | Observed mutation count in the data. |
-| `tau_squared` | float | Variance component from the hierarchical model. |
 | `naive_delta_fitness` | float | Simple log-ratio fitness: `log((actual + 0.5) / (expected + 0.5))`. |
 | `delta_fitness` | float | Bayesian fitness estimate accounting for uncertainty. |
 | `uncertainty` | float | Standard error of the `delta_fitness` estimate. |

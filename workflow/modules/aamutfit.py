@@ -98,8 +98,13 @@ def aggregate_counts(df, explode_cols):
     groupby_cols = ["cluster"] + list(explode_cols)
     groupby_cols = [c for c in groupby_cols if c in df.columns]
 
+    # tau_squared is deliberately not aggregated here: it is a nucleotide-level
+    # log-scale variance used only by probfit (nt fitness). It never feeds the
+    # amino-acid delta_fitness (inverse-variance weighting of nt estimates) or
+    # naive_delta_fitness (from summed counts), so summing it into aa rows would
+    # only carry a meaningless column. See CHANGELOG v5.
     agg_dict = {}
-    for col in ["expected_count", "actual_count", "tau_squared"]:
+    for col in ["expected_count", "actual_count"]:
         if col in df.columns:
             agg_dict[col] = "sum"
 

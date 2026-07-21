@@ -76,6 +76,16 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
   as uninformative columns into `fitness/ntmut_counts/*`, `fitness/ntmut_fitness/*`,
   and `fitness/ntmut_fitness_aggregated.csv`. (They remain in `counts_all.csv`.)
 
+- **`tau_squared` removed from the amino-acid fitness outputs**
+  (`aamut_fitness/{clade}_aamut_fitness.csv`, `aamut_fitness/all_aamut_fitness.csv`).
+  `tau_squared` is a nucleotide-level log-scale variance of the neutral expected
+  count, consumed only by `probfit` when estimating nucleotide fitness. It never
+  fed the amino-acid `delta_fitness` (an inverse-variance weighted average of the
+  nucleotide estimates) or `naive_delta_fitness` (from summed counts); it was
+  merely summed over the constituent nucleotide mutations and carried as an
+  unused column. It remains in the nucleotide outputs
+  (`fitness/ntmut_fitness_aggregated.csv`), where it is used.
+
 - **Per-tree output layout is byte-identical to v4 for everything except the
   fitness outputs**, apart from the version dir name: a single-tree run writes
   the same files under `{output_root}/{label}_v5/...` that a v4 run wrote under

@@ -146,7 +146,6 @@
       "subset_of_ORF1ab",
       "expected_count",
       "actual_count",
-      "tau_squared",
       "source_clade",
       "delta_fitness",
       "uncertainty",
@@ -161,7 +160,7 @@
     "expected_count_sum": 165.0119396361689,
     "actual_count_sum": 91.0,
     "delta_fitness_sum": -2414.839219695058,
-    "checksum": "2e298a61b661852fb690e1dbb1f3c435"
+    "checksum": "d8db1a8fd48c8d993fd2ba9462819aa9"
   },
   "num_clade_sample_files": 3,
   "empty_clade_files": []
