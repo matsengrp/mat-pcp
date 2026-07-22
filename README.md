@@ -133,7 +133,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `glm/curated_counts.csv` | Curated counts for GLM training |
 | `glm/master_table.csv` | Full GLM rate table with light-switch boundaries |
 | `rates_table.csv` | Neutral mutation rates by context |
-| `spike_codon_sites_to_mask.txt` | Problematic codon sites in target gene |
+| `<gene>_codon_sites_to_mask.txt` | Problematic codon sites per configured protein (e.g. `S_codon_sites_to_mask.txt`) |
 | `fitness/expected_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
 | `aamut_fitness/all_aamut_fitness.csv` | Amino acid-level fitness estimates |
@@ -400,8 +400,8 @@ grid, in `build_count_table` via `workflow/modules/masking.py`. A mutation is ex
 4. **Configured exclusions**: it is at a site in `sites_to_exclude`
 5. **Founder→reference reversion**: its destination base equals the reference base at that site — i.e. it reverts a clade-defining base back to the reference. These are enriched for artifacts and are always excluded (does **not** set `masked_in_usher`).
 
-The `spike_codon_sites_to_mask.txt` output (the codon mask consumed by DASM) is built from
-this table but includes **only sites masked across all clades** — i.e. every mutation at the
+The `<gene>_codon_sites_to_mask.txt` outputs (one per configured protein; the codon masks consumed by DASM) are built from
+this table but include **only sites masked across all clades** — i.e. every mutation at the
 site is excluded (the clade-independent reasons: `site_include_range`, `sites_to_exclude`, and
 the ProblematicSites VCF). Clade-specific masks (UShER per-clade `sites`/`mutations` and
 founder→reference reversions) are intentionally excluded from the codon mask.

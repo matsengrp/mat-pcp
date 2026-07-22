@@ -19,7 +19,7 @@ SPIKE_19A_SENTINEL_MD5 = "b948f2a1f20edbce64cfff1dc540c119"
 # on the test dataset (#80). These md5s come from running the reference
 # implementation in ``dasm2.preprocess_command.preprocess`` (the same
 # function that ``data-central/scripts/filter_viral_pcps.sh`` invokes) on
-# the test pipeline's ``all_pcps.csv`` + ``spike_codon_sites_to_mask.txt``
+# the test pipeline's ``all_pcps.csv`` + ``S_codon_sites_to_mask.txt``
 # with the canonical seeds. A mismatch here means either the filter logic
 # drifted from dasm2 or the train/val RNG call sequence changed.
 DASM_READY_ALL_SENTINEL_MD5 = "5e538bd088e676b485a11a04745221e9"
@@ -685,18 +685,18 @@ def validate_spike_mask_all_clades(output_dir, masking_gene="S"):
 
     Re-derives the expected mask from counts_all.csv using the all-clades rule
     (a nt_site qualifies iff every row at it has exclude==True) restricted to the
-    masking gene, and asserts the emitted ``spike_codon_sites_to_mask.txt`` matches.
+    masking gene, and asserts the emitted ``{gene}_codon_sites_to_mask.txt`` matches.
     This pins the clade-agnostic behavior: a regression to per-clade masking would
     add clade-specific codon sites and fail here.
     """
     import pandas as pd
 
     counts_path = os.path.join(output_dir, "counts_all.csv")
-    mask_path = os.path.join(output_dir, "spike_codon_sites_to_mask.txt")
+    mask_path = os.path.join(output_dir, f"{masking_gene}_codon_sites_to_mask.txt")
     if not os.path.exists(counts_path):
         return [f"counts_all.csv not found under {output_dir}"], None
     if not os.path.exists(mask_path):
-        return [f"spike_codon_sites_to_mask.txt not found under {output_dir}"], None
+        return [f"{masking_gene}_codon_sites_to_mask.txt not found under {output_dir}"], None
 
     df = pd.read_csv(counts_path)
     site_all_excluded = (df["exclude"] == True).groupby(df["nt_site"]).transform("all")  # noqa: E712

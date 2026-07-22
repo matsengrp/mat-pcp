@@ -17,12 +17,11 @@ import yaml
 # Version Management
 # =============================================================================
 
-# Filename of the problematic-codon mask produced by ``rule
-# get_problematic_sites`` and consumed by the DASM-ready filter rules (#80).
-# Kept as a module-level constant so a rename is a one-line change; the
-# rule itself is defined far below the consumers, which is why the
-# consumers use a hardcoded path instead of ``rules.X.output.Y``.
-SPIKE_MASK_FILENAME = "spike_codon_sites_to_mask.txt"
+# Per-gene problematic-codon masks are produced by ``rule
+# get_problematic_sites`` (one per configured protein, named by gene symbol:
+# ``<gene>_codon_sites_to_mask.txt``) and consumed by the DASM-ready filter
+# rules (#80). That filter is still pinned to Spike, so it hardcodes
+# ``S_codon_sites_to_mask.txt`` until #108 generalizes it over ``pcp_genes``.
 
 # Read pipeline version from VERSION file
 VERSION_FILE = os.path.join(workflow.basedir, "..", "VERSION")
@@ -270,7 +269,6 @@ if not PCP_GENES:
 # PCP targets are pinned to Spike (``pcps/S/``) until #108 generalizes them.
 results_files = [
     "rates_table.csv",
-    SPIKE_MASK_FILENAME,
     "fitness/ntmut_fitness_aggregated.csv",
     "aamut_fitness/all_aamut_fitness.csv",
     "validation/pcp_vs_counts_report.txt",
@@ -299,6 +297,12 @@ rule all:
         # gene's ``clade_founders/{gene}/{clade}.fa`` slices for every clade.
         expand(
             os.path.join(OUTDIR, "clade_founders/{gene}/founders.done"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
+        ),
+        # Per-gene DASM codon masks (tree x gene).
+        expand(
+            os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt"),
             tree=TREE_LABELS,
             gene=PCP_GENES,
         )
@@ -734,7 +738,7 @@ rule curate_pcps_for_dasm:
     """
     input:
         pcps=os.path.join(OUTDIR, "pcps/S/{clade}_pcps.csv"),
-        mask_sites=os.path.join(OUTDIR, SPIKE_MASK_FILENAME)
+        mask_sites=os.path.join(OUTDIR, "S_codon_sites_to_mask.txt")
     output:
         dasm_ready=os.path.join(OUTDIR, "pcps/S/{clade}_pcps_dasm_ready.csv"),
         report=os.path.join(OUTDIR, "pcps/S/{clade}_dasm_filter_report.txt"),
@@ -758,7 +762,7 @@ rule curate_all_pcps_for_dasm:
     """
     input:
         pcps=os.path.join(OUTDIR, "pcps/S/all_pcps.csv"),
-        mask_sites=os.path.join(OUTDIR, SPIKE_MASK_FILENAME)
+        mask_sites=os.path.join(OUTDIR, "S_codon_sites_to_mask.txt")
     output:
         dasm_ready=os.path.join(OUTDIR, "pcps/S/all_pcps_dasm_ready.csv"),
         report=os.path.join(OUTDIR, "pcps/S/all_dasm_filter_report.txt"),
@@ -1146,15 +1150,17 @@ rule get_rates_table:
 
 
 rule get_problematic_sites:
-    """Identify problematic codon sites in target gene for masking."""
+    """Identify problematic codon sites in one gene's CDS for masking.
+
+    Fanned over ``pcp_genes``: emits ``<gene>_codon_sites_to_mask.txt`` per
+    configured protein (the gene comes from the ``{gene}`` wildcard).
+    """
     input:
         expected_vs_actual=rules.build_count_table.output.csv
     output:
-        sites_to_mask=os.path.join(OUTDIR, SPIKE_MASK_FILENAME)
-    params:
-        masking_gene=config.get("masking_gene", "S")
+        sites_to_mask=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
     log:
-        os.path.join(OUTDIR, "log/get_problematic_sites.log")
+        os.path.join(OUTDIR, "log/get_problematic_sites_{gene}.log")
     conda:
         "envs/default.yml"
     script:

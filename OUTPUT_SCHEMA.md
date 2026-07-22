@@ -40,7 +40,7 @@ DASM-training-ready sibling of `*_pcps.csv`. Same row schema as the parent file 
 3. Length not divisible by 3 (non-codon-aligned)
 4. Ambiguous nucleotides (`N`) in either sequence
 5. Stop codons (`TAA`, `TAG`, `TGA`) in parent or child
-6. Every codon-level mutation falls in a codon position listed in `spike_codon_sites_to_mask.txt` (no-signal PCP)
+6. Every codon-level mutation falls in a codon position listed in `<gene>_codon_sites_to_mask.txt` (no-signal PCP)
 
 **Seed convention**:
 

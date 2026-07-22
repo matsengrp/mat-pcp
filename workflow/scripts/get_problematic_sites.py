@@ -6,7 +6,7 @@ import pandas as pd
 # Get snakemake variables
 expected_vs_actual_csv = snakemake.input.expected_vs_actual
 output_file = snakemake.output.sites_to_mask
-masking_gene = snakemake.params.get("masking_gene", "S")
+masking_gene = snakemake.wildcards.gene
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 

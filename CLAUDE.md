@@ -180,7 +180,7 @@ The configuration (`config/config.yaml`) is organized into:
 9. **GLM**: `rna_structure_data`, `glm_lightswitch_boundaries`
 11. **Fitness**: `fitness_pseudocount`, `fitness_N_f`, `fitness_N_n_exp`
 12. **Gene Configuration**: `orf1ab_to_nsps`, `gene_overlaps`, `genes`
-13. **Site Masking**: `masking_gene`, `sites_to_exclude`, `site_include_range`
+13. **Site Masking**: `sites_to_exclude`, `site_include_range`
 14. **Threads**: Per-rule thread allocation
 
 ### Output Organization
