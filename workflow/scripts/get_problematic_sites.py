@@ -41,7 +41,16 @@ site_all_excluded = excluded.groupby(expected_v_actual["nt_site"]).transform("al
 
 mask = site_all_excluded
 if "gene" in expected_v_actual.columns:
-    mask = mask & expected_v_actual["gene"].str.contains(masking_gene, na=False)
+    # Match gene membership exactly. Compound ``gene`` cells from overlapping
+    # ORFs (e.g. ``S;ORF3a``) are split on ``;`` so the masking gene must equal
+    # one whole member -- a substring match would let a gene symbol bleed into a
+    # longer one (e.g. ``ORF1a`` into ``ORF1ab``) once fanned over pcp_genes (#114).
+    # NaN gene cells become the string ``nan``, which never equals a real gene
+    # symbol, so they drop out of the mask -- matching the old ``na=False``.
+    gene_members = expected_v_actual["gene"].astype(str).str.split(";")
+    mask = mask & gene_members.apply(
+        lambda members: masking_gene in [g.strip() for g in members]
+    )
 
 problematic_sites = expected_v_actual[mask]
 
