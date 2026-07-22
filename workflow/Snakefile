@@ -19,9 +19,9 @@ import yaml
 
 # Per-gene problematic-codon masks are produced by ``rule
 # get_problematic_sites`` (one per configured protein, named by gene symbol:
-# ``<gene>_codon_sites_to_mask.txt``) and consumed by the DASM-ready filter
-# rules (#80). That filter is still pinned to Spike, so it hardcodes
-# ``S_codon_sites_to_mask.txt`` until #108 generalizes it over ``pcp_genes``.
+# ``<gene>_codon_sites_to_mask.txt``) and consumed by the per-gene DASM-ready
+# filter rules (#80, generalized over ``pcp_genes`` in #108): each protein is
+# filtered against its own ``<gene>_codon_sites_to_mask.txt``.
 
 # Read pipeline version from VERSION file
 VERSION_FILE = os.path.join(workflow.basedir, "..", "VERSION")
@@ -1315,8 +1315,7 @@ rule extract_mutations_from_pcps:
     sequences (``pcps/{gene}/all_pcps.csv``) into per-codon AA mutations.
     """
     input:
-        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv"),
-        ref_fasta=rules.get_ref_fasta.output.ref_fasta
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv")
     output:
         aa_counts=os.path.join(OUTDIR, "validation/{gene}/pcp_aa_counts.csv")
     log:
