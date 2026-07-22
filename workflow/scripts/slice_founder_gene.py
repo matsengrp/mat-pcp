@@ -17,21 +17,25 @@ conditionality lives in the DAG rather than in a conditional output list.
 """
 
 import os
-import sys
 from importlib import util as importlib_util
 
 import Bio.SeqIO
 
-
-def load_workflow_module(module_name):
-    """Load a module from the workflow's modules directory."""
-    workflow_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    module_path = os.path.join(workflow_dir, "modules", f"{module_name}.py")
-    spec = importlib_util.spec_from_file_location(module_name, module_path)
-    module = importlib_util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+# The by-path module loader is defined once in
+# workflow/modules/workflow_loader.py. Because that loader is itself the
+# mechanism for importing shared workflow code, it cannot be imported via
+# itself -- it is wired up here by absolute path (#111).
+_loader_spec = importlib_util.spec_from_file_location(
+    "workflow_loader",
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "modules",
+        "workflow_loader.py",
+    ),
+)
+workflow_loader = importlib_util.module_from_spec(_loader_spec)
+_loader_spec.loader.exec_module(workflow_loader)
+load_workflow_module = workflow_loader.load_workflow_module
 
 
 sequences = load_workflow_module("sequences")
