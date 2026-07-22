@@ -105,8 +105,8 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | Stage | Description | Key Outputs |
 |-------|-------------|-------------|
 | 1. Input & Reference | Filter metadata, link inputs, fetch reference genome and annotations | `filtered_metadata.tsv.gz`, `ref.fa`, `coding_sites.csv` |
-| 2. Clade Processing & PCPs | Identify clades, extract clade subtrees, and emit curated PCPs in one pass (identical-slice branches are dropped during extraction). DASM-training-ready siblings are emitted alongside. | `clade_counts.csv`, `clades/{clade}_tree.pb`, `pcps/{clade}_pcps.csv`, `pcps/all_pcps.csv`, `pcps/{clade}_pcps_dasm_ready.csv`, `pcps/all_pcps_dasm_ready.csv`, `pcp_curation_report.txt` |
-| 3a. Clade Founders | Download and process clade founder sequences (whole-genome + gene-sliced, e.g. Spike) | `clade_founders/{clade}.fa`, `clade_founders/spike/{clade}.fa`, `clade_founder_nts.csv` |
+| 2. Clade Processing & PCPs | Identify clades, extract clade subtrees, and emit curated PCPs in one pass (identical-slice branches are dropped during extraction), fanned over each protein in `pcp_genes`. DASM-training-ready siblings are emitted alongside. | `clade_counts.csv`, `clades/{clade}_tree.pb`, `pcps/{gene}/{clade}_pcps.csv`, `pcps/{gene}/all_pcps.csv`, `pcps/{gene}/{clade}_pcps_dasm_ready.csv`, `pcps/{gene}/all_pcps_dasm_ready.csv`, `pcps/{gene}/pcp_curation_report.txt` |
+| 3a. Clade Founders | Download and process clade founder sequences (whole-genome + one gene-sliced founder per protein in `pcp_genes`) | `clade_founders/{clade}.fa`, `clade_founders/{gene}/{clade}.fa`, `clade_founder_nts.csv` |
 | 3b. Mutation Counting | Translate mutations, count per-clade mutations (harmonized with PCP filtering) | `mutations/{clade}_mutations.tsv`, `mutation_counts/aggregated.csv` |
 | 4. Unified Count Table | Enumerate all possible mutations, join actual counts, compute masking flags once | `counts_all.csv` |
 | 5. GLM Annotation | Annotate counts with RNA structure and sequence context | `glm/annotated_counts.csv`, `glm/curated_counts.csv` |
@@ -121,10 +121,10 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 
 | Output | Description |
 |--------|-------------|
-| `pcps/all_pcps.csv` | All curated parent-child pairs with clade annotations |
-| `pcps/all_pcps_dasm_ready.csv` | DASM-training-ready PCPs (filters + 90/10 `in_train` split applied); per-clade siblings at `pcps/{clade}_pcps_dasm_ready.csv` |
-| `pcps/pcp_curation_report.txt` | Report showing PCP filtering statistics |
-| `pcps/filtered_branch_ids.csv` | Branch IDs excluded from mutation counting |
+| `pcps/{gene}/all_pcps.csv` | All curated parent-child pairs with clade annotations, per protein in `pcp_genes` |
+| `pcps/{gene}/all_pcps_dasm_ready.csv` | DASM-training-ready PCPs (filters + 90/10 `in_train` split applied); per-clade siblings at `pcps/{gene}/{clade}_pcps_dasm_ready.csv` |
+| `pcps/{gene}/pcp_curation_report.txt` | Report showing PCP filtering statistics |
+| `pcps/{gene}/filtered_branch_ids.csv` | Branch IDs excluded from mutation counting |
 | `mat/clade_counts.csv` | Sample counts per clade |
 | `clade_founder_nts.csv` | Nucleotide at each coding site for all clade founders |
 | `mutation_counts/aggregated.csv` | Aggregated mutation counts across all clades |
@@ -150,8 +150,10 @@ Masked mutations are excluded from every fitness output. Any mutation flagged `e
 | Value | File | Baseline | Method |
 |-------|------|----------|--------|
 | `f_max`, `f_mean`, `f_st_dev`, `left_conf_int`, `right_conf_int` | `fitness/ntmut_fitness_aggregated.csv` | `expected_count` (GLM) | Per-nucleotide **Bayesian Poisson** posterior over the fitness effect `f` |
-| `delta_fitness`, `uncertainty` | `aamut_fitness/all_aamut_fitness.csv` | inherited from the nucleotide estimates | **Inverse-variance weighted average** of the nucleotide `f_mean` values over codon-equivalent mutations |
-| `naive_delta_fitness` | `aamut_fitness/all_aamut_fitness.csv` | `expected_count` (GLM) | Smoothed log-ratio: `log((actual_count + 0.5) / (expected_count + 0.5))` |
+| `delta_fitness_bayesian`, `uncertainty` | `aamut_fitness/all_aamut_fitness.csv` | inherited from the nucleotide estimates | **Inverse-variance weighted average** of the nucleotide `f_mean` values over codon-equivalent mutations |
+| `delta_fitness_pseudo` | `aamut_fitness/all_aamut_fitness.csv` | `expected_count` (GLM) | Smoothed log-ratio: `log((actual_count + 0.5) / (expected_count + 0.5))` |
+
+> **Output column names (v6):** in the aggregate `all_aamut_fitness.csv`, the two delta columns are named **`delta_fitness_pseudo`** (the primary per-mutation signal) and **`delta_fitness_bayesian`**. These were renamed in v6 from `naive_delta_fitness` and `delta_fitness` respectively. The rename is applied only at the aggregate write boundary; the per-clade `{clade}_aamut_fitness.csv` files and the computation described below still use the internal names `naive_delta_fitness` / `delta_fitness`.
 
 ### Nucleotide-level Bayesian fitness
 
@@ -186,7 +188,7 @@ light-switch position). Both fitness estimators use it:
 ### Contrast: how a downstream consumer recomputes fitness
 
 A downstream consumer — the `viral_fitness` dashboard in the separate `dasm2-experiments`
-repository (`dasm2/analysis/viral.py`) — does **not** use the pipeline's `delta_fitness` column.
+repository (`dasm2/analysis/viral.py`) — does **not** use the pipeline's `delta_fitness_bayesian` column.
 Instead it recomputes its own fitness directly from the pipeline's `actual_count` and
 `expected_count` columns:
 
@@ -200,7 +202,7 @@ selection factors. **Consumers that read the old `predicted_count` column must b
 
 The two definitions differ as follows:
 
-| | Pipeline `delta_fitness` | Dashboard `computed_delta_fitness_pseudo` |
+| | Pipeline `delta_fitness_bayesian` | Dashboard `computed_delta_fitness_pseudo` |
 |---|---|---|
 | Form | Bayesian hierarchical posterior | Direct smoothed log-ratio |
 | Baseline | `expected_count` (GLM) | `expected_count` (GLM) |
@@ -306,7 +308,7 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `pcp_gene_region` | Genomic region for PCPs (null = full genome). Coordinates are **1-based inclusive** on both ends, relative to Wuhan-Hu-1 (NC_045512.2); for Spike the end excludes the trailing stop codon. Also drives the gene-sliced founder FASTA output. | Spike (21563-25381) |
+| `pcp_genes` | List of protein symbols to extract PCPs and gene-sliced founders for. PCP extraction is fanned over this list; each protein's coordinates come from the reference GTF (`cds_blocks_for_gene`), so outputs land under `pcps/{gene}/` and `clade_founders/{gene}/`. ORF1ab is reconstructed as one frameshifted CDS. Must be non-empty. | `[S, ORF1ab, E]` |
 | `pcp_max_nt_mutations` | Max nucleotide mutations per branch | `4` |
 | `pcp_max_reversions_to_ref` | Max reversions to reference | `1` |
 | `pcp_max_reversions_to_clade_founder` | Max reversions to clade founder | `1` |
@@ -377,7 +379,7 @@ During initial PCP extraction (`extract_pcps_by_clade`), branches are filtered b
 
 1. **Identical sequences**: Parent and child sequences that are identical (in the gene region) are dropped before the per-clade `pcps/{clade}_pcps.csv` is written.
 
-The IDs of dropped branches are written to `pcps/{clade}_filtered_branches.csv` and consumed downstream by mutation counting (see "Harmonized Mutation Counting" below).
+The IDs of dropped branches are written to `pcps/{gene}/{clade}_filtered_branches.csv` and consumed downstream by mutation counting (see "Harmonized Mutation Counting" below).
 
 Note: Stop codons and ambiguous bases outside the gene region of interest do not cause PCPs to be filtered, as sequences are already sliced to the gene region during extraction. This ensures that sequence properties outside the gene region don't create artificial discrepancies in validation.
 
@@ -385,7 +387,7 @@ Note: Stop codons and ambiguous bases outside the gene region of interest do not
 
 To ensure consistency between PCP-derived and matUtils-derived mutation counts, the mutation counting step (`count_mutations_clade`) excludes branches that the PCP extraction step dropped. This is achieved by:
 
-1. `extract_pcps_by_clade` writes a per-clade list of filtered branch IDs (`pcps/{clade}_filtered_branches.csv`)
+1. `extract_pcps_by_clade` writes a per-clade list of filtered branch IDs (`pcps/{gene}/{clade}_filtered_branches.csv`)
 2. Mutation counting reads these IDs and excludes corresponding nodes from counting
 3. This ensures the same set of branches contributes to both PCP sequences and mutation counts
 
@@ -467,16 +469,17 @@ results/
 │   ├── filtered_metadata.tsv.gz   # QC-filtered metadata
 │   ├── filtered_tree_raw.pb       # Filtered MAT tree
 │   └── clade_counts.csv           # Sample counts per clade
-├── pcps/
-│   ├── {clade}_pcps.csv           # Curated parent-child pairs per clade
-│   ├── {clade}_pcps_dasm_ready.csv    # DASM-training-ready PCPs per clade (v2+)
-│   ├── {clade}_dasm_filter_report.txt # Per-filter drop counts (v2+)
-│   ├── {clade}_dasm_filter_stats.json # Machine-readable filter stats (v2+)
-│   ├── {clade}_filtered_branches.csv  # Branch IDs filtered during curation
-│   ├── all_pcps.csv               # Aggregated curated PCPs across all clades
-│   ├── all_pcps_dasm_ready.csv    # DASM-training-ready aggregate (v2+)
-│   ├── pcp_curation_report.txt    # PCP curation statistics
-│   └── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
+├── pcps/                          # One subdir per protein in pcp_genes (S, ORF1ab, E, ...)
+│   └── {gene}/
+│       ├── {clade}_pcps.csv           # Curated parent-child pairs per clade
+│       ├── {clade}_pcps_dasm_ready.csv    # DASM-training-ready PCPs per clade (v2+)
+│       ├── {clade}_dasm_filter_report.txt # Per-filter drop counts (v2+)
+│       ├── {clade}_dasm_filter_stats.json # Machine-readable filter stats (v2+)
+│       ├── {clade}_filtered_branches.csv  # Branch IDs filtered during curation
+│       ├── all_pcps.csv               # Aggregated curated PCPs across all clades
+│       ├── all_pcps_dasm_ready.csv    # DASM-training-ready aggregate (v2+)
+│       ├── pcp_curation_report.txt    # PCP curation statistics
+│       └── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
 ├── ref/
 │   ├── ref.fa                     # Reference genome (FASTA)
 │   ├── original_ref.gtf           # Original GTF annotations
@@ -485,7 +488,8 @@ results/
 │   └── site_mask.csv              # Problematic sites from VCF
 ├── clade_founders/
 │   ├── {clade}.fa                 # Whole-genome founder sequence for each clade
-│   ├── spike/{clade}.fa           # Gene-sliced founder (Spike 21563-25381, when pcp_gene_region is set)
+│   ├── {gene}/{clade}.fa          # Gene-sliced founder, one subdir per protein in pcp_genes
+
 │   ├── clade_founders_neher.json  # Neher lab clade founder data
 │   └── clade_founders_roemer.json # Roemer clade founder data
 ├── mutations/

@@ -53,6 +53,8 @@ In general, any change to the pipeline is a breaking change since models trained
 6. Create a git tag matching the version: `git tag v2`
 7. Push the tag: `git push origin v2`
 
+> **Also audit output-path defaults.** Any script with its own default output directory (currently `workflow/scripts/validate_test.py`) must track `VERSION` the same way the Snakefile does, or it will silently read a stale `results/<label>_v{N-1}` directory after a bump (see #88).
+
 ### Development with Versioning
 
 When making changes that will affect outputs:
@@ -174,7 +176,7 @@ The configuration (`config/config.yaml`) is organized into:
    defaults to `None`, meaning no upper date cutoff.
 4. **Tree Processing**: `optimize_tree`, `mat_subset_kwargs`
 5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
-6. **PCP Extraction**: `pcp_gene_region`, `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`
+6. **PCP Extraction**: `pcp_genes`, `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`
 7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources)
 8. **Mutation Counting**: `max_nt_mutations`, `max_reversions_*`, `site_include_range`
 9. **GLM**: `rna_structure_data`, `glm_lightswitch_boundaries`

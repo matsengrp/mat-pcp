@@ -18,6 +18,78 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### v6
+
+**Multi-protein pipeline** — generalizes PCP extraction, founder slicing, DASM
+codon masking, DASM-ready filtering, and PCP-vs-counts validation from a single
+hardcoded gene (Spike) to a config-driven list of proteins. Tracks EPIC
+[#84](https://github.com/matsengrp/mat-pcp/issues/84).
+
+**Changes**:
+
+- **`pcp_genes` list replaces the scalar `pcp_gene_region` + `masking_gene`
+  config keys.** A single Snakemake invocation fans PCP extraction, gene-sliced
+  founders, codon masks, DASM-ready filtering, and validation over every protein
+  in `pcp_genes` (shipped default `[S, ORF1ab, E]`; must be non-empty).
+  Per-protein coordinates are derived from the reference GTF
+  (`cds_blocks_for_gene`) rather than a hardcoded region.
+
+- **Per-gene output layout.** Outputs that were previously Spike-only now live
+  under a per-gene subdirectory or filename (gene symbol verbatim):
+  - `pcps/{gene}/{clade}_pcps.csv`, `pcps/{gene}/all_pcps.csv`, and the
+    `pcps/{gene}/*_pcps_dasm_ready.csv` / `*_dasm_filter_report.txt` /
+    `*_dasm_filter_stats.json` / `*_filtered_branches.csv` /
+    `filtered_branch_ids.csv` / `pcp_curation_report.txt` siblings.
+  - `clade_founders/{gene}/{clade}.fa` (was `clade_founders/spike/{clade}.fa`;
+    the `GENE_FOUNDER_DIRNAMES` `S`->`spike` mapping is retired).
+  - `{gene}_codon_sites_to_mask.txt` (was `spike_codon_sites_to_mask.txt`).
+  - `validation/{gene}/pcp_vs_counts_report.txt` (+ `pcp_aa_counts.csv`,
+    `pcp_vs_counts_discrepancies.csv`), one set per protein.
+
+- **ORF1ab is handled as one frameshift-reconstructed CDS**, not split into
+  nsps: its two GTF CDS blocks share nt 13468, giving a single in-frame
+  21288 nt = 7096 codon founder slice. Gene-sliced founders are now emitted
+  natively by the pipeline, superseding the post-hoc `slice_spike_founders.sh`
+  step ([#97](https://github.com/matsengrp/mat-pcp/issues/97)).
+
+- **Delta-fitness columns renamed in `aamut_fitness/all_aamut_fitness.csv`**
+  ([#89](https://github.com/matsengrp/mat-pcp/issues/89)): `naive_delta_fitness`
+  -> **`delta_fitness_pseudo`** (the primary per-mutation signal) and
+  `delta_fitness` -> **`delta_fitness_bayesian`** (inverse-variance-weighted
+  estimate). Pure rename applied only at the aggregate write boundary; values
+  are unchanged and per-clade `{clade}_aamut_fitness.csv` files retain the
+  internal names.
+
+- **Consolidated production config**
+  ([#113](https://github.com/matsengrp/mat-pcp/issues/113)): the four per-tree
+  production configs are merged into a single four-tree `config/config.yaml`.
+  `min_clade_size` now defaults to `0` for every tree; the `public_2022-06-01`
+  tree was previously `10000`, which biased its GLM rates
+  ([#81](https://github.com/matsengrp/mat-pcp/issues/81)) — its v6 rate outputs
+  therefore differ from v5. Removed the `masking_gene` and `clade_synonyms`
+  config keys and the soft `min_clade_size` Snakefile guardrail.
+
+- **`get_problematic_sites` uses exact gene-membership matching**
+  ([#114](https://github.com/matsengrp/mat-pcp/issues/114)): compound `gene`
+  cells (e.g. `S;ORF3a`) are split on `;` and matched exactly, so a gene symbol
+  can no longer bleed into a longer one (e.g. `ORF1a` into `ORF1ab`) once fanned
+  over `pcp_genes`. Latent-correctness fix; no shipped config had colliding
+  symbols, so the S mask is byte-identical (17 sites).
+
+- **Internal cleanups** (no output-schema impact): consolidated the by-path
+  `load_workflow_module` helper into a single `workflow/modules/workflow_loader.py`
+  ([#111](https://github.com/matsengrp/mat-pcp/issues/111)); removed the orphan
+  `validate_pcp_vs_counts.py` script and a dead `ref_fasta` rule input
+  ([#94](https://github.com/matsengrp/mat-pcp/issues/94)); `validate_test.py`'s
+  default output dir is VERSION-aware
+  ([#88](https://github.com/matsengrp/mat-pcp/issues/88)).
+
+- **Spike outputs are byte-identical to v5** for every Spike-specific artifact
+  (PCPs, gene-sliced founders, codon mask, DASM-ready PCPs) apart from the delta
+  column renames above and the version dir name. Regression anchors held: 19A
+  Spike founder md5 `b948f2a1f20edbce64cfff1dc540c119`, S DASM-ready aggregate
+  md5 `5e538bd088e676b485a11a04745221e9`, 17-site S codon mask.
+
 ### v5
 
 **Run multiple trees from one config** — tracks issue
