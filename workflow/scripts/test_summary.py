@@ -212,8 +212,14 @@ def summarize_aamut_fitness(aamut_fitness_dir):
         summary['expected_count_sum'] = float(df['expected_count'].sum())
     if 'actual_count' in df.columns:
         summary['actual_count_sum'] = float(df['actual_count'].sum())
-    if 'delta_fitness' in df.columns:
-        summary['delta_fitness_sum'] = float(df['delta_fitness'].sum())
+    # Columns renamed at the aggregate write boundary (#89): the primary
+    # pseudocount signal (delta_fitness_pseudo) and the Bayesian estimate
+    # (delta_fitness_bayesian). Both are GLM-derived -> loose tolerance in
+    # validate_test.py.
+    if 'delta_fitness_pseudo' in df.columns:
+        summary['delta_fitness_pseudo_sum'] = float(df['delta_fitness_pseudo'].sum())
+    if 'delta_fitness_bayesian' in df.columns:
+        summary['delta_fitness_bayesian_sum'] = float(df['delta_fitness_bayesian'].sum())
 
     # Add checksum for the aggregated file
     summary['checksum'] = hashlib.md5(open(all_fitness_file, 'rb').read()).hexdigest()

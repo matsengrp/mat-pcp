@@ -106,6 +106,19 @@ else:
     else:
         aggregated = all_data
 
+# Rename the two delta-fitness columns at the final write boundary only (#89).
+# All computation above uses the internal names (``naive_delta_fitness``,
+# ``delta_fitness``); only the aggregate output CSV -- the downstream contract
+# for the dasm2 dashboard -- carries the self-documenting names. Applied here so
+# both the no-data and populated paths emit the same schema. Per-clade files and
+# all internal code keep the original names (the aggregator re-reads them).
+aggregated = aggregated.rename(
+    columns={
+        "naive_delta_fitness": "delta_fitness_pseudo",
+        "delta_fitness": "delta_fitness_bayesian",
+    }
+)
+
 aggregated.to_csv(output_csv, index=False)
 
 log(f"Aggregated {len(aggregated)} unique amino acid mutations")
