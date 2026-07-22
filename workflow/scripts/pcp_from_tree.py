@@ -36,6 +36,7 @@ def load_workflow_module(module_name):
 
 
 sequences = load_workflow_module("sequences")
+gtf_utils = load_workflow_module("gtf")
 
 # Get inputs from snakemake
 tree_path = snakemake.input.tree
@@ -46,8 +47,12 @@ output_path = snakemake.output.pcps
 filtered_branches_path = snakemake.output.filtered_branches
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
+# The gene to slice to comes from the ``{gene}`` wildcard; its CDS blocks are
+# derived from the reference GTF (ORF1ab -> two frameshift blocks, everything
+# else a single block).
+gene = snakemake.wildcards.gene
+
 # Get params
-gene_region = snakemake.params.get("gene_region", None)
 max_nt_mutations = snakemake.params.get("max_nt_mutations", 4)
 max_reversions = snakemake.params.get("max_reversions_to_ref", 1)
 max_reversions_to_founder = snakemake.params.get("max_reversions_to_clade_founder", 1)
@@ -216,18 +221,18 @@ class PCPHelper:
                 log(f"  {i}/{self.n_int_nodes} nodes processed in {elapsed:.1f}s")
         return n_passed, all_pcps
 
-    def pcps_to_df(self, pcps, gene_slice_boundaries=None):
-        """Convert PCP list to DataFrame with optional region slicing.
+    def pcps_to_df(self, pcps, cds_blocks=None):
+        """Convert PCP list to DataFrame with optional CDS slicing.
 
-        ``gene_slice_boundaries`` is a ``(start, end)`` tuple sourced from
-        ``pcp_gene_region`` in the pipeline config. Both coordinates are
-        **1-based and inclusive** on both ends, relative to the Wuhan-Hu-1
-        reference (NC_045512.2). For Spike, ``(21563, 25381)`` excludes the
-        trailing stop codon by convention and yields 3819 nt (1273 codons).
+        ``cds_blocks`` is a list of ``(start, end)`` tuples (1-based, inclusive
+        on both ends, relative to the Wuhan-Hu-1 reference NC_045512.2) for the
+        gene being extracted, derived from the reference GTF. Single-block genes
+        pass one tuple (e.g. Spike ``[(21563, 25381)]`` = 3819 nt / 1273 codons,
+        stop codon excluded); ORF1ab passes its two frameshift blocks.
 
         Slicing is delegated to ``sequences.slice_cds`` (see
-        ``workflow/modules/sequences.py``), which converts the 1-based
-        inclusive range to the equivalent half-open Python slice.
+        ``workflow/modules/sequences.py``), which concatenates the blocks into a
+        single in-frame coding sequence.
         """
 
         def mut_dict(muts):
@@ -237,10 +242,9 @@ class PCPHelper:
             return apply_muts(seq, mut_dict(muts))
 
         def slice_seq(seq):
-            if gene_slice_boundaries is None:
+            if cds_blocks is None:
                 return seq
-            # 1-based inclusive -> Python half-open slice, via the shared helper.
-            return sequences.slice_cds(seq, [gene_slice_boundaries])
+            return sequences.slice_cds(seq, cds_blocks)
 
         cols = ["parent_name", "child_name", "parent", "child", "branch_length"]
         rows = (
@@ -260,17 +264,17 @@ class PCPHelper:
         self,
         output_path,
         filtered_branches_path,
-        gene_slice_boundaries=None,
+        cds_blocks=None,
     ):
         """Extract, filter, and write PCPs + filtered-branch IDs."""
         log("Extracting PCPs from tree...")
         n_branches_passed, pcps = self.count_mutations_on_tree()
         log(f"Found {n_branches_passed} branches passing QC filters")
 
-        if gene_slice_boundaries:
-            log(f"Slicing sequences to region {gene_slice_boundaries}")
+        if cds_blocks:
+            log(f"Slicing sequences to CDS blocks {cds_blocks}")
 
-        pcp_df = self.pcps_to_df(pcps, gene_slice_boundaries=gene_slice_boundaries)
+        pcp_df = self.pcps_to_df(pcps, cds_blocks=cds_blocks)
         log(f"PCPs after slicing: {len(pcp_df)}")
 
         # Drop PCPs whose parent and child are identical within the (possibly
@@ -296,11 +300,9 @@ def main():
     log("PCP Extraction")
     log("=" * 60)
 
-    # Convert gene_region dict to tuple if provided
-    gene_slice = None
-    if gene_region is not None:
-        gene_slice = (gene_region["start"], gene_region["end"])
-        log(f"Gene region: {gene_slice[0]}-{gene_slice[1]}")
+    # Derive the CDS blocks for this gene from the reference GTF.
+    cds_blocks = gtf_utils.cds_blocks_for_gene(gtf_path, gene)
+    log(f"Gene {gene}: CDS blocks {cds_blocks}")
 
     log(f"Max mutations: {max_nt_mutations}")
     log(f"Max reversions to ref: {max_reversions}")
@@ -325,7 +327,7 @@ def main():
     helper.make_and_write_pcps(
         output_path,
         filtered_branches_path,
-        gene_slice_boundaries=gene_slice,
+        cds_blocks=cds_blocks,
     )
 
     log("=" * 60)

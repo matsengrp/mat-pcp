@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Generate the founder FASTA for each clade.
 
-When ``pcp_gene_region`` is set in the pipeline config, a second FASTA file is
-also written containing only the gene-region slice of the founder sequence
-(e.g. Spike: 21563-25381, 1-based inclusive). The gene-sliced founder is
-needed for training ParentIndependent DASM models.
+For every gene in the ``pcp_genes`` config list, a gene-sliced founder FASTA is
+also written at ``clade_founders/<gene>/<clade>.fa``, containing just that
+gene's coding sequence sliced from the reference GTF's CDS blocks (so the stop
+codon is excluded and ORF1ab's ribosomal frameshift is reconstructed into a
+single in-frame CDS). The gene-sliced founders are needed for training
+ParentIndependent DASM models.
 """
 
 import json
@@ -27,6 +29,7 @@ def load_workflow_module(module_name):
 
 
 sequences = load_workflow_module("sequences")
+gtf_utils = load_workflow_module("gtf")
 
 
 def write_fasta(filepath, header, seq, line_width=80):
@@ -46,17 +49,17 @@ def write_fasta(filepath, header, seq, line_width=80):
 neher_json_path = snakemake.input.neher_json
 roemer_json_path = snakemake.input.roemer_json
 ref_fasta = snakemake.input.ref_fasta
+gtf_path = snakemake.input.gtf
 roemer_nextstrain_to_pango = snakemake.params.roemer_nextstrain_to_pango
-pcp_gene_region = getattr(snakemake.params, "pcp_gene_region", None)
+# One gene-sliced founder FASTA is emitted per configured protein. ``pcp_genes``
+# and the ``gene_fasta`` output list are built from the same config list in the
+# same order (see ``_gene_sliced_founder_outputs`` in the Snakefile), so they
+# zip position-for-position. Coordinates come from the GTF's CDS blocks, so
+# ORF1ab's frameshift is reconstructed into a single in-frame CDS.
+pcp_genes = list(snakemake.params.pcp_genes)
 clade = snakemake.wildcards.clade
 output_fasta = snakemake.output.fasta
-# ``gene_fasta`` is an empty list in ``snakemake.output`` when
-# ``pcp_gene_region`` is unset (see ``_gene_sliced_founder_outputs`` in the
-# Snakefile). The attribute itself is always present because the rule
-# declares it; we coerce the empty-list case to ``None`` so the
-# ``if output_gene_fasta`` check below is the single guard point.
-_gene_fasta_out = getattr(snakemake.output, "gene_fasta", None)
-output_gene_fasta = _gene_fasta_out[0] if _gene_fasta_out else None
+gene_fastas = list(getattr(snakemake.output, "gene_fasta", []) or [])
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -194,26 +197,26 @@ log(f"Founder differs from reference at {n_diffs} positions")
 write_fasta(output_fasta, clade, founder_seq)
 log(f"Wrote founder FASTA to {output_fasta}")
 
-# Optional gene-sliced founder FASTA
-# ``pcp_gene_region`` boundaries are 1-based inclusive (start/end both included)
-# relative to the Wuhan-Hu-1 (NC_045512.2) reference. For Spike, end=25381
-# excludes the trailing stop codon by convention (positions 21563-25381 ->
-# 3819 nt = 1273 codons). Slicing is delegated to ``sequences.slice_cds``
-# (see ``workflow/modules/sequences.py``), which yields the same inclusive nt range.
-if output_gene_fasta and pcp_gene_region:
-    gene_name = pcp_gene_region.get("gene") or "gene"
-    start = pcp_gene_region["start"]
-    end = pcp_gene_region["end"]
-    gene_seq = sequences.slice_cds(founder_seq, [(start, end)])
-    expected_len = end - start + 1
+# Gene-sliced founder FASTA, one per configured protein.
+# CDS-block coordinates are 1-based inclusive relative to the Wuhan-Hu-1
+# (NC_045512.2) reference and come from the GTF (so the stop codon is excluded
+# and ORF1ab's frameshift is reconstructed). Slicing is delegated to
+# ``sequences.slice_cds``, which byte-aligns with the PCP parent/child slices.
+assert len(pcp_genes) == len(gene_fastas), (
+    f"pcp_genes ({len(pcp_genes)}) and gene_fasta outputs ({len(gene_fastas)}) must match in length/order"
+)
+for gene, gene_fasta_path in zip(pcp_genes, gene_fastas):
+    cds_blocks = gtf_utils.cds_blocks_for_gene(gtf_path, gene)
+    gene_seq = sequences.slice_cds(founder_seq, cds_blocks)
+    expected_len = sum(end - start + 1 for start, end in cds_blocks)
     assert len(gene_seq) == expected_len, (
         f"Gene slice length {len(gene_seq)} != expected {expected_len} "
-        f"for {gene_name} {start}-{end}"
+        f"for {gene} {cds_blocks}"
     )
-    write_fasta(output_gene_fasta, clade, gene_seq)
+    write_fasta(gene_fasta_path, clade, gene_seq)
     log(
-        f"Wrote gene-sliced ({gene_name} {start}-{end}, {len(gene_seq)} nt) "
-        f"founder FASTA to {output_gene_fasta}"
+        f"Wrote gene-sliced ({gene} {cds_blocks}, {len(gene_seq)} nt) "
+        f"founder FASTA to {gene_fasta_path}"
     )
 
 log("Done!")

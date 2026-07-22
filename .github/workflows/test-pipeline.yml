@@ -363,7 +363,7 @@ jobs:
         print(f'Checking {len(adequate)} clade PCP files...')
 
         for clade in adequate:
-            pcp_file = f'${OUTPUT_DIR}/pcps/{clade}_pcps.csv'
+            pcp_file = f'${OUTPUT_DIR}/pcps/S/{clade}_pcps.csv'
             if os.path.exists(pcp_file):
                 pcp_df = pd.read_csv(pcp_file)
                 print(f'  {clade}: {len(pcp_df)} PCPs')
@@ -378,11 +378,11 @@ jobs:
 
     - name: Verify aggregated PCP file
       run: |
-        test -f $OUTPUT_DIR/pcps/all_pcps.csv
+        test -f $OUTPUT_DIR/pcps/S/all_pcps.csv
         pixi run python -c "
         import pandas as pd
 
-        df = pd.read_csv('${OUTPUT_DIR}/pcps/all_pcps.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/pcps/S/all_pcps.csv')
         print(f'Total aggregated PCPs: {len(df)}')
         print(f'Clades: {sorted(df.clade.unique())}')
         print(f'PCPs per clade:')
@@ -404,7 +404,7 @@ jobs:
         pixi run python -c "
         import pandas as pd
 
-        df = pd.read_csv('${OUTPUT_DIR}/pcps/all_pcps.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/pcps/S/all_pcps.csv')
 
         # Check sequence lengths are consistent
         parent_lens = df['parent'].str.len()

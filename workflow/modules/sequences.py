@@ -37,4 +37,11 @@ def slice_cds(seq, cds_blocks):
     >>> slice_cds("ABCDEFGH", [(1, 2), (4, 5), (7, 8)])  # three blocks
     'ABDEGH'
     """
+    if not cds_blocks:
+        raise ValueError("cds_blocks must be non-empty")
+    if any(end < start for start, end in cds_blocks):
+        raise ValueError(f"each CDS block must have end >= start: {cds_blocks}")
+    starts = [start for start, _ in cds_blocks]
+    if starts != sorted(starts):
+        raise ValueError(f"cds_blocks must be in ascending genome order: {cds_blocks}")
     return "".join(slice_1based_inclusive(seq, start, end) for start, end in cds_blocks)

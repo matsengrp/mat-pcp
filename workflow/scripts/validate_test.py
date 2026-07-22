@@ -718,6 +718,48 @@ def validate_spike_mask_all_clades(output_dir, masking_gene="S"):
     return differences, summary
 
 
+_STOP_CODONS = {"TAA", "TAG", "TGA"}
+
+
+def validate_orf1ab_founder(output_dir):
+    """The ORF1ab gene-sliced founder must be a valid in-frame CDS.
+
+    Confirms the two-block frameshift reconstruction (the GTF's ORF1ab CDS
+    blocks share nt 13468, read twice): the 19A ORF1ab founder slice is 21288
+    nt (7096 codons) and translates with no internal stop codon. Skips silently
+    when ORF1ab is not among ``pcp_genes`` (so Spike-only configs still pass).
+
+    Translation uses a hand-rolled codon table (stdlib only) since this script
+    runs in an environment without biopython.
+    """
+    path = os.path.join(output_dir, "clade_founders", "ORF1ab", "19A.fa")
+    if not os.path.exists(path):
+        return [], None
+
+    with open(path) as f:
+        seq = "".join(line.strip() for line in f if not line.startswith(">")).upper()
+
+    differences = []
+    if len(seq) % 3 != 0:
+        differences.append(f"ORF1ab founder length {len(seq)} not divisible by 3")
+    if len(seq) != 21288:
+        differences.append(f"ORF1ab founder length {len(seq)} != expected 21288")
+    stops = [
+        (i // 3) + 1
+        for i in range(0, len(seq) - len(seq) % 3, 3)
+        if seq[i : i + 3] in _STOP_CODONS
+    ]
+    if stops:
+        differences.append(
+            f"ORF1ab founder translation has internal stop codon(s) at codon {stops[:5]}"
+        )
+
+    summary = None if differences else (
+        f"ORF1ab founder in-frame: {len(seq)} nt = {len(seq) // 3} codons, no internal stop"
+    )
+    return differences, summary
+
+
 def default_output_dir():
     """Best-guess test output dir when none is given.
 
@@ -783,7 +825,10 @@ def main():
     mut_mask_diffs, mut_mask_summary = validate_usher_mutation_masking(output_dir)
     reversion_diffs, reversion_summary = validate_reversion_masking(output_dir)
     spike_mask_diffs, spike_mask_summary = validate_spike_mask_all_clades(output_dir)
-    differences += site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
+    orf1ab_diffs, orf1ab_summary = validate_orf1ab_founder(output_dir)
+    differences += (
+        site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs + orf1ab_diffs
+    )
 
     if differences:
         print("VALIDATION FAILED!")
@@ -813,6 +858,8 @@ def main():
             print(f"  - Founder->reference reversions: {reversion_summary}")
         if spike_mask_summary:
             print(f"  - Spike codon mask (all-clades): {spike_mask_summary}")
+        if orf1ab_summary:
+            print(f"  - {orf1ab_summary}")
         sys.exit(0)
 
 
