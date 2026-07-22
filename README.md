@@ -113,7 +113,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | 6. Rate Estimation | Estimate neutral mutation rates via GLM | `glm/master_table.csv`, `rates_table.csv` |
 | 7a. NT Fitness | Compute nucleotide-level fitness estimates | `fitness/ntmut_fitness_aggregated.csv` |
 | 7b. AA Fitness | Compute amino acid-level fitness estimates | `aamut_fitness/all_aamut_fitness.csv` |
-| 8. Validation | Cross-validate PCP vs matUtils mutation counts | `validation/pcp_vs_counts_report.txt` |
+| 8. Validation | Cross-validate PCP vs matUtils mutation counts (per protein) | `validation/<gene>/pcp_vs_counts_report.txt` |
 
 ## Primary Outputs
 
@@ -137,7 +137,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `fitness/expected_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
 | `aamut_fitness/all_aamut_fitness.csv` | Amino acid-level fitness estimates |
-| `validation/pcp_vs_counts_report.txt` | PCP vs counts validation report |
+| `validation/<gene>/pcp_vs_counts_report.txt` | PCP vs counts validation report (one per protein) |
 
 ## Fitness Estimation Methodology
 
@@ -510,9 +510,10 @@ results/
 │   ├── {clade}_aamut_fitness.csv  # Per-clade amino acid fitness
 │   └── all_aamut_fitness.csv      # Aggregated AA fitness
 ├── validation/
-│   ├── pcp_derived_counts.csv     # Mutation counts from PCPs
-│   ├── pcp_vs_counts_report.txt   # Validation report
-│   └── pcp_vs_counts_discrepancies.csv  # Any discrepancies found
+│   └── {gene}/                    # One subdir per configured protein
+│       ├── pcp_aa_counts.csv      # AA mutation counts from that gene's PCPs
+│       ├── pcp_vs_counts_report.txt   # Validation report
+│       └── pcp_vs_counts_discrepancies.csv  # Any discrepancies found
 ├── benchmarks/                    # Snakemake benchmark files
 └── log/                           # Processing logs per rule
 ```

@@ -915,11 +915,11 @@ jobs:
 
     - name: Verify PCP-derived AA counts
       run: |
-        test -f $OUTPUT_DIR/validation/pcp_aa_counts.csv
+        test -f $OUTPUT_DIR/validation/S/pcp_aa_counts.csv
         pixi run python -c "
         import pandas as pd
 
-        pcp_counts = pd.read_csv('${OUTPUT_DIR}/validation/pcp_aa_counts.csv')
+        pcp_counts = pd.read_csv('${OUTPUT_DIR}/validation/S/pcp_aa_counts.csv')
         print(f'PCP-derived AA counts: {len(pcp_counts)} entries')
 
         if len(pcp_counts) > 0:
@@ -935,9 +935,9 @@ jobs:
 
     - name: Verify validation report
       run: |
-        test -f $OUTPUT_DIR/validation/pcp_vs_counts_report.txt
-        test -f $OUTPUT_DIR/validation/pcp_vs_counts_discrepancies.csv
-        cat $OUTPUT_DIR/validation/pcp_vs_counts_report.txt
+        test -f $OUTPUT_DIR/validation/S/pcp_vs_counts_report.txt
+        test -f $OUTPUT_DIR/validation/S/pcp_vs_counts_discrepancies.csv
+        cat $OUTPUT_DIR/validation/S/pcp_vs_counts_report.txt
 
     - name: Check validation results
       run: |
@@ -945,7 +945,7 @@ jobs:
         import pandas as pd
 
         # Load discrepancies
-        disc = pd.read_csv('${OUTPUT_DIR}/validation/pcp_vs_counts_discrepancies.csv')
+        disc = pd.read_csv('${OUTPUT_DIR}/validation/S/pcp_vs_counts_discrepancies.csv')
         print(f'Validation discrepancies: {len(disc)}')
 
         # Check if validation passed

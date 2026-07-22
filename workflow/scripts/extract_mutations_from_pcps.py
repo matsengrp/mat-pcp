@@ -13,7 +13,7 @@ from Bio.Seq import Seq
 pcps_csv = snakemake.input.pcps
 output_aa_csv = snakemake.output.aa_counts
 
-pcp_gene_region = snakemake.params.pcp_gene_region
+gene_name = snakemake.wildcards.gene
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -32,16 +32,7 @@ pcps = pd.read_csv(pcps_csv)
 
 log(f"Loaded {len(pcps)} PCPs")
 
-# Get gene info from pcp_gene_region
-gene_name = None
-if pcp_gene_region:
-    gene_name = pcp_gene_region.get("gene", "S")
-    offset = pcp_gene_region.get("start", 1)
-    log(f"PCP gene region: {pcp_gene_region}")
-    log(f"Gene name: {gene_name}")
-else:
-    offset = 1
-    log("No PCP gene region specified")
+log(f"Gene: {gene_name}")
 
 
 def translate_codon(codon):

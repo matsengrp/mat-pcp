@@ -272,7 +272,6 @@ results_files = [
     "rates_table.csv",
     "fitness/ntmut_fitness_aggregated.csv",
     "aamut_fitness/all_aamut_fitness.csv",
-    "validation/pcp_vs_counts_report.txt",
 ]
 
 rule all:
@@ -312,6 +311,12 @@ rule all:
         ),
         expand(
             os.path.join(OUTDIR, "pcps/{gene}/dasm_ready_per_clade.done"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
+        ),
+        # Per-gene PCP-vs-counts validation reports (tree x gene).
+        expand(
+            os.path.join(OUTDIR, "validation/{gene}/pcp_vs_counts_report.txt"),
             tree=TREE_LABELS,
             gene=PCP_GENES,
         )
@@ -1304,19 +1309,18 @@ rule aggregate_aamut_fitness:
 # =============================================================================
 
 rule extract_mutations_from_pcps:
-    """Extract AA mutation counts from PCPs by translating sequences."""
+    """Extract AA mutation counts from one protein's PCPs by translating.
+
+    Fanned over ``pcp_genes``: translates each protein's gene-sliced PCP
+    sequences (``pcps/{gene}/all_pcps.csv``) into per-codon AA mutations.
+    """
     input:
-        pcps=os.path.join(OUTDIR, "pcps/S/all_pcps.csv"),
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv"),
         ref_fasta=rules.get_ref_fasta.output.ref_fasta
     output:
-        aa_counts=os.path.join(OUTDIR, "validation/pcp_aa_counts.csv")
-    params:
-        # Validation is pinned to Spike until #109 generalizes it over pcp_genes.
-        pcp_gene_region={"gene": "S"},
-        max_nt_mutations=config["max_nt_mutations"],
-        max_reversions_to_ref=config["max_reversions_to_ref"]
+        aa_counts=os.path.join(OUTDIR, "validation/{gene}/pcp_aa_counts.csv")
     log:
-        os.path.join(OUTDIR, "log/extract_mutations_from_pcps.log")
+        os.path.join(OUTDIR, "log/extract_mutations_from_pcps_{gene}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1324,7 +1328,12 @@ rule extract_mutations_from_pcps:
 
 
 rule validate_pcp_vs_counts:
-    """Validate PCP-derived AA counts match aamut_fitness actual_count."""
+    """Validate one protein's PCP-derived AA counts match aamut_fitness actual_count.
+
+    Fanned over ``pcp_genes``. ``extract_mutations_from_pcps`` carries the
+    ``{gene}`` wildcard; the aamut_fitness inputs hold every gene and are
+    filtered to ``{gene}`` in the script.
+    """
     input:
         pcp_counts=rules.extract_mutations_from_pcps.output.aa_counts,
         aamut_fitness_files=lambda wc: per_clade_inputs(
@@ -1332,13 +1341,10 @@ rule validate_pcp_vs_counts:
         ),
         all_aamut_fitness=rules.aggregate_aamut_fitness.output.csv
     output:
-        report=os.path.join(OUTDIR, "validation/pcp_vs_counts_report.txt"),
-        discrepancies=os.path.join(OUTDIR, "validation/pcp_vs_counts_discrepancies.csv")
-    params:
-        # Validation is pinned to Spike until #109 generalizes it over pcp_genes.
-        pcp_gene_name="S"
+        report=os.path.join(OUTDIR, "validation/{gene}/pcp_vs_counts_report.txt"),
+        discrepancies=os.path.join(OUTDIR, "validation/{gene}/pcp_vs_counts_discrepancies.csv")
     log:
-        os.path.join(OUTDIR, "log/validate_pcp_vs_counts.log")
+        os.path.join(OUTDIR, "log/validate_pcp_vs_counts_{gene}.log")
     conda:
         "envs/default.yml"
     script:
