@@ -170,6 +170,7 @@ REQUIRED_CONFIG_PARAMS = [
     "site_include_range",
     "qc_filter_options",
     "min_clade_size",
+    "pcp_genes",
 ]
 
 # Parameters required for full pipeline (may not be present in test mode)
@@ -282,7 +283,12 @@ def get_final_tree():
 # Snakemake invocation fans PCP extraction over this list; coordinates come from
 # the reference GTF (see ``cds_blocks_for_gene``). Output paths use the gene
 # symbol verbatim (``pcps/S/``, ``clade_founders/S/``).
-PCP_GENES = config.get("pcp_genes", [])
+PCP_GENES = config["pcp_genes"]
+if not PCP_GENES:
+    raise ValueError(
+        "config 'pcp_genes' must be a non-empty list of gene symbols "
+        "(e.g. [S, ORF1ab, E]); got an empty list."
+    )
 
 # Terminal output files for the unified pipeline
 # (intermediate files are created automatically as dependencies)
