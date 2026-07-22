@@ -255,9 +255,11 @@ jobs:
         # full pipeline run. The two trees share identical global config and
         # the same input data, differing only in max_leaf_date, so a
         # difference in clade counts can only come from per-tree resolution.
+        # Derive the version suffix from VERSION so this step survives bumps.
+        V=$(cat VERSION)
         pixi run snakemake \
-          results/test_data_v5/mat/clade_counts.csv \
-          results/test_data_early_v5/mat/clade_counts.csv \
+          results/test_data_${V}/mat/clade_counts.csv \
+          results/test_data_early_${V}/mat/clade_counts.csv \
           -j $(nproc) --use-conda --conda-frontend conda \
           --configfile config/config_test_data_multitree.yaml
         pixi run python -c "
@@ -265,8 +267,8 @@ jobs:
         def adequate(p):
             df = pd.read_csv(p)
             return int(df['adequate_sample_counts'].sum()), len(df)
-        a_ok, a_tot = adequate('results/test_data_v5/mat/clade_counts.csv')
-        e_ok, e_tot = adequate('results/test_data_early_v5/mat/clade_counts.csv')
+        a_ok, a_tot = adequate('results/test_data_${V}/mat/clade_counts.csv')
+        e_ok, e_tot = adequate('results/test_data_early_${V}/mat/clade_counts.csv')
         print(f'test_data (max_leaf_date 2022-06-01): {a_tot} clades, {a_ok} adequate')
         print(f'test_data_early (max_leaf_date 2021-06-01): {e_tot} clades, {e_ok} adequate')
         # Independence: the earlier cutoff must yield FEWER clades. Equal counts
