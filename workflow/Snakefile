@@ -265,16 +265,14 @@ if not PCP_GENES:
 # Terminal output files for the unified pipeline
 # (intermediate files are created automatically as dependencies)
 #
-# Tree-only targets (fanned over ``tree`` in ``rule all``). The DASM-ready
-# PCP targets are pinned to Spike (``pcps/S/``) until #108 generalizes them.
+# Tree-only targets (fanned over ``tree`` in ``rule all``). Per-gene targets
+# (PCP curation, founder slices, codon masks, DASM-ready PCPs) are fanned over
+# ``tree x pcp_genes`` in ``rule all`` instead.
 results_files = [
     "rates_table.csv",
     "fitness/ntmut_fitness_aggregated.csv",
     "aamut_fitness/all_aamut_fitness.csv",
     "validation/pcp_vs_counts_report.txt",
-    # DASM-ready PCPs (#80): aggregate file + sentinel covering per-clade fan-out.
-    "pcps/S/all_pcps_dasm_ready.csv",
-    "pcps/S/dasm_ready_per_clade.done",
 ]
 
 rule all:
@@ -303,6 +301,17 @@ rule all:
         # Per-gene DASM codon masks (tree x gene).
         expand(
             os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
+        ),
+        # Per-gene DASM-ready PCPs (tree x gene): aggregate file + per-clade sentinel.
+        expand(
+            os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
+        ),
+        expand(
+            os.path.join(OUTDIR, "pcps/{gene}/dasm_ready_per_clade.done"),
             tree=TREE_LABELS,
             gene=PCP_GENES,
         )
@@ -731,23 +740,23 @@ rule aggregate_filtered_branches:
 # ``data-central/scripts/filter_viral_pcps.sh`` step.
 
 rule curate_pcps_for_dasm:
-    """Apply DASM-ready filters and train/val split to a single clade's PCPs.
+    """Apply DASM-ready filters and train/val split to one clade's gene PCPs.
 
-    Pinned to Spike (``pcps/S/``) and the Spike codon mask until #108
-    generalizes DASM-ready filtering to every configured protein.
+    Fanned over ``pcp_genes`` x clades: each protein's PCPs are filtered
+    against that protein's own codon mask (``{gene}_codon_sites_to_mask.txt``).
     """
     input:
-        pcps=os.path.join(OUTDIR, "pcps/S/{clade}_pcps.csv"),
-        mask_sites=os.path.join(OUTDIR, "S_codon_sites_to_mask.txt")
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv"),
+        mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
     output:
-        dasm_ready=os.path.join(OUTDIR, "pcps/S/{clade}_pcps_dasm_ready.csv"),
-        report=os.path.join(OUTDIR, "pcps/S/{clade}_dasm_filter_report.txt"),
-        stats=os.path.join(OUTDIR, "pcps/S/{clade}_dasm_filter_stats.json")
+        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps_dasm_ready.csv"),
+        report=os.path.join(OUTDIR, "pcps/{gene}/{clade}_dasm_filter_report.txt"),
+        stats=os.path.join(OUTDIR, "pcps/{gene}/{clade}_dasm_filter_stats.json")
     params:
         seed=1729,
         val_fraction=0.10
     log:
-        os.path.join(OUTDIR, "log/curate_pcps_for_dasm_{clade}.log")
+        os.path.join(OUTDIR, "log/curate_pcps_for_dasm_{gene}_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -761,17 +770,17 @@ rule curate_all_pcps_for_dasm:
     convention; this matches ``filter_viral_pcps.sh``'s guardrail.
     """
     input:
-        pcps=os.path.join(OUTDIR, "pcps/S/all_pcps.csv"),
-        mask_sites=os.path.join(OUTDIR, "S_codon_sites_to_mask.txt")
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv"),
+        mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
     output:
-        dasm_ready=os.path.join(OUTDIR, "pcps/S/all_pcps_dasm_ready.csv"),
-        report=os.path.join(OUTDIR, "pcps/S/all_dasm_filter_report.txt"),
-        stats=os.path.join(OUTDIR, "pcps/S/all_dasm_filter_stats.json")
+        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv"),
+        report=os.path.join(OUTDIR, "pcps/{gene}/all_dasm_filter_report.txt"),
+        stats=os.path.join(OUTDIR, "pcps/{gene}/all_dasm_filter_stats.json")
     params:
         seed=42,
         val_fraction=0.10
     log:
-        os.path.join(OUTDIR, "log/curate_all_pcps_for_dasm.log")
+        os.path.join(OUTDIR, "log/curate_all_pcps_for_dasm_{gene}.log")
     conda:
         "envs/default.yml"
     script:
@@ -779,24 +788,24 @@ rule curate_all_pcps_for_dasm:
 
 
 def _dasm_ready_per_clade_outputs(wildcards):
-    """Per-clade dasm-ready outputs (Spike) - fans out over clades_w_adequate_counts."""
+    """One gene's per-clade dasm-ready outputs - fans over clades_w_adequate_counts."""
     return expand(
-        os.path.join(OUTDIR, "pcps/S/{clade}_pcps_dasm_ready.csv"),
+        os.path.join(OUTDIR, "pcps", wildcards.gene, "{clade}_pcps_dasm_ready.csv"),
         tree=wildcards.tree,
         clade=clades_w_adequate_counts(wildcards),
     )
 
 
 rule dasm_ready_pcps_all_clades:
-    """Collector target for the per-clade DASM-ready outputs.
+    """Collector target for one gene's per-clade DASM-ready outputs.
 
-    Aggregates the per-clade ``*_pcps_dasm_ready.csv`` files into a single
-    "everything is built" signal so ``rule all`` can depend on one path.
+    Aggregates a gene's per-clade ``*_pcps_dasm_ready.csv`` files into a single
+    "everything is built" signal so ``rule all`` can depend on one path per gene.
     """
     input:
         _dasm_ready_per_clade_outputs
     output:
-        sentinel=os.path.join(OUTDIR, "pcps/S/dasm_ready_per_clade.done")
+        sentinel=os.path.join(OUTDIR, "pcps/{gene}/dasm_ready_per_clade.done")
     shell:
         "touch {output.sentinel}"
 
