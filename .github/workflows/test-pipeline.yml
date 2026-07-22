@@ -761,11 +761,11 @@ jobs:
 
     - name: Verify problematic sites
       run: |
-        test -f $OUTPUT_DIR/spike_codon_sites_to_mask.txt
+        test -f $OUTPUT_DIR/S_codon_sites_to_mask.txt
         pixi run python -c "
-        with open('${OUTPUT_DIR}/spike_codon_sites_to_mask.txt') as f:
+        with open('${OUTPUT_DIR}/S_codon_sites_to_mask.txt') as f:
             sites = [line.strip() for line in f if line.strip()]
-        print(f'Problematic spike codon sites: {len(sites)}')
+        print(f'Problematic Spike codon sites: {len(sites)}')
         if sites:
             print(f'First 10 sites: {sites[:10]}')
         "
