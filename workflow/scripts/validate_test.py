@@ -701,7 +701,11 @@ def validate_spike_mask_all_clades(output_dir, masking_gene="S"):
 
     df = pd.read_csv(counts_path)
     site_all_excluded = (df["exclude"] == True).groupby(df["nt_site"]).transform("all")  # noqa: E712
-    in_gene = df["gene"].astype(str).str.contains(masking_gene, na=False)
+    # Exact gene membership (mirrors get_problematic_sites.py, #114): split
+    # compound cells (e.g. "S;ORF3a") on ";" so the mask can't bleed a gene
+    # symbol into a longer one once this validator is used for other genes.
+    gene_members = df["gene"].astype(str).str.split(";")
+    in_gene = gene_members.apply(lambda members: masking_gene in [g.strip() for g in members])
     expected = _parse_codon_sites(df[site_all_excluded & in_gene]["codon_site"])
 
     with open(mask_path) as f:
@@ -727,15 +731,22 @@ def validate_orf1ab_founder(output_dir):
 
     Confirms the two-block frameshift reconstruction (the GTF's ORF1ab CDS
     blocks share nt 13468, read twice): the 19A ORF1ab founder slice is 21288
-    nt (7096 codons) and translates with no internal stop codon. Skips silently
-    when ORF1ab is not among ``pcp_genes`` (so Spike-only configs still pass).
+    nt (7096 codons) and translates with no internal stop codon. Skips only when
+    ORF1ab is not among ``pcp_genes`` (its founder subdir is absent), so
+    Spike-only configs still pass; if the subdir exists but the file is missing
+    that is a real failure, not a silent skip.
 
     Translation uses a hand-rolled codon table (stdlib only) since this script
     runs in an environment without biopython.
     """
-    path = os.path.join(output_dir, "clade_founders", "ORF1ab", "19A.fa")
-    if not os.path.exists(path):
+    gene_dir = os.path.join(output_dir, "clade_founders", "ORF1ab")
+    if not os.path.isdir(gene_dir):
+        # ORF1ab not among pcp_genes for this run: nothing to validate.
         return [], None
+    path = os.path.join(gene_dir, "19A.fa")
+    if not os.path.exists(path):
+        return [f"ORF1ab founder expected at {path} but missing "
+                "(clade_founders/ORF1ab/ exists, so ORF1ab was configured)"], None
 
     with open(path) as f:
         seq = "".join(line.strip() for line in f if not line.startswith(">")).upper()

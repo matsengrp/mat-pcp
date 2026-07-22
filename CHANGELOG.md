@@ -30,7 +30,9 @@ hardcoded gene (Spike) to a config-driven list of proteins. Tracks EPIC
 - **`pcp_genes` list replaces the scalar `pcp_gene_region` + `masking_gene`
   config keys.** A single Snakemake invocation fans PCP extraction, gene-sliced
   founders, codon masks, DASM-ready filtering, and validation over every protein
-  in `pcp_genes` (shipped default `[S, ORF1ab, E]`; must be non-empty).
+  in `pcp_genes` (must be non-empty). Production `config/config.yaml`
+  ships `pcp_genes: [S]` to keep v5->v6 Spike outputs byte-identical; the
+  test configs exercise the multi-protein path with `[S, ORF1ab, E]`.
   Per-protein coordinates are derived from the reference GTF
   (`cds_blocks_for_gene`) rather than a hardcoded region.
 

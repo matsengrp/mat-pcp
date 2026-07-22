@@ -75,6 +75,13 @@ assert len(gene_seq) == expected_len, (
     f"Gene slice length {len(gene_seq)} != expected {expected_len} "
     f"for {gene} {cds_blocks}"
 )
+# Independent structural invariant: a coding-sequence slice must be a whole
+# number of codons. Unlike the length check above (derived from the same
+# blocks), this catches a malformed GTF whose CDS blocks aren't in-frame.
+assert len(gene_seq) % 3 == 0, (
+    f"Gene slice for {gene} is {len(gene_seq)} nt, not a whole number of "
+    f"codons (blocks {cds_blocks})"
+)
 
 write_fasta(output_fasta, clade, gene_seq)
 log(

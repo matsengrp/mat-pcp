@@ -112,11 +112,12 @@ def summarize_spike_founders(spike_founders_dir):
     canonical cross-version sentinel (see ``SPIKE_19A_SENTINEL_MD5`` in
     ``validate_test.py``).
 
-    NOTE: This helper assumes the v2 single-gene layout where the gene-sliced
-    founder directory is hardcoded to ``clade_founders/<SPIKE_FOUNDER_DIRNAME>/``.
-    When v3 introduces multi-gene slicing, this should fan out over every
-    configured ``gene_slice_outputs`` entry. See the comment block above
-    ``GENE_FOUNDER_DIRNAMES`` in ``workflow/Snakefile`` for the wider context.
+    NOTE: This test-harness helper stays intentionally Spike-pinned to the
+    ``clade_founders/<SPIKE_FOUNDER_DIRNAME>/`` directory as the byte-stable
+    regression sentinel, even though the pipeline now emits gene-sliced founders
+    for every protein in ``pcp_genes`` (``clade_founders/<gene>/``). Keeping it
+    Spike-only is deliberate (see the #94 single-gene-assumption audit); it is
+    not a TODO.
     """
     if not os.path.exists(spike_founders_dir):
         return None

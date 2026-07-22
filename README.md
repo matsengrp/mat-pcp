@@ -308,7 +308,7 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `pcp_genes` | List of protein symbols to extract PCPs and gene-sliced founders for. PCP extraction is fanned over this list; each protein's coordinates come from the reference GTF (`cds_blocks_for_gene`), so outputs land under `pcps/{gene}/` and `clade_founders/{gene}/`. ORF1ab is reconstructed as one frameshifted CDS. Must be non-empty. | `[S, ORF1ab, E]` |
+| `pcp_genes` | List of protein symbols to extract PCPs and gene-sliced founders for. PCP extraction is fanned over this list; each protein's coordinates come from the reference GTF (`cds_blocks_for_gene`), so outputs land under `pcps/{gene}/` and `clade_founders/{gene}/`. ORF1ab is reconstructed as one frameshifted CDS. Must be non-empty. Production `config.yaml` ships `[S]` (Spike-only, byte-identical to v5); the test configs use `[S, ORF1ab, E]`. | `[S]` |
 | `pcp_max_nt_mutations` | Max nucleotide mutations per branch | `4` |
 | `pcp_max_reversions_to_ref` | Max reversions to reference | `1` |
 | `pcp_max_reversions_to_clade_founder` | Max reversions to clade founder | `1` |
