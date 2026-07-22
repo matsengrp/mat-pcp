@@ -901,8 +901,10 @@ jobs:
         print(f'Columns: {list(agg.columns)[:10]}...')
 
         if len(agg) > 0:
-            # Check required columns
-            assert 'delta_fitness' in agg.columns, 'Missing delta_fitness'
+            # Check required columns (aggregate uses the v6 renamed delta columns;
+            # per-clade files keep the internal names).
+            assert 'delta_fitness_bayesian' in agg.columns, 'Missing delta_fitness_bayesian'
+            assert 'delta_fitness_pseudo' in agg.columns, 'Missing delta_fitness_pseudo'
             # Note: aa_mutation may not be present if upstream data doesn't have it
 
             if 'gene' in agg.columns:
@@ -912,7 +914,7 @@ jobs:
                 print(f'Sample aa_mutations: {agg[\"aa_mutation\"].dropna().head(5).tolist()}')
             else:
                 print('Note: aa_mutation column not present (expected with current data flow)')
-            print(f'Fitness range: [{agg[\"delta_fitness\"].min():.2f}, {agg[\"delta_fitness\"].max():.2f}]')
+            print(f'delta_fitness_pseudo range: [{agg[\"delta_fitness_pseudo\"].min():.2f}, {agg[\"delta_fitness_pseudo\"].max():.2f}]')
         "
 
     - name: Verify PCP-derived AA counts
