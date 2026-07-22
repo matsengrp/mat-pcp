@@ -1,26 +1,39 @@
 # =============================================================================
+# Default pipeline configuration: all public SARS2-mut-fitness MAT trees
+# =============================================================================
+# The default config. Builds every public/GISAID MAT tree in a single run,
+# reproducing the SARS2-mut-fitness / SARS2-mut-fitness-v2 production profile
+# (Nextstrain_clade_usher clades, SARS2-mut-fitness QC and gene settings).
+# The trees differ only in their MAT/metadata paths and per-tree
+# `max_leaf_date`; every other setting below is shared across all of them.
+#
+# Consolidated from the former per-tree configs (config-public-2022-04-02,
+# config-public-2022-06-01, config-public-2023-01-01,
+# config-gisaid-and-public-2023-01-01). For fast/CI runs use
+# config_test_data.yaml (or config_test_data_multitree.yaml).
+
+# =============================================================================
 # Input/Output Configuration
 # =============================================================================
-# Root for all outputs (optional; defaults to "results"). Each tree is written
-# to {output_root}/{label}_{version}.
-output_root: "results"
-
-# Trees to process. A single `snakemake` invocation builds every tree listed
-# here. The label (e.g. `public_2022-06-01`) becomes a `{tree}` wildcard and the
-# output directory `results/<label>_<version>`. `mat` and `metadata` are
-# required per tree. `max_leaf_date` is the ONLY per-tree-overridable key; it is
-# optional and defaults to `None` (no upper date cutoff). A tree without its own
-# value inherits the global `qc_filter_options.max_leaf_date` (itself optional).
-# Every other setting below is global and shared across all trees.
+# A single `snakemake` invocation builds every tree listed here. `max_leaf_date`
+# is the only per-tree-overridable key; all other settings are global.
 trees:
+  public_2022-04-02:                       # -> results/public_2022-04-02_v5
+    mat: "../mat-trees/2022-04-02-public/public-2022-04-02.all.masked.pb.gz"
+    metadata: "../mat-trees/2022-04-02-public/public-2022-04-02.metadata.tsv.gz"
+    max_leaf_date: "2022-04-02"
   public_2022-06-01:                       # -> results/public_2022-06-01_v5
     mat: "../mat-trees/2022-06-01-public/public-2022-06-01.all.masked.nextclade.pangolin.pb.gz"
     metadata: "../mat-trees/2022-06-01-public/public-2022-06-01.metadata.tsv.gz"
-    max_leaf_date: "2022-06-01"            # per-tree override (only overridable key)
+    max_leaf_date: "2022-06-01"
   public_2023-01-01:                       # -> results/public_2023-01-01_v5
     mat: "../mat-trees/2023-01-01-public/public-2023-01-01.all.masked.pb.gz"
     metadata: "../mat-trees/2023-01-01-public/public-2023-01-01.metadata.tsv.gz"
-    # max_leaf_date omitted here and globally -> None -> no upper date cutoff
+    max_leaf_date: "2023-01-01"
+  gisaid-and-public_2023-01-01:            # -> results/gisaid-and-public_2023-01-01_v5
+    mat: "../mat-trees/2023-01-01-gisaid-and-public/gisaidAndPublic.2023-01-01.masked.pb.gz"
+    metadata: "../mat-trees/2023-01-01-gisaid-and-public/gisaidAndPublic.2023-01-01.metadata.tsv.gz"
+    max_leaf_date: "2023-01-01"
 
 # =============================================================================
 # Reference Genome Configuration
@@ -29,6 +42,7 @@ ref_fasta: "http://hgdownload.soe.ucsc.edu/goldenPath/wuhCor1/bigZips/wuhCor1.fa
 ref_gtf: "http://hgdownload.soe.ucsc.edu/goldenPath/wuhCor1/bigZips/genes/ncbiGenes.gtf.gz"
 
 # Manual GTF additions (genes missing from reference)
+# https://github.com/jbloomlab/SARS2-mut-fitness/issues/21
 add_to_ref_gtf:
   ORF9b: [28284, 28577]
 
@@ -38,42 +52,48 @@ add_to_ref_gtf:
 qc_filter_options:
   invalid_date_resolutions: ["MISSING", "MONTH", "YEAR"]
   min_leaf_date: "2019-12-01"
-  # max_leaf_date: optional. Unset -> None (no upper date cutoff). A tree may
-  #   set its own under its label; left unset here so the default is None.
+  # max_leaf_date: set per-tree in the `trees` block above (each tree has its
+  #   own cutoff); unset here -> None default for any tree that omits it.
   valid_hosts: ["Human", "Homo sapiens"]
   missing_host_is_valid: true
   min_genome_length: 28000
   max_genome_length: 32000
 
-subset_frac: 1.0  # Random sampling fraction (1.0 = no sampling)
-skip_qc_filtering: false  # Set to true to skip all QC filtering (for SARS2-mut-fitness comparison)
+subset_frac: 1.0  # No random sampling - use all samples
+
+# Skip QC filtering to match SARS2-mut-fitness behavior (only apply datetime cutoff)
+skip_qc_filtering: true
 
 # =============================================================================
 # Tree Processing
 # =============================================================================
 optimize_tree: false
-mat_subset_kwargs: ""  # Additional matUtils extract arguments
+mat_subset_kwargs: ""
 
 # =============================================================================
 # Clade Configuration
 # =============================================================================
-clade_column: "Nextstrain_clade"
-min_clade_size: 2
-clades_to_exclude: []
-# max_clades: null  # Set to limit number of clades processed (useful for testing)
+# Use Nextstrain_clade from tree annotations (annotation_1 in matUtils summary)
+clade_column: "Nextstrain_clade_usher"
+
+# Minimum samples for a clade to be analyzed. Default 0 (analyze every clade);
+# increase to ignore small clades.
+min_clade_size: 0
+
+# Exclude 21A (no clade founder defined)
+clades_to_exclude:
+  - 21A
 
 # Reference clade for motif/codon annotation
 # Used to determine "conserved" sites during GLM training data curation
 # This should be the ancestral/reference clade (typically 19A for SARS-CoV-2)
 # matching SARS2-mut-fitness-v2 behavior
-# NOTE: THE PIPELINE WILL CRASH IF THIS CLADE IS NOT PRESENT DUE TO ADEQUATE SAMPLES
-# SEE `min_clade_size` SETTING ABOVE
 reference_clade: "19A"
 
 # =============================================================================
 # PCP Extraction Configuration
 # =============================================================================
-# Set to null for full genome, or specify region.
+# Spike gene region only for PCPs (faster extraction, sufficient for training).
 #
 # Proteins to generate PCPs and gene-sliced founder FASTAs for. Coordinates
 # are derived from the reference GTF's CDS blocks, so the stop codon is
@@ -83,8 +103,7 @@ reference_clade: "19A"
 pcp_genes:
   - S
 
-# PCP filtering parameters (applied to CODING mutations only)
-# Noncoding mutations are excluded from quality criteria but still tracked
+# PCP filtering parameters (match SARS2-mut-fitness)
 pcp_max_nt_mutations: 4
 pcp_max_reversions_to_ref: 1
 pcp_max_reversions_to_clade_founder: 1
@@ -100,24 +119,36 @@ clade_founders:
 roemer_nextstrain_to_pango:
   23A: XBB.1.5
   23B: XBB.1.16
-  # Add more mappings as needed
+  23C: CH.1.1
+  23D: XBB.1.9
+  23E: XBB.2.3
+  23F: EG.5.1
+  23G: XBB.1.5.70
+  23H: HK.3
+  23I: BA.2.86
+  24A: JN.1
+  24B: JN.1.11.1
+  24C: KP.3
+  24D: XDV.1
+  24E: KP.3.1.1
+  24F: XEC
+  24G: KP.2.3
 
 # =============================================================================
-# Mutation Counting Configuration
+# Mutation Counting Configuration (match SARS2-mut-fitness)
 # =============================================================================
-# Maximum number of CODING mutations per branch (aligns with SARS2-mut-fitness)
-# Branches with more coding mutations are filtered out as likely erroneous
 max_nt_mutations: 4
-# Maximum reversions to reference/founder in CODING regions only
-# Noncoding reversions excluded from quality criteria (error-prone)
 max_reversions_to_ref: 1
 max_reversions_to_clade_founder: 1
 
+# Only include coding region sites
 site_include_range:
   start: 266   # Start of ORF1ab
   end: 29674   # End of ORF10
 
-# Sites to exclude globally (problematic hotspots)
+# Sites to exclude globally (from SARS2-mut-fitness config)
+# Table S1 of https://journals.plos.org/plosgenetics/article?id=10.1371/journal.pgen.1009175
+# Plus additional high-frequency mutation sites
 sites_to_exclude:
   # Sites in Table S1 of https://journals.plos.org/plosgenetics/article?id=10.1371/journal.pgen.1009175
   - 153
@@ -178,6 +209,7 @@ sites_to_exclude:
 site_mask_vcf: "https://raw.githubusercontent.com/W-L/ProblematicSites_SARS-CoV2/master/subset_vcf/problematic_sites_sarsCov2.mask.vcf"
 usher_masked_sites: "data/usher_masked_sites.yaml"
 
+
 # =============================================================================
 # GLM Rate Estimation
 # =============================================================================
@@ -191,37 +223,41 @@ glm_lightswitch_boundaries:
   GC: 21562
 
 # =============================================================================
-# Fitness Estimation Configuration
+# Fitness Estimation Configuration (match SARS2-mut-fitness)
 # =============================================================================
 fitness_pseudocount: 0.5
-fitness_N_f: 300        # Number of points for fitness grid
-fitness_N_n_exp: 300    # Number of points for expected counts grid
+fitness_N_f: 300
+fitness_N_n_exp: 300
 
 # ORF1ab to NSP mapping (amino acid site ranges)
+# NOTE: We explicitly define ALL NSPs here to avoid merging with default config.yaml
+# which uses different names (nsp5 vs "nsp5 (Mpro)", nsp12 vs "nsp12 (RdRp)")
 orf1ab_to_nsps:
   nsp1: [1, 180]
   nsp2: [181, 818]
   nsp3: [819, 2763]
   nsp4: [2764, 3263]
-  nsp5: [3264, 3569]
+  nsp5: null
+  nsp5 (Mpro): [3264, 3569]
   nsp6: [3570, 3859]
   nsp7: [3860, 3942]
   nsp8: [3943, 4140]
   nsp9: [4141, 4253]
   nsp10: [4254, 4392]
-  nsp12: [4393, 5324]
+  nsp12: null
+  nsp12 (RdRp): [4393, 5324]
   nsp13: [5325, 5925]
   nsp14: [5926, 6452]
   nsp15: [6453, 6798]
   nsp16: [6799, 7096]
 
-# Gene overlap handling
+# Gene overlap handling (match SARS2-mut-fitness)
 gene_overlaps:
-  retain:
-    - ["ORF1ab", "ORF1a"]
-    - ["N", "ORF9b"]
   exclude:
-    - ["S", "ORF3a"]
+    - [ORF1a, ORF1ab]   # 11 sites of overlap near ribosomal frameshifting
+    - [ORF7a, ORF7b]    # 1 site of overlap corresponding to ORF7a stop codon
+  retain:
+    - [N, ORF9b]        # ORF9b is a 291 out-of-frame overlapping reading frame in N
 
 # Gene ordering for output
 genes:
@@ -230,13 +266,13 @@ genes:
   - "nsp2"
   - "nsp3"
   - "nsp4"
-  - "nsp5"
+  - "nsp5 (Mpro)"
   - "nsp6"
   - "nsp7"
   - "nsp8"
   - "nsp9"
   - "nsp10"
-  - "nsp12"
+  - "nsp12 (RdRp)"
   - "nsp13"
   - "nsp14"
   - "nsp15"
@@ -249,20 +285,21 @@ genes:
   - "ORF7a"
   - "ORF7b"
   - "ORF8"
+  - "ORF9b"
   - "N"
   - "ORF10"
 
 # =============================================================================
 # Site Masking Configuration
 # =============================================================================
-masking_gene: "S"  # Gene for codon mask output
+masking_gene: "S"
 
 # =============================================================================
 # Thread Configuration
 # =============================================================================
 threads:
   filter_metadata: 1
-  filter_mat_tree: 1
+  filter_mat_tree: 4
   optimize_mat_tree: 12
   mat_clade_subset: 4
   extract_pcps: 1

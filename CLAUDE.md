@@ -67,6 +67,11 @@ When making changes that will affect outputs:
 Every run requires exactly one explicit `--configfile` (there is no default
 `configfile:` directive; see the Snakefile header for why).
 
+`config/config.yaml` lists **all four production trees**, one of which
+(`gisaid-and-public_2023-01-01`) needs restricted GISAID-derived inputs. A
+bare `rule all` run builds every tree; to build a single tree, target its
+per-tree output path (see "Run specific target" below).
+
 ```bash
 # Run with pixi (recommended)
 pixi run snakemake -j 4 --use-conda --configfile config/config.yaml
@@ -105,9 +110,9 @@ pixi run snakemake -j 2 --use-conda \
 ```
 mat-pcp/
 ├── config/
-│   ├── config.yaml                  # Default pipeline configuration
+│   ├── config.yaml                  # Default config (all public/GISAID trees)
 │   ├── config_test_data.yaml        # Test data configuration
-│   └── config-public-2022-06-01.yaml # Production configuration
+│   └── config_test_data_multitree.yaml # Multi-tree smoke-test configuration
 ├── workflow/
 │   ├── Snakefile            # Main workflow definition
 │   ├── envs/                # Conda environments

@@ -534,9 +534,9 @@ mat-pcp/
 │   ├── README.md                # Archive documentation (tracked)
 │   └── ...                      # Historical runs
 └── config/
-    ├── config.yaml              # Default config (multi-tree template)
+    ├── config.yaml              # Default config (all public/GISAID trees)
     ├── config_test_data.yaml    # Test config (trees: test_data)
-    └── config-public-2022-06-01.yaml  # Production config
+    └── config_test_data_multitree.yaml  # Multi-tree smoke-test config
 ```
 
 ### Naming Convention

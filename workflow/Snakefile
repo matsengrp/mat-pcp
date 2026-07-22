@@ -189,33 +189,6 @@ if missing_params:
     )
 
 
-# Soft warning: production configs (`config-public-*.yaml`) should generally
-# run with `min_clade_size: 0` so the GLM rates table is estimated from every
-# available clade, not just the largest ones. v1 production runs shipped with
-# `min_clade_size: 10000` and biased the resulting rates.
-def _warn_if_public_config_has_min_clade_size(workflow_obj, min_clade_size):
-    if min_clade_size in (0, None):
-        return
-    configfiles = getattr(workflow_obj, "configfiles", []) or []
-    public_configs = [
-        cf for cf in configfiles
-        if os.path.basename(cf).startswith("config-public-")
-        and os.path.basename(cf).endswith(".yaml")
-    ]
-    if not public_configs:
-        return
-    names = ", ".join(os.path.basename(cf) for cf in public_configs)
-    print(
-        f"WARNING: min_clade_size={min_clade_size} in production config(s) "
-        f"[{names}]. Set min_clade_size: 0 unless you specifically want to "
-        f"drop small clades from the GLM rate estimation. See mat-pcp #81 "
-        f"for context.",
-        file=__import__("sys").stderr,
-    )
-
-_warn_if_public_config_has_min_clade_size(workflow, config.get("min_clade_size", 0))
-
-
 # =============================================================================
 # Wildcard Constraints
 # =============================================================================
