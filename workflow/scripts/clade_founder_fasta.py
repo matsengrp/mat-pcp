@@ -1,43 +1,21 @@
 #!/usr/bin/env python3
-"""Generate the founder FASTA for each clade.
+"""Generate the whole-genome founder FASTA for each clade.
 
-For every gene in the ``pcp_genes`` config list, a gene-sliced founder FASTA is
-also written at ``clade_founders/<gene>/<clade>.fa``, containing just that
-gene's coding sequence sliced from the reference GTF's CDS blocks (so the stop
-codon is excluded and ORF1ab's ribosomal frameshift is reconstructed into a
-single in-frame CDS). The gene-sliced founders are needed for training
-ParentIndependent DASM models.
+The per-gene, in-frame founder slices used as DASM wildtypes are produced
+separately by ``slice_founder_gene.py`` (rule ``slice_founder_gene``), which
+consumes this whole-genome founder.
 """
 
 import json
-import os
-import sys
-from importlib import util as importlib_util
 
 import Bio.SeqIO
-
-
-def load_workflow_module(module_name):
-    """Load a module from the workflow's modules directory."""
-    workflow_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    module_path = os.path.join(workflow_dir, "modules", f"{module_name}.py")
-    spec = importlib_util.spec_from_file_location(module_name, module_path)
-    module = importlib_util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-sequences = load_workflow_module("sequences")
-gtf_utils = load_workflow_module("gtf")
 
 
 def write_fasta(filepath, header, seq, line_width=80):
     """Write a single-record FASTA with a wrapped sequence.
 
     The header is written verbatim (caller supplies any prefix); the sequence
-    is wrapped at ``line_width`` characters per line. Used for both the
-    whole-genome founder and the optional gene-sliced founder.
+    is wrapped at ``line_width`` characters per line.
     """
     with open(filepath, "w") as f:
         f.write(f">{header}\n")
@@ -49,17 +27,9 @@ def write_fasta(filepath, header, seq, line_width=80):
 neher_json_path = snakemake.input.neher_json
 roemer_json_path = snakemake.input.roemer_json
 ref_fasta = snakemake.input.ref_fasta
-gtf_path = snakemake.input.gtf
 roemer_nextstrain_to_pango = snakemake.params.roemer_nextstrain_to_pango
-# One gene-sliced founder FASTA is emitted per configured protein. ``pcp_genes``
-# and the ``gene_fasta`` output list are built from the same config list in the
-# same order (see ``_gene_sliced_founder_outputs`` in the Snakefile), so they
-# zip position-for-position. Coordinates come from the GTF's CDS blocks, so
-# ORF1ab's frameshift is reconstructed into a single in-frame CDS.
-pcp_genes = list(snakemake.params.pcp_genes)
 clade = snakemake.wildcards.clade
 output_fasta = snakemake.output.fasta
-gene_fastas = list(getattr(snakemake.output, "gene_fasta", []) or [])
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -196,27 +166,5 @@ log(f"Founder differs from reference at {n_diffs} positions")
 # Write FASTA
 write_fasta(output_fasta, clade, founder_seq)
 log(f"Wrote founder FASTA to {output_fasta}")
-
-# Gene-sliced founder FASTA, one per configured protein.
-# CDS-block coordinates are 1-based inclusive relative to the Wuhan-Hu-1
-# (NC_045512.2) reference and come from the GTF (so the stop codon is excluded
-# and ORF1ab's frameshift is reconstructed). Slicing is delegated to
-# ``sequences.slice_cds``, which byte-aligns with the PCP parent/child slices.
-assert len(pcp_genes) == len(gene_fastas), (
-    f"pcp_genes ({len(pcp_genes)}) and gene_fasta outputs ({len(gene_fastas)}) must match in length/order"
-)
-for gene, gene_fasta_path in zip(pcp_genes, gene_fastas):
-    cds_blocks = gtf_utils.cds_blocks_for_gene(gtf_path, gene)
-    gene_seq = sequences.slice_cds(founder_seq, cds_blocks)
-    expected_len = sum(end - start + 1 for start, end in cds_blocks)
-    assert len(gene_seq) == expected_len, (
-        f"Gene slice length {len(gene_seq)} != expected {expected_len} "
-        f"for {gene} {cds_blocks}"
-    )
-    write_fasta(gene_fasta_path, clade, gene_seq)
-    log(
-        f"Wrote gene-sliced ({gene} {cds_blocks}, {len(gene_seq)} nt) "
-        f"founder FASTA to {gene_fasta_path}"
-    )
 
 log("Done!")

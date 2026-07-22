@@ -315,6 +315,13 @@ rule all:
             os.path.join(OUTDIR, "pcps/{gene}/pcp_curation_report.txt"),
             tree=TREE_LABELS,
             gene=PCP_GENES,
+        ),
+        # Per-gene founder-slice collectors (tree x gene): each pulls in that
+        # gene's ``clade_founders/{gene}/{clade}.fa`` slices for every clade.
+        expand(
+            os.path.join(OUTDIR, "clade_founders/{gene}/founders.done"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
         )
 
 
@@ -836,52 +843,77 @@ rule clade_founder_jsons:
         """
 
 
-# ---------------------------------------------------------------------------
-# Gene-sliced founder FASTA outputs
-# ---------------------------------------------------------------------------
-#
-# One gene-sliced founder FASTA is emitted per configured protein
-# (``pcp_genes``), at ``clade_founders/<gene>/<clade>.fa`` using the gene symbol
-# verbatim. These byte-align with the PCP parent/child slices (both go through
-# ``sequences.slice_cds`` on the GTF's CDS blocks) so they can be used as the
-# wildtype for training ParentIndependent DASM models.
-
-def _gene_sliced_founder_outputs():
-    """Per-gene founder FASTA output paths (parametrized by the {clade} wildcard).
-
-    Built from ``pcp_genes`` in order; the script side zips this list against a
-    matching ``pcp_genes`` param to know which gene each path is for.
-    """
-    return [
-        os.path.join(OUTDIR, "clade_founders", gene, "{clade}.fa")
-        for gene in PCP_GENES
-    ]
-
-
 rule clade_founder_fasta:
-    """Generate the founder FASTA for each clade.
+    """Generate the whole-genome founder FASTA for each clade.
 
-    Emits the whole-genome founder FASTA plus one gene-sliced founder FASTA per
-    configured protein (``clade_founders/<gene>/{clade}.fa``). Gene-sliced
-    founders are needed for training ParentIndependent DASM models.
+    The per-gene, in-frame founder slices used as DASM wildtypes are produced
+    separately by ``slice_founder_gene`` (which consumes this founder).
     """
     input:
         neher_json=rules.clade_founder_jsons.output.neher_json,
         roemer_json=rules.clade_founder_jsons.output.roemer_json,
-        ref_fasta=rules.get_ref_fasta.output.ref_fasta,
-        gtf=rules.edit_ref_gtf.output.gtf
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta
     output:
-        fasta=CLADE_FOUNDER_FASTA,
-        gene_fasta=_gene_sliced_founder_outputs()
+        fasta=CLADE_FOUNDER_FASTA
     params:
-        roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {}),
-        pcp_genes=PCP_GENES
+        roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {})
     log:
         os.path.join(OUTDIR, "log/clade_founder_{clade}.log")
     conda:
         "envs/default.yml"
     script:
         "scripts/clade_founder_fasta.py"
+
+
+# ---------------------------------------------------------------------------
+# Gene-sliced founder FASTAs
+# ---------------------------------------------------------------------------
+#
+# One in-frame founder slice is emitted per (gene, clade) at
+# ``clade_founders/<gene>/<clade>.fa`` using the gene symbol verbatim. Each is
+# sliced from that clade's whole-genome founder on the reference GTF's CDS
+# blocks (via ``sequences.slice_cds``), so it byte-aligns with the PCP
+# parent/child slices and can serve as the wildtype for training
+# ParentIndependent DASM models. Fanning over a ``{gene}`` wildcard keeps the
+# per-protein conditionality in the DAG rather than in a conditional output
+# list on ``clade_founder_fasta`` (issue #95).
+
+rule slice_founder_gene:
+    """Slice one gene's in-frame CDS out of a clade's whole-genome founder."""
+    input:
+        fasta=rules.clade_founder_fasta.output.fasta,
+        gtf=rules.edit_ref_gtf.output.gtf
+    output:
+        gene_fasta=os.path.join(OUTDIR, "clade_founders/{gene}/{clade}.fa")
+    log:
+        os.path.join(OUTDIR, "log/slice_founder_gene_{gene}_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/slice_founder_gene.py"
+
+
+def _gene_founder_slices(wildcards):
+    """Every adequate-count clade's founder slice for one gene."""
+    return per_clade_inputs(
+        os.path.join(OUTDIR, "clade_founders", wildcards.gene, "{clade}.fa"),
+        wildcards,
+    )
+
+
+rule gene_founders_all_clades:
+    """Collector target for one gene's per-clade founder slices.
+
+    Aggregates every adequate-count clade's ``clade_founders/<gene>/<clade>.fa``
+    into a single "everything is built" signal so ``rule all`` can depend on one
+    path per gene.
+    """
+    input:
+        _gene_founder_slices
+    output:
+        sentinel=os.path.join(OUTDIR, "clade_founders/{gene}/founders.done")
+    shell:
+        "touch {output.sentinel}"
 
 
 # =============================================================================
