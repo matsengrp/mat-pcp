@@ -100,8 +100,8 @@ def aggregate_counts(df, explode_cols):
 
     # tau_squared is deliberately not aggregated here: it is a nucleotide-level
     # log-scale variance used only by probfit (nt fitness). It never feeds the
-    # amino-acid delta_fitness (inverse-variance weighting of nt estimates) or
-    # naive_delta_fitness (from summed counts), so summing it into aa rows would
+    # amino-acid delta_fitness_bayesian (inverse-variance weighting of nt estimates) or
+    # delta_fitness_ratio (from summed counts), so summing it into aa rows would
     # only carry a meaningless column. See CHANGELOG v5.
     agg_dict = {}
     for col in ["expected_count", "actual_count"]:
@@ -219,16 +219,16 @@ def add_nsps(df, orf1ab_to_nsps_df):
     return df_orig
 
 
-def naive_fitness(aa_counts, fitness_pseudocount=0.5):
+def ratio_fitness(aa_counts, fitness_pseudocount=0.5):
     """
-    Add naive (log ratio) fitness estimate.
+    Add the pseudocount log-ratio fitness estimate (delta_fitness_ratio).
 
     Args:
         aa_counts: DataFrame with expected_count and actual_count columns
         fitness_pseudocount: Pseudocount for numerical stability
     """
     if "expected_count" in aa_counts.columns and "actual_count" in aa_counts.columns:
-        aa_counts["naive_delta_fitness"] = np.log(
+        aa_counts["delta_fitness_ratio"] = np.log(
             (aa_counts["actual_count"] + fitness_pseudocount)
             / (aa_counts["expected_count"] + fitness_pseudocount)
         )
@@ -245,7 +245,7 @@ def aa_fitness(df, explode_cols):
         explode_cols: Grouping columns
 
     Returns:
-        DataFrame with delta_fitness and uncertainty columns
+        DataFrame with delta_fitness_bayesian and uncertainty columns
     """
     if "f_st_dev" not in df.columns or "f_mean" not in df.columns:
         return pd.DataFrame()
@@ -259,10 +259,10 @@ def aa_fitness(df, explode_cols):
 
     grouped_sums = df.groupby(groupby_cols).agg({"weight": "sum", "weighted_value": "sum"})
 
-    grouped_sums["delta_fitness"] = grouped_sums["weighted_value"] / grouped_sums["weight"]
+    grouped_sums["delta_fitness_bayesian"] = grouped_sums["weighted_value"] / grouped_sums["weight"]
     grouped_sums["uncertainty"] = np.sqrt(1 / grouped_sums["weight"])
 
-    aa_fit = grouped_sums[["delta_fitness", "uncertainty"]].reset_index()
+    aa_fit = grouped_sums[["delta_fitness_bayesian", "uncertainty"]].reset_index()
 
     # Rename codon_site to aa_site
     if "codon_site" in aa_fit.columns:
@@ -292,7 +292,7 @@ def merge_aa_df(aa_fit, aa_counts, explode_cols):
     Merge amino acid fitness and counts DataFrames.
 
     Args:
-        aa_fit: DataFrame with delta_fitness and uncertainty
+        aa_fit: DataFrame with delta_fitness_bayesian and uncertainty
         aa_counts: DataFrame with counts
         explode_cols: Columns used for merging
 

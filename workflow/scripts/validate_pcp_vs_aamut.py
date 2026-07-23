@@ -14,7 +14,7 @@ aamut_fitness_files = snakemake.input.aamut_fitness_files
 all_aamut_fitness_csv = snakemake.input.all_aamut_fitness
 output_report = snakemake.output.report
 output_discrepancies = snakemake.output.discrepancies
-pcp_gene_name = snakemake.params.pcp_gene_name
+pcp_gene_name = snakemake.wildcards.gene
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 

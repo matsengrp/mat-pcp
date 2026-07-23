@@ -255,9 +255,11 @@ jobs:
         # full pipeline run. The two trees share identical global config and
         # the same input data, differing only in max_leaf_date, so a
         # difference in clade counts can only come from per-tree resolution.
+        # Derive the version suffix from VERSION so this step survives bumps.
+        V=$(cat VERSION)
         pixi run snakemake \
-          results/test_data_v5/mat/clade_counts.csv \
-          results/test_data_early_v5/mat/clade_counts.csv \
+          results/test_data_${V}/mat/clade_counts.csv \
+          results/test_data_early_${V}/mat/clade_counts.csv \
           -j $(nproc) --use-conda --conda-frontend conda \
           --configfile config/config_test_data_multitree.yaml
         pixi run python -c "
@@ -265,8 +267,8 @@ jobs:
         def adequate(p):
             df = pd.read_csv(p)
             return int(df['adequate_sample_counts'].sum()), len(df)
-        a_ok, a_tot = adequate('results/test_data_v5/mat/clade_counts.csv')
-        e_ok, e_tot = adequate('results/test_data_early_v5/mat/clade_counts.csv')
+        a_ok, a_tot = adequate('results/test_data_${V}/mat/clade_counts.csv')
+        e_ok, e_tot = adequate('results/test_data_early_${V}/mat/clade_counts.csv')
         print(f'test_data (max_leaf_date 2022-06-01): {a_tot} clades, {a_ok} adequate')
         print(f'test_data_early (max_leaf_date 2021-06-01): {e_tot} clades, {e_ok} adequate')
         # Independence: the earlier cutoff must yield FEWER clades. Equal counts
@@ -363,7 +365,7 @@ jobs:
         print(f'Checking {len(adequate)} clade PCP files...')
 
         for clade in adequate:
-            pcp_file = f'${OUTPUT_DIR}/pcps/{clade}_pcps.csv'
+            pcp_file = f'${OUTPUT_DIR}/pcps/S/{clade}_pcps.csv'
             if os.path.exists(pcp_file):
                 pcp_df = pd.read_csv(pcp_file)
                 print(f'  {clade}: {len(pcp_df)} PCPs')
@@ -378,11 +380,11 @@ jobs:
 
     - name: Verify aggregated PCP file
       run: |
-        test -f $OUTPUT_DIR/pcps/all_pcps.csv
+        test -f $OUTPUT_DIR/pcps/S/all_pcps.csv
         pixi run python -c "
         import pandas as pd
 
-        df = pd.read_csv('${OUTPUT_DIR}/pcps/all_pcps.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/pcps/S/all_pcps.csv')
         print(f'Total aggregated PCPs: {len(df)}')
         print(f'Clades: {sorted(df.clade.unique())}')
         print(f'PCPs per clade:')
@@ -404,7 +406,7 @@ jobs:
         pixi run python -c "
         import pandas as pd
 
-        df = pd.read_csv('${OUTPUT_DIR}/pcps/all_pcps.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/pcps/S/all_pcps.csv')
 
         # Check sequence lengths are consistent
         parent_lens = df['parent'].str.len()
@@ -761,11 +763,11 @@ jobs:
 
     - name: Verify problematic sites
       run: |
-        test -f $OUTPUT_DIR/spike_codon_sites_to_mask.txt
+        test -f $OUTPUT_DIR/S_codon_sites_to_mask.txt
         pixi run python -c "
-        with open('${OUTPUT_DIR}/spike_codon_sites_to_mask.txt') as f:
+        with open('${OUTPUT_DIR}/S_codon_sites_to_mask.txt') as f:
             sites = [line.strip() for line in f if line.strip()]
-        print(f'Problematic spike codon sites: {len(sites)}')
+        print(f'Problematic Spike codon sites: {len(sites)}')
         if sites:
             print(f'First 10 sites: {sites[:10]}')
         "
@@ -874,7 +876,8 @@ jobs:
 
                 # Check fitness columns
                 if len(fit_df) > 0:
-                    assert 'delta_fitness' in fit_df.columns, 'Missing delta_fitness'
+                    assert 'delta_fitness_bayesian' in fit_df.columns, 'Missing delta_fitness_bayesian'
+                    assert 'delta_fitness_ratio' in fit_df.columns, 'Missing delta_fitness_ratio'
                     # Note: aa_mutation may not be present if upstream data doesn't have it
                     # (aa_mutation info is in actual counts but not expected counts)
                     if 'aa_mutation' in fit_df.columns:
@@ -899,8 +902,10 @@ jobs:
         print(f'Columns: {list(agg.columns)[:10]}...')
 
         if len(agg) > 0:
-            # Check required columns
-            assert 'delta_fitness' in agg.columns, 'Missing delta_fitness'
+            # Check required columns: the v6 delta columns, named consistently
+            # across the per-clade and aggregate files.
+            assert 'delta_fitness_bayesian' in agg.columns, 'Missing delta_fitness_bayesian'
+            assert 'delta_fitness_ratio' in agg.columns, 'Missing delta_fitness_ratio'
             # Note: aa_mutation may not be present if upstream data doesn't have it
 
             if 'gene' in agg.columns:
@@ -910,16 +915,16 @@ jobs:
                 print(f'Sample aa_mutations: {agg[\"aa_mutation\"].dropna().head(5).tolist()}')
             else:
                 print('Note: aa_mutation column not present (expected with current data flow)')
-            print(f'Fitness range: [{agg[\"delta_fitness\"].min():.2f}, {agg[\"delta_fitness\"].max():.2f}]')
+            print(f'delta_fitness_ratio range: [{agg[\"delta_fitness_ratio\"].min():.2f}, {agg[\"delta_fitness_ratio\"].max():.2f}]')
         "
 
     - name: Verify PCP-derived AA counts
       run: |
-        test -f $OUTPUT_DIR/validation/pcp_aa_counts.csv
+        test -f $OUTPUT_DIR/validation/S/pcp_aa_counts.csv
         pixi run python -c "
         import pandas as pd
 
-        pcp_counts = pd.read_csv('${OUTPUT_DIR}/validation/pcp_aa_counts.csv')
+        pcp_counts = pd.read_csv('${OUTPUT_DIR}/validation/S/pcp_aa_counts.csv')
         print(f'PCP-derived AA counts: {len(pcp_counts)} entries')
 
         if len(pcp_counts) > 0:
@@ -935,9 +940,9 @@ jobs:
 
     - name: Verify validation report
       run: |
-        test -f $OUTPUT_DIR/validation/pcp_vs_counts_report.txt
-        test -f $OUTPUT_DIR/validation/pcp_vs_counts_discrepancies.csv
-        cat $OUTPUT_DIR/validation/pcp_vs_counts_report.txt
+        test -f $OUTPUT_DIR/validation/S/pcp_vs_counts_report.txt
+        test -f $OUTPUT_DIR/validation/S/pcp_vs_counts_discrepancies.csv
+        cat $OUTPUT_DIR/validation/S/pcp_vs_counts_report.txt
 
     - name: Check validation results
       run: |
@@ -945,7 +950,7 @@ jobs:
         import pandas as pd
 
         # Load discrepancies
-        disc = pd.read_csv('${OUTPUT_DIR}/validation/pcp_vs_counts_discrepancies.csv')
+        disc = pd.read_csv('${OUTPUT_DIR}/validation/S/pcp_vs_counts_discrepancies.csv')
         print(f'Validation discrepancies: {len(disc)}')
 
         # Check if validation passed

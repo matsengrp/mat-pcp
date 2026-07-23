@@ -53,6 +53,8 @@ In general, any change to the pipeline is a breaking change since models trained
 6. Create a git tag matching the version: `git tag v2`
 7. Push the tag: `git push origin v2`
 
+> **Also audit output-path defaults.** Any script with its own default output directory (currently `workflow/scripts/validate_test.py`) must track `VERSION` the same way the Snakefile does, or it will silently read a stale `results/<label>_v{N-1}` directory after a bump (see #88).
+
 ### Development with Versioning
 
 When making changes that will affect outputs:
@@ -66,6 +68,11 @@ When making changes that will affect outputs:
 
 Every run requires exactly one explicit `--configfile` (there is no default
 `configfile:` directive; see the Snakefile header for why).
+
+`config/config.yaml` lists **all four production trees**, one of which
+(`gisaid-and-public_2023-01-01`) needs restricted GISAID-derived inputs. A
+bare `rule all` run builds every tree; to build a single tree, target its
+per-tree output path (see "Run specific target" below).
 
 ```bash
 # Run with pixi (recommended)
@@ -105,9 +112,9 @@ pixi run snakemake -j 2 --use-conda \
 ```
 mat-pcp/
 ├── config/
-│   ├── config.yaml                  # Default pipeline configuration
+│   ├── config.yaml                  # Default config (all public/GISAID trees)
 │   ├── config_test_data.yaml        # Test data configuration
-│   └── config-public-2022-06-01.yaml # Production configuration
+│   └── config_test_data_multitree.yaml # Multi-tree smoke-test configuration
 ├── workflow/
 │   ├── Snakefile            # Main workflow definition
 │   ├── envs/                # Conda environments
@@ -169,13 +176,13 @@ The configuration (`config/config.yaml`) is organized into:
    defaults to `None`, meaning no upper date cutoff.
 4. **Tree Processing**: `optimize_tree`, `mat_subset_kwargs`
 5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
-6. **PCP Extraction**: `pcp_gene_region`, `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`
+6. **PCP Extraction**: `pcp_genes`, `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`
 7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources)
 8. **Mutation Counting**: `max_nt_mutations`, `max_reversions_*`, `site_include_range`
 9. **GLM**: `rna_structure_data`, `glm_lightswitch_boundaries`
 11. **Fitness**: `fitness_pseudocount`, `fitness_N_f`, `fitness_N_n_exp`
 12. **Gene Configuration**: `orf1ab_to_nsps`, `gene_overlaps`, `genes`
-13. **Site Masking**: `masking_gene`, `sites_to_exclude`, `site_include_range`
+13. **Site Masking**: `sites_to_exclude`, `site_include_range`
 14. **Threads**: Per-rule thread allocation
 
 ### Output Organization

@@ -1,8 +1,8 @@
 {
-  "_comment": "Expected results with config_test_data.yaml (max_clades=3, subset_frac=0.1). Regenerated for v3 (issue #101): single unified count table (counts_all.csv), GLM as the sole neutral expectation with column predicted_count renamed expected_count, and masking computed once. The fitness table no longer has a predicted_count column; expected_count_sum now holds the GLM value (formerly predicted_count_sum). Paths are written unversioned; validate_test.py normalizes the version prefix.",
+  "_comment": "Expected results with config_test_data.yaml (max_clades=3, subset_frac=0.1). Regenerated for v3 (issue #101): single unified count table (counts_all.csv), GLM as the sole neutral expectation with column predicted_count renamed expected_count, and masking computed once. The fitness table no longer has a predicted_count column; expected_count_sum now holds the GLM value (formerly predicted_count_sum). Delta-fitness columns renamed (#89): delta_fitness->delta_fitness_bayesian, naive_delta_fitness->delta_fitness_ratio (pure rename, values unchanged). Paths are written unversioned; validate_test.py normalizes the version prefix.",
   "results_directory": "results/test_data",
   "files": {
-    "results/test_data/pcps/all_pcps.csv": {
+    "results/test_data/pcps/S/all_pcps.csv": {
       "exists": true,
       "size": 61494,
       "lines": 9,
@@ -147,9 +147,9 @@
       "expected_count",
       "actual_count",
       "source_clade",
-      "delta_fitness",
+      "delta_fitness_bayesian",
       "uncertainty",
-      "naive_delta_fitness"
+      "delta_fitness_ratio"
     ],
     "clade_files": [
       "19A_aamut_fitness.csv",
@@ -159,8 +159,9 @@
     "num_clade_files": 3,
     "expected_count_sum": 165.0119396361689,
     "actual_count_sum": 91.0,
-    "delta_fitness_sum": -2414.839219695058,
-    "checksum": "d8db1a8fd48c8d993fd2ba9462819aa9"
+    "delta_fitness_ratio_sum": -225.07254811893372,
+    "delta_fitness_bayesian_sum": -2414.839219695058,
+    "checksum": "69d408d35a9dcd3435fe23da29b051c5"
   },
   "num_clade_sample_files": 3,
   "empty_clade_files": []

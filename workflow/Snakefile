@@ -17,12 +17,11 @@ import yaml
 # Version Management
 # =============================================================================
 
-# Filename of the problematic-codon mask produced by ``rule
-# get_problematic_sites`` and consumed by the DASM-ready filter rules (#80).
-# Kept as a module-level constant so a rename is a one-line change; the
-# rule itself is defined far below the consumers, which is why the
-# consumers use a hardcoded path instead of ``rules.X.output.Y``.
-SPIKE_MASK_FILENAME = "spike_codon_sites_to_mask.txt"
+# Per-gene problematic-codon masks are produced by ``rule
+# get_problematic_sites`` (one per configured protein, named by gene symbol:
+# ``<gene>_codon_sites_to_mask.txt``) and consumed by the per-gene DASM-ready
+# filter rules (#80, generalized over ``pcp_genes`` in #108): each protein is
+# filtered against its own ``<gene>_codon_sites_to_mask.txt``.
 
 # Read pipeline version from VERSION file
 VERSION_FILE = os.path.join(workflow.basedir, "..", "VERSION")
@@ -170,6 +169,7 @@ REQUIRED_CONFIG_PARAMS = [
     "site_include_range",
     "qc_filter_options",
     "min_clade_size",
+    "pcp_genes",
 ]
 
 # Parameters required for full pipeline (may not be present in test mode)
@@ -188,33 +188,6 @@ if missing_params:
     )
 
 
-# Soft warning: production configs (`config-public-*.yaml`) should generally
-# run with `min_clade_size: 0` so the GLM rates table is estimated from every
-# available clade, not just the largest ones. v1 production runs shipped with
-# `min_clade_size: 10000` and biased the resulting rates.
-def _warn_if_public_config_has_min_clade_size(workflow_obj, min_clade_size):
-    if min_clade_size in (0, None):
-        return
-    configfiles = getattr(workflow_obj, "configfiles", []) or []
-    public_configs = [
-        cf for cf in configfiles
-        if os.path.basename(cf).startswith("config-public-")
-        and os.path.basename(cf).endswith(".yaml")
-    ]
-    if not public_configs:
-        return
-    names = ", ".join(os.path.basename(cf) for cf in public_configs)
-    print(
-        f"WARNING: min_clade_size={min_clade_size} in production config(s) "
-        f"[{names}]. Set min_clade_size: 0 unless you specifically want to "
-        f"drop small clades from the GLM rate estimation. See mat-pcp #81 "
-        f"for context.",
-        file=__import__("sys").stderr,
-    )
-
-_warn_if_public_config_has_min_clade_size(workflow, config.get("min_clade_size", 0))
-
-
 # =============================================================================
 # Wildcard Constraints
 # =============================================================================
@@ -222,6 +195,7 @@ _warn_if_public_config_has_min_clade_size(workflow, config.get("min_clade_size",
 wildcard_constraints:
     clade="[A-Za-z0-9_.+-]+",  # Valid clade name characters
     tree=TREE_LABEL_PATTERN,   # Tree label (slash-free by construction)
+    gene="[A-Za-z0-9_.+-]+",   # Gene symbol (a single path segment, slash-free)
 
 
 # Disambiguate the aggregate rules from their per-clade counterparts. The
@@ -277,20 +251,28 @@ def get_final_tree():
 # Output Targets
 # =============================================================================
 
+# Proteins to generate PCPs and gene-sliced founder FASTAs for. A single
+# Snakemake invocation fans PCP extraction over this list; coordinates come from
+# the reference GTF (see ``cds_blocks_for_gene``). Output paths use the gene
+# symbol verbatim (``pcps/S/``, ``clade_founders/S/``).
+PCP_GENES = config["pcp_genes"]
+if not PCP_GENES:
+    raise ValueError(
+        "config 'pcp_genes' must be a non-empty list of gene symbols "
+        "(e.g. [S, ORF1ab, E]); got an empty list."
+    )
+
 # Terminal output files for the unified pipeline
 # (intermediate files are created automatically as dependencies)
+#
+# Tree-only targets (fanned over ``tree`` in ``rule all``). Per-gene targets
+# (PCP curation, founder slices, codon masks, DASM-ready PCPs) are fanned over
+# ``tree x pcp_genes`` in ``rule all`` instead.
 results_files = [
     "rates_table.csv",
-    SPIKE_MASK_FILENAME,
     "fitness/ntmut_fitness_aggregated.csv",
     "aamut_fitness/all_aamut_fitness.csv",
-    "validation/pcp_vs_counts_report.txt",
-    "pcps/pcp_curation_report.txt",
-    # DASM-ready PCPs (#80): aggregate file + sentinel covering per-clade fan-out.
-    "pcps/all_pcps_dasm_ready.csv",
-    "pcps/dasm_ready_per_clade.done",
 ]
-
 
 rule all:
     """Default target: produce all primary pipeline outputs for every tree."""
@@ -299,6 +281,44 @@ rule all:
             os.path.join(OUTDIR, "{f}"),
             tree=TREE_LABELS,
             f=results_files,
+        ),
+        # Per-gene PCP targets (tree x gene). The curation report pulls in each
+        # gene's ``pcps/{gene}/all_pcps.csv`` (and thus the per-clade PCPs and
+        # gene-sliced founders).
+        expand(
+            os.path.join(OUTDIR, "pcps/{gene}/pcp_curation_report.txt"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
+        ),
+        # Per-gene founder-slice collectors (tree x gene): each pulls in that
+        # gene's ``clade_founders/{gene}/{clade}.fa`` slices for every clade.
+        expand(
+            os.path.join(OUTDIR, "clade_founders/{gene}/founders.done"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
+        ),
+        # Per-gene DASM codon masks (tree x gene).
+        expand(
+            os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
+        ),
+        # Per-gene DASM-ready PCPs (tree x gene): aggregate file + per-clade sentinel.
+        expand(
+            os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
+        ),
+        expand(
+            os.path.join(OUTDIR, "pcps/{gene}/dasm_ready_per_clade.done"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
+        ),
+        # Per-gene PCP-vs-counts validation reports (tree x gene).
+        expand(
+            os.path.join(OUTDIR, "validation/{gene}/pcp_vs_counts_report.txt"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
         )
 
 
@@ -653,10 +673,9 @@ rule extract_pcps_by_clade:
         clade_founder_fasta=CLADE_FOUNDER_FASTA,
         coding_sites=rules.ref_coding_sites.output.csv
     output:
-        pcps=os.path.join(OUTDIR, "pcps/{clade}_pcps.csv"),
-        filtered_branches=os.path.join(OUTDIR, "pcps/{clade}_filtered_branches.csv")
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv"),
+        filtered_branches=os.path.join(OUTDIR, "pcps/{gene}/{clade}_filtered_branches.csv")
     params:
-        gene_region=config.get("pcp_gene_region", None),
         max_nt_mutations=config.get("pcp_max_nt_mutations", 4),
         max_reversions_to_ref=config.get("pcp_max_reversions_to_ref", 1),
         max_reversions_to_clade_founder=config.get("pcp_max_reversions_to_clade_founder", 1)
@@ -665,9 +684,9 @@ rule extract_pcps_by_clade:
         mem_mb=8000,
         runtime=120
     benchmark:
-        os.path.join(OUTDIR, "benchmarks/extract_pcps_{clade}.tsv")
+        os.path.join(OUTDIR, "benchmarks/extract_pcps_{gene}_{clade}.tsv")
     log:
-        os.path.join(OUTDIR, "log/extract_pcps_{clade}.log")
+        os.path.join(OUTDIR, "log/extract_pcps_{gene}_{clade}.log")
     conda:
         "envs/bte.yml"
     script:
@@ -675,15 +694,15 @@ rule extract_pcps_by_clade:
 
 
 rule aggregate_clade_pcps:
-    """Aggregate all clade-specific PCPs into a single file."""
+    """Aggregate a gene's clade-specific PCPs into a single file."""
     input:
         pcps=lambda wc: per_clade_inputs(
-            os.path.join(OUTDIR, "pcps/{clade}_pcps.csv"), wc
+            os.path.join(OUTDIR, "pcps", wc.gene, "{clade}_pcps.csv"), wc
         )
     output:
-        all_pcps=os.path.join(OUTDIR, "pcps/all_pcps.csv")
+        all_pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv")
     log:
-        os.path.join(OUTDIR, "log/aggregate_clade_pcps.log")
+        os.path.join(OUTDIR, "log/aggregate_clade_pcps_{gene}.log")
     conda:
         "envs/default.yml"
     script:
@@ -695,13 +714,13 @@ rule aggregate_filtered_branches:
     input:
         curated_pcps=rules.aggregate_clade_pcps.output.all_pcps,
         filtered_branches=lambda wc: per_clade_inputs(
-            os.path.join(OUTDIR, "pcps/{clade}_filtered_branches.csv"), wc
+            os.path.join(OUTDIR, "pcps", wc.gene, "{clade}_filtered_branches.csv"), wc
         )
     output:
-        report=os.path.join(OUTDIR, "pcps/pcp_curation_report.txt"),
-        filtered_branches=os.path.join(OUTDIR, "pcps/filtered_branch_ids.csv")
+        report=os.path.join(OUTDIR, "pcps/{gene}/pcp_curation_report.txt"),
+        filtered_branches=os.path.join(OUTDIR, "pcps/{gene}/filtered_branch_ids.csv")
     log:
-        os.path.join(OUTDIR, "log/aggregate_filtered_branches.log")
+        os.path.join(OUTDIR, "log/aggregate_filtered_branches_{gene}.log")
     conda:
         "envs/default.yml"
     script:
@@ -726,19 +745,23 @@ rule aggregate_filtered_branches:
 # ``data-central/scripts/filter_viral_pcps.sh`` step.
 
 rule curate_pcps_for_dasm:
-    """Apply DASM-ready filters and train/val split to a single clade's PCPs."""
+    """Apply DASM-ready filters and train/val split to one clade's gene PCPs.
+
+    Fanned over ``pcp_genes`` x clades: each protein's PCPs are filtered
+    against that protein's own codon mask (``{gene}_codon_sites_to_mask.txt``).
+    """
     input:
-        pcps=rules.extract_pcps_by_clade.output.pcps,
-        mask_sites=os.path.join(OUTDIR, SPIKE_MASK_FILENAME)
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv"),
+        mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
     output:
-        dasm_ready=os.path.join(OUTDIR, "pcps/{clade}_pcps_dasm_ready.csv"),
-        report=os.path.join(OUTDIR, "pcps/{clade}_dasm_filter_report.txt"),
-        stats=os.path.join(OUTDIR, "pcps/{clade}_dasm_filter_stats.json")
+        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps_dasm_ready.csv"),
+        report=os.path.join(OUTDIR, "pcps/{gene}/{clade}_dasm_filter_report.txt"),
+        stats=os.path.join(OUTDIR, "pcps/{gene}/{clade}_dasm_filter_stats.json")
     params:
         seed=1729,
         val_fraction=0.10
     log:
-        os.path.join(OUTDIR, "log/curate_pcps_for_dasm_{clade}.log")
+        os.path.join(OUTDIR, "log/curate_pcps_for_dasm_{gene}_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -752,17 +775,17 @@ rule curate_all_pcps_for_dasm:
     convention; this matches ``filter_viral_pcps.sh``'s guardrail.
     """
     input:
-        pcps=rules.aggregate_clade_pcps.output.all_pcps,
-        mask_sites=os.path.join(OUTDIR, SPIKE_MASK_FILENAME)
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv"),
+        mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
     output:
-        dasm_ready=os.path.join(OUTDIR, "pcps/all_pcps_dasm_ready.csv"),
-        report=os.path.join(OUTDIR, "pcps/all_dasm_filter_report.txt"),
-        stats=os.path.join(OUTDIR, "pcps/all_dasm_filter_stats.json")
+        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv"),
+        report=os.path.join(OUTDIR, "pcps/{gene}/all_dasm_filter_report.txt"),
+        stats=os.path.join(OUTDIR, "pcps/{gene}/all_dasm_filter_stats.json")
     params:
         seed=42,
         val_fraction=0.10
     log:
-        os.path.join(OUTDIR, "log/curate_all_pcps_for_dasm.log")
+        os.path.join(OUTDIR, "log/curate_all_pcps_for_dasm_{gene}.log")
     conda:
         "envs/default.yml"
     script:
@@ -770,24 +793,24 @@ rule curate_all_pcps_for_dasm:
 
 
 def _dasm_ready_per_clade_outputs(wildcards):
-    """Per-clade dasm-ready outputs - fans out over clades_w_adequate_counts."""
+    """One gene's per-clade dasm-ready outputs - fans over clades_w_adequate_counts."""
     return expand(
-        os.path.join(OUTDIR, "pcps/{clade}_pcps_dasm_ready.csv"),
+        os.path.join(OUTDIR, "pcps", wildcards.gene, "{clade}_pcps_dasm_ready.csv"),
         tree=wildcards.tree,
         clade=clades_w_adequate_counts(wildcards),
     )
 
 
 rule dasm_ready_pcps_all_clades:
-    """Collector target for the per-clade DASM-ready outputs.
+    """Collector target for one gene's per-clade DASM-ready outputs.
 
-    Aggregates the per-clade ``*_pcps_dasm_ready.csv`` files into a single
-    "everything is built" signal so ``rule all`` can depend on one path.
+    Aggregates a gene's per-clade ``*_pcps_dasm_ready.csv`` files into a single
+    "everything is built" signal so ``rule all`` can depend on one path per gene.
     """
     input:
         _dasm_ready_per_clade_outputs
     output:
-        sentinel=os.path.join(OUTDIR, "pcps/dasm_ready_per_clade.done")
+        sentinel=os.path.join(OUTDIR, "pcps/{gene}/dasm_ready_per_clade.done")
     shell:
         "touch {output.sentinel}"
 
@@ -817,119 +840,77 @@ rule clade_founder_jsons:
         """
 
 
-# ---------------------------------------------------------------------------
-# Gene-sliced founder FASTA path resolution  (v2 single-gene shim)
-# ---------------------------------------------------------------------------
-#
-# In v2, the pipeline slices PCPs to exactly ONE gene region (controlled by the
-# top-level ``pcp_gene_region`` config key — Spike by default). Issue #76 added
-# a matching gene-sliced founder FASTA per clade so that downstream training
-# (ParentIndependent DASM) has a wildtype that byte-aligns with the parent/child
-# sequences in ``pcps/{clade}_pcps.csv``.
-#
-# The output path is ``clade_founders/<dirname>/<clade>.fa``. ``<dirname>`` is
-# resolved from the gene symbol (``pcp_gene_region.gene``) via the
-# ``GENE_FOUNDER_DIRNAMES`` map below. The whole reason this map exists is so
-# that the canonical Spike path is the human-readable ``clade_founders/spike/``
-# rather than ``clade_founders/S/`` (the issue spec calls for ``spike/``).
-# Any gene symbol not in the map falls back to its lowercase form.
-#
-# CAVEAT — this is a single-gene shim, NOT the v3 design.
-#
-# Today the structure is:
-#   pcp_gene_region:        # exactly one gene, top-level key
-#     gene: S
-#     start: 21563
-#     end: 25381
-# which produces exactly one output directory.
-#
-# v3 will need multi-gene slicing (e.g. N, ORF1ab in addition to S). When that
-# lands, the config block should become a list — something like
-# ``gene_slice_outputs: [{gene: S, ...}, {gene: N, ...}]`` — and this map +
-# helper will be replaced by an explicit ``dirname`` field per gene block, so
-# that names like ``clade_founders/spike/`` and ``clade_founders/nucleocapsid/``
-# come straight from config rather than from a hardcoded lookup table. The
-# fallback (lowercase gene symbol) exists so that adding a *new* single-gene
-# config (e.g. switch to ``gene: N``) still produces a sensible path
-# (``clade_founders/n/``) without a code change.
-#
-# v3 epic (tracking issue, multi-gene refactor): #84.
-#
-# When you change this, check:
-#   - ``OUTPUT_SCHEMA.md`` → "Clade Founder Sequences" section names the
-#     ``clade_founders/spike/{clade}.fa`` path explicitly.
-#   - ``workflow/scripts/test_summary.py`` (``summarize_spike_founders``) looks
-#     at ``clade_founders/spike/`` by hardcoded path.
-#   - ``data/test_data/expected_summary.json`` lists ``spike_founders_summary``
-#     with the 19A md5 sentinel; the sentinel only applies to the Spike slice.
-GENE_FOUNDER_DIRNAMES = {"S": "spike"}
-
-
-def gene_founder_dirname(gene_symbol):
-    """Return the founder-FASTA subdir name for ``gene_symbol``.
-
-    Maps known gene symbols to their conventional human-readable directory
-    names (``S`` → ``spike``); falls back to the lowercased symbol for any
-    gene not in ``GENE_FOUNDER_DIRNAMES``. Returns ``None`` when no symbol
-    is provided so the caller can omit the gene-sliced output.
-
-    See the comment block above ``GENE_FOUNDER_DIRNAMES`` for why this exists
-    and how it should evolve in v3.
-    """
-    if not gene_symbol:
-        return None
-    return GENE_FOUNDER_DIRNAMES.get(gene_symbol, gene_symbol.lower())
-
-
-def _gene_sliced_founder_outputs():
-    """Return a list of gene-sliced founder FASTA output paths.
-
-    Empty list when ``pcp_gene_region`` is unset, so ``output: gene_fasta=[]``
-    becomes a no-op for that wildcard slot. Single-element list otherwise.
-
-    Returning a list in all branches keeps the type consistent — any future
-    extension to multi-gene slicing can simply append more paths without
-    changing the calling convention. The script side guards on
-    ``getattr(snakemake.output, "gene_fasta", None)`` since the attribute is
-    absent from ``snakemake.output`` (not just empty) when this returns ``[]``.
-    """
-    gene_region = config.get("pcp_gene_region")
-    if not gene_region:
-        return []
-    dirname = gene_founder_dirname(gene_region.get("gene"))
-    if not dirname:
-        return []
-    return [
-        os.path.join(
-            OUTDIR, "clade_founders", dirname, "{clade}.fa"
-        )
-    ]
-
-
 rule clade_founder_fasta:
-    """Generate the founder FASTA for each clade.
+    """Generate the whole-genome founder FASTA for each clade.
 
-    Emits the whole-genome founder FASTA and, when ``pcp_gene_region`` is
-    configured, a gene-sliced founder FASTA (e.g. ``clade_founders/spike/{clade}.fa``
-    for the canonical Spike slice). Gene-sliced founders are needed for training
-    ParentIndependent DASM models.
+    The per-gene, in-frame founder slices used as DASM wildtypes are produced
+    separately by ``slice_founder_gene`` (which consumes this founder).
     """
     input:
         neher_json=rules.clade_founder_jsons.output.neher_json,
         roemer_json=rules.clade_founder_jsons.output.roemer_json,
         ref_fasta=rules.get_ref_fasta.output.ref_fasta
     output:
-        fasta=CLADE_FOUNDER_FASTA,
-        gene_fasta=_gene_sliced_founder_outputs()
+        fasta=CLADE_FOUNDER_FASTA
     params:
-        roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {}),
-        pcp_gene_region=config.get("pcp_gene_region")
+        roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {})
     log:
         os.path.join(OUTDIR, "log/clade_founder_{clade}.log")
     conda:
         "envs/default.yml"
     script:
         "scripts/clade_founder_fasta.py"
+
+
+# ---------------------------------------------------------------------------
+# Gene-sliced founder FASTAs
+# ---------------------------------------------------------------------------
+#
+# One in-frame founder slice is emitted per (gene, clade) at
+# ``clade_founders/<gene>/<clade>.fa`` using the gene symbol verbatim. Each is
+# sliced from that clade's whole-genome founder on the reference GTF's CDS
+# blocks (via ``sequences.slice_cds``), so it byte-aligns with the PCP
+# parent/child slices and can serve as the wildtype for training
+# ParentIndependent DASM models. Fanning over a ``{gene}`` wildcard keeps the
+# per-protein conditionality in the DAG rather than in a conditional output
+# list on ``clade_founder_fasta`` (issue #95).
+
+rule slice_founder_gene:
+    """Slice one gene's in-frame CDS out of a clade's whole-genome founder."""
+    input:
+        fasta=rules.clade_founder_fasta.output.fasta,
+        gtf=rules.edit_ref_gtf.output.gtf
+    output:
+        gene_fasta=os.path.join(OUTDIR, "clade_founders/{gene}/{clade}.fa")
+    log:
+        os.path.join(OUTDIR, "log/slice_founder_gene_{gene}_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/slice_founder_gene.py"
+
+
+def _gene_founder_slices(wildcards):
+    """Every adequate-count clade's founder slice for one gene."""
+    return per_clade_inputs(
+        os.path.join(OUTDIR, "clade_founders", wildcards.gene, "{clade}.fa"),
+        wildcards,
+    )
+
+
+rule gene_founders_all_clades:
+    """Collector target for one gene's per-clade founder slices.
+
+    Aggregates every adequate-count clade's ``clade_founders/<gene>/<clade>.fa``
+    into a single "everything is built" signal so ``rule all`` can depend on one
+    path per gene.
+    """
+    input:
+        _gene_founder_slices
+    output:
+        sentinel=os.path.join(OUTDIR, "clade_founders/{gene}/founders.done")
+    shell:
+        "touch {output.sentinel}"
 
 
 # =============================================================================
@@ -1183,15 +1164,17 @@ rule get_rates_table:
 
 
 rule get_problematic_sites:
-    """Identify problematic codon sites in target gene for masking."""
+    """Identify problematic codon sites in one gene's CDS for masking.
+
+    Fanned over ``pcp_genes``: emits ``<gene>_codon_sites_to_mask.txt`` per
+    configured protein (the gene comes from the ``{gene}`` wildcard).
+    """
     input:
         expected_vs_actual=rules.build_count_table.output.csv
     output:
-        sites_to_mask=os.path.join(OUTDIR, SPIKE_MASK_FILENAME)
-    params:
-        masking_gene=config.get("masking_gene", "S")
+        sites_to_mask=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
     log:
-        os.path.join(OUTDIR, "log/get_problematic_sites.log")
+        os.path.join(OUTDIR, "log/get_problematic_sites_{gene}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1326,18 +1309,17 @@ rule aggregate_aamut_fitness:
 # =============================================================================
 
 rule extract_mutations_from_pcps:
-    """Extract AA mutation counts from PCPs by translating sequences."""
+    """Extract AA mutation counts from one protein's PCPs by translating.
+
+    Fanned over ``pcp_genes``: translates each protein's gene-sliced PCP
+    sequences (``pcps/{gene}/all_pcps.csv``) into per-codon AA mutations.
+    """
     input:
-        pcps=rules.aggregate_clade_pcps.output.all_pcps,
-        ref_fasta=rules.get_ref_fasta.output.ref_fasta
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv")
     output:
-        aa_counts=os.path.join(OUTDIR, "validation/pcp_aa_counts.csv")
-    params:
-        pcp_gene_region=config.get("pcp_gene_region", None),
-        max_nt_mutations=config["max_nt_mutations"],
-        max_reversions_to_ref=config["max_reversions_to_ref"]
+        aa_counts=os.path.join(OUTDIR, "validation/{gene}/pcp_aa_counts.csv")
     log:
-        os.path.join(OUTDIR, "log/extract_mutations_from_pcps.log")
+        os.path.join(OUTDIR, "log/extract_mutations_from_pcps_{gene}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1345,7 +1327,12 @@ rule extract_mutations_from_pcps:
 
 
 rule validate_pcp_vs_counts:
-    """Validate PCP-derived AA counts match aamut_fitness actual_count."""
+    """Validate one protein's PCP-derived AA counts match aamut_fitness actual_count.
+
+    Fanned over ``pcp_genes``. ``extract_mutations_from_pcps`` carries the
+    ``{gene}`` wildcard; the aamut_fitness inputs hold every gene and are
+    filtered to ``{gene}`` in the script.
+    """
     input:
         pcp_counts=rules.extract_mutations_from_pcps.output.aa_counts,
         aamut_fitness_files=lambda wc: per_clade_inputs(
@@ -1353,12 +1340,10 @@ rule validate_pcp_vs_counts:
         ),
         all_aamut_fitness=rules.aggregate_aamut_fitness.output.csv
     output:
-        report=os.path.join(OUTDIR, "validation/pcp_vs_counts_report.txt"),
-        discrepancies=os.path.join(OUTDIR, "validation/pcp_vs_counts_discrepancies.csv")
-    params:
-        pcp_gene_name=config.get("pcp_gene_region", {}).get("gene", None) if config.get("pcp_gene_region") else None
+        report=os.path.join(OUTDIR, "validation/{gene}/pcp_vs_counts_report.txt"),
+        discrepancies=os.path.join(OUTDIR, "validation/{gene}/pcp_vs_counts_discrepancies.csv")
     log:
-        os.path.join(OUTDIR, "log/validate_pcp_vs_counts.log")
+        os.path.join(OUTDIR, "log/validate_pcp_vs_counts_{gene}.log")
     conda:
         "envs/default.yml"
     script:

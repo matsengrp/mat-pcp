@@ -49,9 +49,9 @@ if len(dfs) == 0:
             "aa_mutation",
             "expected_count",
             "actual_count",
-            "naive_delta_fitness",
+            "delta_fitness_ratio",
             "subset_of_ORF1ab",
-            "delta_fitness",
+            "delta_fitness_bayesian",
             "uncertainty",
             "source_clade",
         ]
@@ -77,10 +77,10 @@ else:
         if col in all_data.columns:
             agg_dict[col] = "sum"
 
-    if "delta_fitness" in all_data.columns and "uncertainty" in all_data.columns:
+    if "delta_fitness_bayesian" in all_data.columns and "uncertainty" in all_data.columns:
         # Compute weighted average fitness
         all_data["weight"] = 1 / (all_data["uncertainty"] ** 2 + 0.001)
-        all_data["weighted_fitness"] = all_data["delta_fitness"] * all_data["weight"]
+        all_data["weighted_fitness"] = all_data["delta_fitness_bayesian"] * all_data["weight"]
         agg_dict["weight"] = "sum"
         agg_dict["weighted_fitness"] = "sum"
 
@@ -91,15 +91,15 @@ else:
 
         # Compute aggregated fitness
         if "weighted_fitness" in aggregated.columns and "weight" in aggregated.columns:
-            aggregated["delta_fitness"] = (
+            aggregated["delta_fitness_bayesian"] = (
                 aggregated["weighted_fitness"] / aggregated["weight"]
             )
             aggregated["uncertainty"] = np.sqrt(1 / aggregated["weight"])
             aggregated.drop(columns=["weight", "weighted_fitness"], inplace=True)
 
-        # Recompute naive fitness
+        # Recompute the pseudocount delta-fitness
         if "actual_count" in aggregated.columns and "expected_count" in aggregated.columns:
-            aggregated["naive_delta_fitness"] = np.log(
+            aggregated["delta_fitness_ratio"] = np.log(
                 (aggregated["actual_count"] + 0.5)
                 / (aggregated["expected_count"] + 0.5)
             )

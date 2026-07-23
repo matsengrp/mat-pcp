@@ -19,7 +19,7 @@ SPIKE_19A_SENTINEL_MD5 = "b948f2a1f20edbce64cfff1dc540c119"
 # on the test dataset (#80). These md5s come from running the reference
 # implementation in ``dasm2.preprocess_command.preprocess`` (the same
 # function that ``data-central/scripts/filter_viral_pcps.sh`` invokes) on
-# the test pipeline's ``all_pcps.csv`` + ``spike_codon_sites_to_mask.txt``
+# the test pipeline's ``all_pcps.csv`` + ``S_codon_sites_to_mask.txt``
 # with the canonical seeds. A mismatch here means either the filter logic
 # drifted from dasm2 or the train/val RNG call sequence changed.
 DASM_READY_ALL_SENTINEL_MD5 = "5e538bd088e676b485a11a04745221e9"
@@ -273,7 +273,8 @@ def compare_summaries(actual, expected):
                             f"got {act_aa[key]}"
                         )
             # Floating-point sums can vary more across platforms, use looser tolerance
-            for key in ['expected_count_sum', 'delta_fitness_sum']:
+            for key in ['expected_count_sum', 'delta_fitness_ratio_sum',
+                        'delta_fitness_bayesian_sum']:
                 if key in exp_aa and key in act_aa:
                     if not is_close(act_aa[key], exp_aa[key], rel_tol=0.01):
                         rel_diff = (
@@ -685,22 +686,26 @@ def validate_spike_mask_all_clades(output_dir, masking_gene="S"):
 
     Re-derives the expected mask from counts_all.csv using the all-clades rule
     (a nt_site qualifies iff every row at it has exclude==True) restricted to the
-    masking gene, and asserts the emitted ``spike_codon_sites_to_mask.txt`` matches.
+    masking gene, and asserts the emitted ``{gene}_codon_sites_to_mask.txt`` matches.
     This pins the clade-agnostic behavior: a regression to per-clade masking would
     add clade-specific codon sites and fail here.
     """
     import pandas as pd
 
     counts_path = os.path.join(output_dir, "counts_all.csv")
-    mask_path = os.path.join(output_dir, "spike_codon_sites_to_mask.txt")
+    mask_path = os.path.join(output_dir, f"{masking_gene}_codon_sites_to_mask.txt")
     if not os.path.exists(counts_path):
         return [f"counts_all.csv not found under {output_dir}"], None
     if not os.path.exists(mask_path):
-        return [f"spike_codon_sites_to_mask.txt not found under {output_dir}"], None
+        return [f"{masking_gene}_codon_sites_to_mask.txt not found under {output_dir}"], None
 
     df = pd.read_csv(counts_path)
     site_all_excluded = (df["exclude"] == True).groupby(df["nt_site"]).transform("all")  # noqa: E712
-    in_gene = df["gene"].astype(str).str.contains(masking_gene, na=False)
+    # Exact gene membership (mirrors get_problematic_sites.py, #114): split
+    # compound cells (e.g. "S;ORF3a") on ";" so the mask can't bleed a gene
+    # symbol into a longer one once this validator is used for other genes.
+    gene_members = df["gene"].astype(str).str.split(";")
+    in_gene = gene_members.apply(lambda members: masking_gene in [g.strip() for g in members])
     expected = _parse_codon_sites(df[site_all_excluded & in_gene]["codon_site"])
 
     with open(mask_path) as f:
@@ -714,6 +719,55 @@ def validate_spike_mask_all_clades(output_dir, masking_gene="S"):
         )
     summary = None if differences else (
         f"{len(emitted)} codon sites, all excluded across every clade"
+    )
+    return differences, summary
+
+
+_STOP_CODONS = {"TAA", "TAG", "TGA"}
+
+
+def validate_orf1ab_founder(output_dir):
+    """The ORF1ab gene-sliced founder must be a valid in-frame CDS.
+
+    Confirms the two-block frameshift reconstruction (the GTF's ORF1ab CDS
+    blocks share nt 13468, read twice): the 19A ORF1ab founder slice is 21288
+    nt (7096 codons) and translates with no internal stop codon. Skips only when
+    ORF1ab is not among ``pcp_genes`` (its founder subdir is absent), so
+    Spike-only configs still pass; if the subdir exists but the file is missing
+    that is a real failure, not a silent skip.
+
+    Translation uses a hand-rolled codon table (stdlib only) since this script
+    runs in an environment without biopython.
+    """
+    gene_dir = os.path.join(output_dir, "clade_founders", "ORF1ab")
+    if not os.path.isdir(gene_dir):
+        # ORF1ab not among pcp_genes for this run: nothing to validate.
+        return [], None
+    path = os.path.join(gene_dir, "19A.fa")
+    if not os.path.exists(path):
+        return [f"ORF1ab founder expected at {path} but missing "
+                "(clade_founders/ORF1ab/ exists, so ORF1ab was configured)"], None
+
+    with open(path) as f:
+        seq = "".join(line.strip() for line in f if not line.startswith(">")).upper()
+
+    differences = []
+    if len(seq) % 3 != 0:
+        differences.append(f"ORF1ab founder length {len(seq)} not divisible by 3")
+    if len(seq) != 21288:
+        differences.append(f"ORF1ab founder length {len(seq)} != expected 21288")
+    stops = [
+        (i // 3) + 1
+        for i in range(0, len(seq) - len(seq) % 3, 3)
+        if seq[i : i + 3] in _STOP_CODONS
+    ]
+    if stops:
+        differences.append(
+            f"ORF1ab founder translation has internal stop codon(s) at codon {stops[:5]}"
+        )
+
+    summary = None if differences else (
+        f"ORF1ab founder in-frame: {len(seq)} nt = {len(seq) // 3} codons, no internal stop"
     )
     return differences, summary
 
@@ -783,7 +837,10 @@ def main():
     mut_mask_diffs, mut_mask_summary = validate_usher_mutation_masking(output_dir)
     reversion_diffs, reversion_summary = validate_reversion_masking(output_dir)
     spike_mask_diffs, spike_mask_summary = validate_spike_mask_all_clades(output_dir)
-    differences += site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
+    orf1ab_diffs, orf1ab_summary = validate_orf1ab_founder(output_dir)
+    differences += (
+        site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs + orf1ab_diffs
+    )
 
     if differences:
         print("VALIDATION FAILED!")
@@ -813,6 +870,8 @@ def main():
             print(f"  - Founder->reference reversions: {reversion_summary}")
         if spike_mask_summary:
             print(f"  - Spike codon mask (all-clades): {spike_mask_summary}")
+        if orf1ab_summary:
+            print(f"  - {orf1ab_summary}")
         sys.exit(0)
 
 

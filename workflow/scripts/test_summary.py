@@ -9,10 +9,11 @@ from pathlib import Path
 
 import pandas as pd
 
-# Must match ``GENE_FOUNDER_DIRNAMES["S"]`` in ``workflow/Snakefile``. Pulled
-# into a named constant so a v3 multi-gene refactor that changes the dirname
-# can be found by grep rather than a bare-string sweep across the codebase.
-SPIKE_FOUNDER_DIRNAME = "spike"
+# Subdirectory (under ``clade_founders/`` and ``pcps/``) holding the Spike
+# outputs. Since #92, per-gene outputs use the gene symbol verbatim, so this is
+# just ``S``. Kept as a named constant so the Spike-pinned summary/validation
+# checks are greppable while #108/#109 generalize them over all proteins.
+SPIKE_FOUNDER_DIRNAME = "S"
 
 
 def get_file_stats(filepath):
@@ -111,11 +112,12 @@ def summarize_spike_founders(spike_founders_dir):
     canonical cross-version sentinel (see ``SPIKE_19A_SENTINEL_MD5`` in
     ``validate_test.py``).
 
-    NOTE: This helper assumes the v2 single-gene layout where the gene-sliced
-    founder directory is hardcoded to ``clade_founders/<SPIKE_FOUNDER_DIRNAME>/``.
-    When v3 introduces multi-gene slicing, this should fan out over every
-    configured ``gene_slice_outputs`` entry. See the comment block above
-    ``GENE_FOUNDER_DIRNAMES`` in ``workflow/Snakefile`` for the wider context.
+    NOTE: This test-harness helper stays intentionally Spike-pinned to the
+    ``clade_founders/<SPIKE_FOUNDER_DIRNAME>/`` directory as the byte-stable
+    regression sentinel, even though the pipeline now emits gene-sliced founders
+    for every protein in ``pcp_genes`` (``clade_founders/<gene>/``). Keeping it
+    Spike-only is deliberate (see the #94 single-gene-assumption audit); it is
+    not a TODO.
     """
     if not os.path.exists(spike_founders_dir):
         return None
@@ -211,8 +213,13 @@ def summarize_aamut_fitness(aamut_fitness_dir):
         summary['expected_count_sum'] = float(df['expected_count'].sum())
     if 'actual_count' in df.columns:
         summary['actual_count_sum'] = float(df['actual_count'].sum())
-    if 'delta_fitness' in df.columns:
-        summary['delta_fitness_sum'] = float(df['delta_fitness'].sum())
+    # The two v6 delta-fitness columns (#89): the primary pseudocount log-ratio
+    # (delta_fitness_ratio) and the Bayesian estimate (delta_fitness_bayesian).
+    # Both are GLM-derived -> loose tolerance in validate_test.py.
+    if 'delta_fitness_ratio' in df.columns:
+        summary['delta_fitness_ratio_sum'] = float(df['delta_fitness_ratio'].sum())
+    if 'delta_fitness_bayesian' in df.columns:
+        summary['delta_fitness_bayesian_sum'] = float(df['delta_fitness_bayesian'].sum())
 
     # Add checksum for the aggregated file
     summary['checksum'] = hashlib.md5(open(all_fitness_file, 'rb').read()).hexdigest()
@@ -225,6 +232,8 @@ def main(results_dir):
     results_path = Path(results_dir)
     mat_path = results_path / "mat"
     pcps_path = results_path / "pcps"
+    # Spike PCP/DASM outputs live under pcps/S/ since #92 (per-gene layout).
+    spike_pcps_path = pcps_path / SPIKE_FOUNDER_DIRNAME
 
     summary = {
         'results_directory': str(results_path),
@@ -240,7 +249,7 @@ def main(results_dir):
 
     # Check key output files
     key_files = [
-        pcps_path / "all_pcps.csv",
+        spike_pcps_path / "all_pcps.csv",
         mat_path / "clade_counts.csv",
         mat_path / "filtered_metadata.tsv.gz",
         mat_path / "filtered_tree_raw.pb"
@@ -250,7 +259,7 @@ def main(results_dir):
         summary['files'][str(filepath)] = get_file_stats(str(filepath))
 
     # Get PCP summary
-    pcp_file = pcps_path / "all_pcps.csv"
+    pcp_file = spike_pcps_path / "all_pcps.csv"
     if pcp_file.exists():
         summary['pcp_summary'] = summarize_pcps(str(pcp_file))
 
@@ -284,8 +293,8 @@ def main(results_dir):
     spike_founders_dir = results_path / "clade_founders" / SPIKE_FOUNDER_DIRNAME
     summary['spike_founders_summary'] = summarize_spike_founders(str(spike_founders_dir))
 
-    # Get DASM-ready PCP summary (#80)
-    summary['dasm_ready_pcps_summary'] = summarize_dasm_ready_pcps(str(pcps_path))
+    # Get DASM-ready PCP summary (#80); Spike outputs live under pcps/S/.
+    summary['dasm_ready_pcps_summary'] = summarize_dasm_ready_pcps(str(spike_pcps_path))
 
     # Get amino acid fitness summary
     aamut_fitness_dir = results_path / "aamut_fitness"
