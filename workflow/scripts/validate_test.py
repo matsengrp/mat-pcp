@@ -273,7 +273,7 @@ def compare_summaries(actual, expected):
                             f"got {act_aa[key]}"
                         )
             # Floating-point sums can vary more across platforms, use looser tolerance
-            for key in ['expected_count_sum', 'delta_fitness_pseudo_sum',
+            for key in ['expected_count_sum', 'delta_fitness_ratio_sum',
                         'delta_fitness_bayesian_sum']:
                 if key in exp_aa and key in act_aa:
                     if not is_close(act_aa[key], exp_aa[key], rel_tol=0.01):

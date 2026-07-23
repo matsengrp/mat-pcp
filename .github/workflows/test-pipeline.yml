@@ -877,7 +877,7 @@ jobs:
                 # Check fitness columns
                 if len(fit_df) > 0:
                     assert 'delta_fitness_bayesian' in fit_df.columns, 'Missing delta_fitness_bayesian'
-                    assert 'delta_fitness_pseudo' in fit_df.columns, 'Missing delta_fitness_pseudo'
+                    assert 'delta_fitness_ratio' in fit_df.columns, 'Missing delta_fitness_ratio'
                     # Note: aa_mutation may not be present if upstream data doesn't have it
                     # (aa_mutation info is in actual counts but not expected counts)
                     if 'aa_mutation' in fit_df.columns:
@@ -905,7 +905,7 @@ jobs:
             # Check required columns (aggregate uses the v6 renamed delta columns;
             # per-clade files keep the internal names).
             assert 'delta_fitness_bayesian' in agg.columns, 'Missing delta_fitness_bayesian'
-            assert 'delta_fitness_pseudo' in agg.columns, 'Missing delta_fitness_pseudo'
+            assert 'delta_fitness_ratio' in agg.columns, 'Missing delta_fitness_ratio'
             # Note: aa_mutation may not be present if upstream data doesn't have it
 
             if 'gene' in agg.columns:
@@ -915,7 +915,7 @@ jobs:
                 print(f'Sample aa_mutations: {agg[\"aa_mutation\"].dropna().head(5).tolist()}')
             else:
                 print('Note: aa_mutation column not present (expected with current data flow)')
-            print(f'delta_fitness_pseudo range: [{agg[\"delta_fitness_pseudo\"].min():.2f}, {agg[\"delta_fitness_pseudo\"].max():.2f}]')
+            print(f'delta_fitness_ratio range: [{agg[\"delta_fitness_ratio\"].min():.2f}, {agg[\"delta_fitness_ratio\"].max():.2f}]')
         "
 
     - name: Verify PCP-derived AA counts

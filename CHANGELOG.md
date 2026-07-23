@@ -56,7 +56,7 @@ hardcoded gene (Spike) to a config-driven list of proteins. Tracks EPIC
 
 - **Delta-fitness columns renamed in the amino-acid fitness outputs**
   ([#89](https://github.com/matsengrp/mat-pcp/issues/89)): `naive_delta_fitness`
-  -> **`delta_fitness_pseudo`** (the primary per-mutation signal) and
+  -> **`delta_fitness_ratio`** (the primary per-mutation signal) and
   `delta_fitness` -> **`delta_fitness_bayesian`** (inverse-variance-weighted
   estimate). Pure rename (values unchanged), applied consistently across the
   per-clade `{clade}_aamut_fitness.csv` files and the aggregate

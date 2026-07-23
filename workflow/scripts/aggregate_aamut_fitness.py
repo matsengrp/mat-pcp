@@ -49,7 +49,7 @@ if len(dfs) == 0:
             "aa_mutation",
             "expected_count",
             "actual_count",
-            "delta_fitness_pseudo",
+            "delta_fitness_ratio",
             "subset_of_ORF1ab",
             "delta_fitness_bayesian",
             "uncertainty",
@@ -99,7 +99,7 @@ else:
 
         # Recompute the pseudocount delta-fitness
         if "actual_count" in aggregated.columns and "expected_count" in aggregated.columns:
-            aggregated["delta_fitness_pseudo"] = np.log(
+            aggregated["delta_fitness_ratio"] = np.log(
                 (aggregated["actual_count"] + 0.5)
                 / (aggregated["expected_count"] + 0.5)
             )

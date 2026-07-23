@@ -151,9 +151,9 @@ Masked mutations are excluded from every fitness output. Any mutation flagged `e
 |-------|------|----------|--------|
 | `f_max`, `f_mean`, `f_st_dev`, `left_conf_int`, `right_conf_int` | `fitness/ntmut_fitness_aggregated.csv` | `expected_count` (GLM) | Per-nucleotide **Bayesian Poisson** posterior over the fitness effect `f` |
 | `delta_fitness_bayesian`, `uncertainty` | `aamut_fitness/all_aamut_fitness.csv` | inherited from the nucleotide estimates | **Inverse-variance weighted average** of the nucleotide `f_mean` values over codon-equivalent mutations |
-| `delta_fitness_pseudo` | `aamut_fitness/all_aamut_fitness.csv` | `expected_count` (GLM) | Smoothed log-ratio: `log((actual_count + 0.5) / (expected_count + 0.5))` |
+| `delta_fitness_ratio` | `aamut_fitness/all_aamut_fitness.csv` | `expected_count` (GLM) | Smoothed log-ratio: `log((actual_count + 0.5) / (expected_count + 0.5))` |
 
-> **Output column names (v6):** the two delta columns are named **`delta_fitness_pseudo`** (the pseudocount log-ratio, the primary per-mutation signal) and **`delta_fitness_bayesian`** (the inverse-variance-weighted estimate). They were renamed in v6 from `naive_delta_fitness` and `delta_fitness` respectively, and the new names are used consistently across the per-clade `{clade}_aamut_fitness.csv` files, the aggregate, and the computation described below.
+> **Output column names (v6):** the two delta columns are named **`delta_fitness_ratio`** (the pseudocount log-ratio, the primary per-mutation signal) and **`delta_fitness_bayesian`** (the inverse-variance-weighted estimate). They were renamed in v6 from `naive_delta_fitness` and `delta_fitness` respectively, and the new names are used consistently across the per-clade `{clade}_aamut_fitness.csv` files, the aggregate, and the computation described below.
 
 ### Nucleotide-level Bayesian fitness
 
@@ -175,7 +175,7 @@ There is a single neutral baseline: `expected_count`, the **GLM-predicted** neut
 (incorporating substitution type, flanking-nucleotide context, RNA secondary structure, and
 light-switch position). Both fitness estimators use it:
 
-- `delta_fitness_pseudo` is a raw pseudocount-smoothed log-ratio against `expected_count`:
+- `delta_fitness_ratio` is a raw pseudocount-smoothed log-ratio against `expected_count`:
   `log((actual_count + 0.5) / (expected_count + 0.5))`.
 - `delta_fitness_bayesian` is the Bayesian estimate built on `expected_count` (via the Poisson
   rate `expected_count · exp(f)` and the GLM variance component `tau_squared`) — it is **not** a

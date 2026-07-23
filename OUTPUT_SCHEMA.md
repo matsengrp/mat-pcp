@@ -85,15 +85,15 @@ Amino acid-level fitness estimates aggregated across all clades. Fitness is comp
 | `aa_site` | integer | 1-indexed amino acid position within the gene. |
 | `aa_mutation` | string | Mutation string in standard format (e.g., "D614G"). |
 | `subset_of_ORF1ab` | boolean | True if this entry is for an NSP (ORF1ab subset); False otherwise. |
-| `expected_count` | float | GLM-predicted neutral count (sequence context + RNA structure + position); the baseline for both `delta_fitness_pseudo` and `delta_fitness_bayesian`. |
+| `expected_count` | float | GLM-predicted neutral count (sequence context + RNA structure + position); the baseline for both `delta_fitness_ratio` and `delta_fitness_bayesian`. |
 | `actual_count` | float | Observed mutation count in the data. |
-| `delta_fitness_pseudo` | float | Pseudocount log-ratio fitness: `log((actual + 0.5) / (expected + 0.5))`. The primary per-mutation signal rendered by the dasm2 dashboard (renamed from `naive_delta_fitness` in v6). |
+| `delta_fitness_ratio` | float | Pseudocount log-ratio fitness: `log((actual + 0.5) / (expected + 0.5))`. The primary per-mutation signal rendered by the dasm2 dashboard (renamed from `naive_delta_fitness` in v6). |
 | `delta_fitness_bayesian` | float | Inverse-variance-weighted Bayesian fitness estimate accounting for uncertainty (renamed from `delta_fitness` in v6). |
 | `uncertainty` | float | Standard error of the `delta_fitness_bayesian` estimate. |
 | `source_clade` | string | Semicolon-separated list of clades that contributed to this aggregated estimate. |
 
 **Notes:**
-- Positive `delta_fitness_pseudo` / `delta_fitness_bayesian` indicates the mutation is observed more often than expected (potentially beneficial).
+- Positive `delta_fitness_ratio` / `delta_fitness_bayesian` indicates the mutation is observed more often than expected (potentially beneficial).
 - Negative values indicate the mutation is observed less often than expected (potentially deleterious).
 - The `uncertainty` column can be used to filter for high-confidence estimates.
 - **Masking:** masked mutations (`exclude == True` in the count table) are dropped before fitness is computed (in `ntmut_counts_by_clade`), so no row here reflects counts from masked sites. Because masking is per-clade, a mutation masked only in some clades still contributes to the aggregate from clades where it is not masked.
@@ -108,7 +108,7 @@ Per-clade amino acid fitness estimates. Same schema as above but with `cluster` 
 
 (Other columns same as `all_aamut_fitness.csv`, excluding `source_clade`.)
 
-> **Column names:** these two delta columns were renamed in v6 (`naive_delta_fitness` → `delta_fitness_pseudo`, `delta_fitness` → `delta_fitness_bayesian`) and the new names are used consistently across the per-clade `{clade}_aamut_fitness.csv` files and the aggregate `all_aamut_fitness.csv`.
+> **Column names:** these two delta columns were renamed in v6 (`naive_delta_fitness` → `delta_fitness_ratio`, `delta_fitness` → `delta_fitness_bayesian`) and the new names are used consistently across the per-clade `{clade}_aamut_fitness.csv` files and the aggregate `all_aamut_fitness.csv`.
 
 ### `fitness/ntmut_fitness_aggregated.csv`
 

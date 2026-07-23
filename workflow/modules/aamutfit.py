@@ -101,7 +101,7 @@ def aggregate_counts(df, explode_cols):
     # tau_squared is deliberately not aggregated here: it is a nucleotide-level
     # log-scale variance used only by probfit (nt fitness). It never feeds the
     # amino-acid delta_fitness_bayesian (inverse-variance weighting of nt estimates) or
-    # delta_fitness_pseudo (from summed counts), so summing it into aa rows would
+    # delta_fitness_ratio (from summed counts), so summing it into aa rows would
     # only carry a meaningless column. See CHANGELOG v5.
     agg_dict = {}
     for col in ["expected_count", "actual_count"]:
@@ -228,7 +228,7 @@ def naive_fitness(aa_counts, fitness_pseudocount=0.5):
         fitness_pseudocount: Pseudocount for numerical stability
     """
     if "expected_count" in aa_counts.columns and "actual_count" in aa_counts.columns:
-        aa_counts["delta_fitness_pseudo"] = np.log(
+        aa_counts["delta_fitness_ratio"] = np.log(
             (aa_counts["actual_count"] + fitness_pseudocount)
             / (aa_counts["expected_count"] + fitness_pseudocount)
         )
