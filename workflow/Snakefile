@@ -472,15 +472,15 @@ rule export_newick:
 rule chronumental:
     """Infer node dates (tips + internal) for the full filtered tree.
 
-    Builds the strain->date table from the filtered metadata by header name
-    (robust to column order), then runs chronumental. Output ``node_dates.tsv``
-    has a header row then ``<node_id>\\t<predicted_date>`` for every node.
+    Feeds the filtered metadata straight to chronumental, which auto-detects the
+    strain/date columns (verified to give byte-identical dates to a hand-built
+    strain->date table). Output ``node_dates.tsv`` has a header row then
+    ``<node_id>\\t<predicted_date>`` for every node.
     """
     input:
         nwk=rules.export_newick.output.nwk,
         metadata=rules.filter_metadata.output.filtered_metadata
     output:
-        dates_in=os.path.join(OUTDIR, "mat/chronumental_dates_input.tsv"),
         node_dates=os.path.join(OUTDIR, "mat/node_dates.tsv"),
         # chronumental always writes the dated Newick tree; declare it (default
         # path is derived from --tree, so pass --tree_out explicitly) so it is
@@ -501,19 +501,10 @@ rule chronumental:
         "envs/chronumental.yml"
     shell:
         """
-        (
-            zcat {input.metadata} | \
-            awk -F'\\t' 'NR==1 {{for(i=1;i<=NF;i++){{if($i=="strain")s=i; if($i=="date")d=i}}
-                                print "strain\\tdate"; next}}
-                        s&&d {{print $s"\\t"$d}}
-                        END {{if(!s||!d){{print "chronumental: strain/date column not found in metadata header" > "/dev/stderr"; exit 1}}}}' \
-                > {output.dates_in}
-        ) 2>> {log.stderr}
-
         chronumental --tree {input.nwk} {params.chronumental_kwargs} \
-            --dates {output.dates_in} --dates_out {output.node_dates} \
+            --dates {input.metadata} --dates_out {output.node_dates} \
             --tree_out {output.dated_tree} \
-            >> {log.stdout} 2>> {log.stderr}
+            > {log.stdout} 2> {log.stderr}
         """
 
 
