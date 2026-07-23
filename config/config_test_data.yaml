@@ -50,6 +50,18 @@ chronumental_kwargs: "--steps 100"
 chronumental_max_median_abs_tip_residual_days: 30
 
 # =============================================================================
+# Window Fitness (sliding time windows)
+# =============================================================================
+# Sliding time windows over the full dated tree (EPIC #115 Phase 2+). Windows
+# anchor at window_end_time and tile backwards. On the test tree the node dates
+# span ~2020-01 .. ~2022, so 90/45 yields ~15-18 non-empty windows. Branch QC
+# reuses the Mutation-Counting keys below.
+window_size: 90            # window width in days (~3 months)
+window_step: 45            # window stride in days (half of window_size => 50% overlap)
+window_start_time: null    # ISO date, or null to use the tree's earliest node date
+window_end_time: null      # ISO date, or null to use the tree's latest node date
+
+# =============================================================================
 # Clade Configuration
 # =============================================================================
 clade_column: "Nextstrain_clade"
@@ -253,6 +265,7 @@ threads:
   optimize_mat_tree: 12
   chronumental: 1
   chronumental_qc: 1
+  window_subtree_counts: 1
   mat_clade_subset: 4
   extract_pcps: 1
   count_mutations: 1

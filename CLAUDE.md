@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Stage | Description | Key Rules |
 |-------|-------------|-----------|
-| 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `export_newick`, `chronumental`, `chronumental_qc`, `get_ref_fasta`, `ref_coding_sites` |
+| 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `export_newick`, `chronumental`, `chronumental_qc`, `window_subtree_counts`, `get_ref_fasta`, `ref_coding_sites` |
 | 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade` |
 | 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
 | 5 | Unified Count Table | `build_count_table` (full mutation grid + actual counts + masking flags, via `modules/masking.py`) |
@@ -181,6 +181,13 @@ The configuration (`config/config.yaml`) is organized into:
    `chronumental`, e.g. `--steps`), `chronumental_max_median_abs_tip_residual_days`
    (the `chronumental_qc` gate — the run fails if the median absolute tip-date
    residual exceeds it). The QC rule runs on every tree.
+4c. **Window Fitness (sliding windows)** (EPIC #115 Phase 2): `window_size`,
+   `window_step`, `window_start_time`, `window_end_time`. The
+   `window_subtree_counts` rule buckets branch mutations into overlapping time
+   windows (anchored at the end date, tiled backwards) and emits `windows/`
+   outputs. Its branch QC reuses the Mutation-Counting keys
+   (`max_nt_mutations` / `max_reversions_to_ref` / `max_reversions_to_clade_founder`),
+   so the clade-based and window-based paths filter branches identically.
 5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
 6. **PCP Extraction**: `pcp_genes`, `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`
 7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources)
@@ -195,6 +202,7 @@ The configuration (`config/config.yaml`) is organized into:
 
 Results are stored per tree in `{output_root}/{label}_{version}/`:
 - `mat/`: Filtered trees, clade subtrees
+- `windows/`: Sliding-window subtree counts + founders (EPIC #115 Phase 2)
 - `pcps/`: Curated parent-child pairs
 - `ref/`: Reference genome, coding sites
 - `mutation_counts/`: Per-clade and aggregated counts

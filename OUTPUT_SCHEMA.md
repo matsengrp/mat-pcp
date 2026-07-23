@@ -263,3 +263,44 @@ only).
 | `predicted` | date | chronumental-inferred date. |
 | `observed` | date | Metadata collection date. |
 | `residual_days` | int | `predicted − observed` in days. |
+
+## Sliding-Window Subtree Counts (windows/)
+
+EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115) Phase 2
+([#117](https://github.com/matsengrp/mat-pcp/issues/117)). The
+`window_subtree_counts` rule buckets observed branch mutations into overlapping
+time windows over the full dated tree. Windows are anchored at the end date
+(`window_end_time`, default = latest node date) and tiled backwards in
+`window_step`-day strides, so the most recent window is always the full
+`window_size`; the oldest window may extend before the start date. Branch QC is
+identical to the clade path (`count_mutations.py`). Counts are **coding only**
+(no expected counts / `delta_fitness_ratio` yet — Phase 3).
+
+### `windows/subtree_counts.csv`
+
+One row per `(window_start, founder_id, nt_mutation)`; genes overlapping a site
+are `;`-collapsed exactly as in `aggregated.csv`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `window_start` | date | Window start (`YYYY-MM-DD`). |
+| `founder_id` | string | `bte` node id of the subtree founder. |
+| `protein` | string | `;`-joined gene name(s) for the site (e.g. `ORF1a;ORF1ab`). |
+| `nt_site` | int | 1-based nucleotide position. |
+| `nt_mutation` | string | Nucleotide mutation (e.g. `C8782T`). |
+| `aa_mutation` | string | `;`-joined per-protein amino-acid change(s). |
+| `codon_change` | string | `;`-joined `orig>alt` codon(s). |
+| `synonymous` | bool | `all()` over the collapsed genes' synonymy. |
+| `count` | int | # subtree branches carrying exactly this mutation (shared across collapsed genes, not summed). |
+
+### `windows/founder_muts.csv`
+
+One row per `(founder_id, window_start)` subtree founder.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `founder_id` | string | `bte` node id of the subtree founder. |
+| `window_start` | date | Window start (`YYYY-MM-DD`). |
+| `subtree_size` | int | # nodes in the subtree, including the founder. |
+| `branches_with_mutations` | int | # subtree branches with ≥1 mutation. |
+| `founder_nt_mutations` | string | Space-joined founder haplotype vs. reference (e.g. `C241T C3037T`); empty when the founder equals the reference. |

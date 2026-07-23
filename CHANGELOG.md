@@ -44,6 +44,37 @@ is **not** bumped for any individual phase of EPIC
 lands once the **entire EPIC is complete** (after the final phase). See the
 versioning carve-out in `CLAUDE.md`.
 
+**sliding-window subtree counts** — Phase 2 of EPIC
+[#115](https://github.com/matsengrp/mat-pcp/issues/115) (issue
+[#117](https://github.com/matsengrp/mat-pcp/issues/117)). Buckets observed branch
+mutations into overlapping time windows over the full dated tree and emits, per
+window, each subtree founder plus per-mutation actual counts. No expected counts
+or `delta_fitness_ratio` yet (Phase 3).
+
+**Changes**:
+
+- New per-tree outputs under `windows/`: `subtree_counts.csv` (per-window,
+  per-mutation actual counts — coding only, with the same multi-gene `;`-collapse
+  as `aggregated.csv`) and `founder_muts.csv` (per-window subtree founders +
+  reconstructed haplotypes).
+- New module `workflow/modules/windowing.py` (`WindowedMAT` + pure helpers) and
+  thin wrapper `workflow/scripts/window_subtree_counts.py`; new rule
+  `window_subtree_counts` (bte env). Windows are anchored at the end date and
+  tiled backwards, so the most recent window is always the full `window_size`.
+- Branch QC is identical to the clade path (`count_mutations.py`): it reuses the
+  existing `max_nt_mutations` / `max_reversions_to_ref` /
+  `max_reversions_to_clade_founder` keys and the unconditional
+  drop-branches-with->1-nt-mutation-per-codon filter.
+- New config keys `window_size`, `window_step`, `window_start_time`,
+  `window_end_time`.
+- New correctness harness: `workflow/scripts/validate_windowing.py` (pure +
+  output-CSV checks, base env) and the CI-only `validate_windowing` rule
+  (`workflow/scripts/validate_windowing_tree.py`, bte env). The tree-level rule
+  is **not** in `results_files`.
+
+**No version bump** — same additive rationale and coordinated-bump policy as
+Phase 1 above.
+
 ### v6
 
 **Multi-protein pipeline** — generalizes PCP extraction, founder slicing, DASM
