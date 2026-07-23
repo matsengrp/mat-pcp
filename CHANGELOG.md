@@ -18,6 +18,30 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### Unreleased (additive; no version bump)
+
+**chronumental node dating** — Phase 1 of EPIC
+[#115](https://github.com/matsengrp/mat-pcp/issues/115) (issue
+[#116](https://github.com/matsengrp/mat-pcp/issues/116)). Adds time estimates for
+every node of the filtered tree; nothing existing changes.
+
+**Changes**:
+
+- New per-tree outputs under `mat/`: `node_dates.tsv` (chronumental-inferred
+  date for every tip and internal node), plus the always-on QC artifacts
+  `node_dates_qc.tsv` and `node_dates_residuals.csv`.
+- New rules `export_newick`, `chronumental`, `chronumental_qc` and a new conda
+  env `workflow/envs/chronumental.yml`.
+- New config keys `chronumental_kwargs` and
+  `chronumental_max_median_abs_tip_residual_days`.
+
+**No version bump.** This change is purely additive — it introduces new output
+files and reads no existing schema, and no current downstream consumer reads the
+new files, so nothing trained on v6 breaks. The coordinated bump lands with the
+windowed-fitness schema (Phase 4, [#119](https://github.com/matsengrp/mat-pcp/issues/119)).
+See the versioning carve-out in `CLAUDE.md`. *(If the maintainer prefers strict
+policy, bump v6→v7 instead — flagged on the PR.)*
+
 ### v6
 
 **Multi-protein pipeline** — generalizes PCP extraction, founder slicing, DASM

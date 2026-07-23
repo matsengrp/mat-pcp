@@ -71,6 +71,17 @@ optimize_tree: false
 mat_subset_kwargs: ""
 
 # =============================================================================
+# Node Dating (chronumental)
+# =============================================================================
+# Passed verbatim to chronumental (e.g. "--steps 5000", "--use_gpu"). An unset
+# value runs chronumental's own default step count; production step tuning is
+# deferred (EPIC #115).
+chronumental_kwargs: "--steps 1000"
+# chronumental_qc gate: fail the run if the median absolute tip-date residual
+# (chronumental-predicted minus metadata collection date, in days) exceeds this.
+chronumental_max_median_abs_tip_residual_days: 30
+
+# =============================================================================
 # Clade Configuration
 # =============================================================================
 # Use Nextstrain_clade from tree annotations (annotation_1 in matUtils summary)

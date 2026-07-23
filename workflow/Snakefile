@@ -272,6 +272,9 @@ results_files = [
     "rates_table.csv",
     "fitness/ntmut_fitness_aggregated.csv",
     "aamut_fitness/all_aamut_fitness.csv",
+    # chronumental node dating (#116): the QC report transitively builds
+    # mat/node_dates.tsv and gates the run on every tree.
+    "mat/node_dates_qc.tsv",
 ]
 
 rule all:
@@ -446,6 +449,83 @@ rule optimize_mat_tree:
 
         echo "Optimized tree created: {output.optimized_tree}" >> {log.stdout}
         """
+
+
+rule export_newick:
+    """Export the filtered MAT to Newick for chronumental (needs Newick, not .pb)."""
+    input:
+        tree=get_final_tree()
+    output:
+        nwk=os.path.join(OUTDIR, "mat/filtered_tree.nwk")
+    log:
+        stdout=os.path.join(OUTDIR, "log/export_newick.stdout"),
+        stderr=os.path.join(OUTDIR, "log/export_newick.stderr")
+    conda:
+        "envs/usher.yml"
+    shell:
+        """
+        matUtils extract -i {input.tree} -t {output.nwk} \
+            > {log.stdout} 2> {log.stderr}
+        """
+
+
+rule chronumental:
+    """Infer node dates (tips + internal) for the full filtered tree.
+
+    Builds the strain->date table from the filtered metadata by header name
+    (robust to column order), then runs chronumental. Output ``node_dates.tsv``
+    has a header row then ``<node_id>\\t<predicted_date>`` for every node.
+    """
+    input:
+        nwk=rules.export_newick.output.nwk,
+        metadata=rules.filter_metadata.output.filtered_metadata
+    output:
+        dates_in=os.path.join(OUTDIR, "mat/chronumental_dates_input.tsv"),
+        node_dates=os.path.join(OUTDIR, "mat/node_dates.tsv")
+    params:
+        chronumental_kwargs=config.get("chronumental_kwargs", "")
+    log:
+        stdout=os.path.join(OUTDIR, "log/chronumental.stdout"),
+        stderr=os.path.join(OUTDIR, "log/chronumental.stderr")
+    conda:
+        "envs/chronumental.yml"
+    shell:
+        """
+        zcat {input.metadata} | \
+        awk -F'\\t' 'NR==1 {{for(i=1;i<=NF;i++){{if($i=="strain")s=i; if($i=="date")d=i}}
+                            print "strain\\tdate"; next}}
+                    s&&d {{print $s"\\t"$d}}' > {output.dates_in}
+
+        chronumental --tree {input.nwk} {params.chronumental_kwargs} \
+            --dates {output.dates_in} --dates_out {output.node_dates} \
+            > {log.stdout} 2> {log.stderr}
+        """
+
+
+rule chronumental_qc:
+    """Always-on per-tree sanity check of chronumental node dates.
+
+    Wired into ``rule all`` so it runs on every tree (production + CI). Fails the
+    run on any node-ID / monotonicity / coverage violation, and when the median
+    absolute tip-date residual exceeds the configured threshold.
+    """
+    input:
+        tree=get_final_tree(),
+        node_dates=rules.chronumental.output.node_dates,
+        metadata=rules.filter_metadata.output.filtered_metadata
+    output:
+        report=os.path.join(OUTDIR, "mat/node_dates_qc.tsv"),
+        residuals=os.path.join(OUTDIR, "mat/node_dates_residuals.csv")
+    params:
+        max_median_abs_tip_residual_days=config.get(
+            "chronumental_max_median_abs_tip_residual_days", 30
+        )
+    log:
+        os.path.join(OUTDIR, "log/chronumental_qc.log")
+    conda:
+        "envs/bte.yml"
+    script:
+        "scripts/chronumental_qc.py"
 
 
 rule get_ref_fasta:

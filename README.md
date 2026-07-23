@@ -468,6 +468,10 @@ results/
 │   ├── metadata.tsv.gz            # Symlink to input metadata
 │   ├── filtered_metadata.tsv.gz   # QC-filtered metadata
 │   ├── filtered_tree_raw.pb       # Filtered MAT tree
+│   ├── filtered_tree.nwk          # Newick export (for chronumental)
+│   ├── node_dates.tsv             # chronumental node dates (tips + internal)
+│   ├── node_dates_qc.tsv          # chronumental_qc pass/fail report
+│   ├── node_dates_residuals.csv   # Per-tip predicted vs observed date
 │   └── clade_counts.csv           # Sample counts per clade
 ├── pcps/                          # One subdir per protein in pcp_genes (S, ORF1ab, E, ...)
 │   └── {gene}/

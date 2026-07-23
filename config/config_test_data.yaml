@@ -41,6 +41,15 @@ optimize_tree: false
 mat_subset_kwargs: ""  # Additional matUtils extract arguments
 
 # =============================================================================
+# Node Dating (chronumental)
+# =============================================================================
+# Passed verbatim to chronumental. Few steps here for a fast test run.
+chronumental_kwargs: "--steps 100"
+# chronumental_qc gate: fail the run if the median absolute tip-date residual
+# (chronumental-predicted minus metadata collection date, in days) exceeds this.
+chronumental_max_median_abs_tip_residual_days: 30
+
+# =============================================================================
 # Clade Configuration
 # =============================================================================
 clade_column: "Nextstrain_clade"

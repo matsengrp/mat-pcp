@@ -217,3 +217,44 @@ Estimated neutral mutation rates by sequence context and RNA structure, derived 
 **Notes:**
 - These rates are used to compute expected mutation counts for fitness estimation.
 - The `unpaired` column reflects RNA secondary structure from Lan et al. 2022.
+
+## Node Dates (chronumental)
+
+Time estimates for every node of the filtered tree, produced by the
+`chronumental` rule and sanity-checked by the always-on `chronumental_qc` rule.
+Added in Phase 1 of EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115).
+
+### `mat/node_dates.tsv`
+
+chronumental's `--dates_out`: an inferred date for every tip **and** internal
+node of `mat/filtered_tree.nwk`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `strain` | string | Node identifier — a strain name for tips, an internal-node id (e.g. `node_123`) for internal nodes. Matches the `bte` `node.id` used downstream. |
+| `predicted_date` | date | chronumental-inferred date (`YYYY-MM-DD`). |
+
+### `mat/node_dates_qc.tsv`
+
+Per-check pass/fail report from `chronumental_qc` (one row per check).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `check` | string | `node_id_correspondence`, `time_monotonicity`, `date_coverage`, or `tip_residual`. |
+| `status` | string | `PASS` or `FAIL`. |
+| `detail` | string | Measured numbers for the check. |
+
+The rule raises (fails the run) on any hard-invariant violation, and on a
+`tip_residual` median above `chronumental_max_median_abs_tip_residual_days`.
+
+### `mat/node_dates_residuals.csv`
+
+Per-tip comparison of predicted vs. observed collection date (day-resolution tips
+only).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `strain` | string | Tip strain name. |
+| `predicted` | date | chronumental-inferred date. |
+| `observed` | date | Metadata collection date. |
+| `residual_days` | int | `predicted − observed` in days. |

@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Stage | Description | Key Rules |
 |-------|-------------|-----------|
-| 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `get_ref_fasta`, `ref_coding_sites` |
+| 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `export_newick`, `chronumental`, `chronumental_qc`, `get_ref_fasta`, `ref_coding_sites` |
 | 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade` |
 | 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
 | 5 | Unified Count Table | `build_count_table` (full mutation grid + actual counts + masking flags, via `modules/masking.py`) |
@@ -42,6 +42,8 @@ Any change that affects downstream consumers requires a version bump:
 - Changes to GLM rate estimation
 
 In general, any change to the pipeline is a breaking change since models trained on one version's outputs may not work with another's.
+
+**Additive-output carve-out.** A change that only *adds* new output files — reading no existing schema and read by no current downstream consumer — may ship without a version bump; the coordinated bump then rides with the next schema-breaking change. (Example: the `mat/node_dates*` chronumental outputs added in EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115) Phase 1 shipped no-bump; the bump lands with the windowed-fitness schema in Phase 4.)
 
 ### How to Bump Version
 
@@ -175,6 +177,10 @@ The configuration (`config/config.yaml`) is organized into:
    may override `max_leaf_date`. `max_leaf_date` is optional; when unset it
    defaults to `None`, meaning no upper date cutoff.
 4. **Tree Processing**: `optimize_tree`, `mat_subset_kwargs`
+4b. **Node Dating (chronumental)**: `chronumental_kwargs` (passed verbatim to
+   `chronumental`, e.g. `--steps`), `chronumental_max_median_abs_tip_residual_days`
+   (the `chronumental_qc` gate — the run fails if the median absolute tip-date
+   residual exceeds it). The QC rule runs on every tree.
 5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
 6. **PCP Extraction**: `pcp_genes`, `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`
 7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources)
