@@ -37,10 +37,11 @@ every node of the filtered tree; nothing existing changes.
 
 **No version bump.** This change is purely additive — it introduces new output
 files and reads no existing schema, and no current downstream consumer reads the
-new files, so nothing trained on v6 breaks. The coordinated bump lands with the
-windowed-fitness schema (Phase 4, [#119](https://github.com/matsengrp/mat-pcp/issues/119)).
-See the versioning carve-out in `CLAUDE.md`. *(If the maintainer prefers strict
-policy, bump v6→v7 instead — flagged on the PR.)*
+new files, so nothing trained on v6 breaks. Per maintainer decision, the version
+is **not** bumped for any individual phase of EPIC
+[#115](https://github.com/matsengrp/mat-pcp/issues/115); a single coordinated bump
+lands once the **entire EPIC is complete** (after the final phase). See the
+versioning carve-out in `CLAUDE.md`.
 
 ### v6
 

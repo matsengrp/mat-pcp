@@ -43,7 +43,7 @@ Any change that affects downstream consumers requires a version bump:
 
 In general, any change to the pipeline is a breaking change since models trained on one version's outputs may not work with another's.
 
-**Additive-output carve-out.** A change that only *adds* new output files — reading no existing schema and read by no current downstream consumer — may ship without a version bump; the coordinated bump then rides with the next schema-breaking change. (Example: the `mat/node_dates*` chronumental outputs added in EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115) Phase 1 shipped no-bump; the bump lands with the windowed-fitness schema in Phase 4.)
+**Additive-output carve-out.** A change that only *adds* new output files — reading no existing schema and read by no current downstream consumer — may ship without a version bump; the coordinated bump then rides with the next schema-breaking change. (Example: the `mat/node_dates*` chronumental outputs added in EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115) Phase 1 shipped no-bump. Per maintainer decision, no phase of EPIC #115 bumps the version individually — a single coordinated bump lands once the entire EPIC is complete.)
 
 ### How to Bump Version
 
