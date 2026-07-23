@@ -213,10 +213,9 @@ def summarize_aamut_fitness(aamut_fitness_dir):
         summary['expected_count_sum'] = float(df['expected_count'].sum())
     if 'actual_count' in df.columns:
         summary['actual_count_sum'] = float(df['actual_count'].sum())
-    # Columns renamed at the aggregate write boundary (#89): the primary
-    # pseudocount signal (delta_fitness_ratio) and the Bayesian estimate
-    # (delta_fitness_bayesian). Both are GLM-derived -> loose tolerance in
-    # validate_test.py.
+    # The two v6 delta-fitness columns (#89): the primary pseudocount log-ratio
+    # (delta_fitness_ratio) and the Bayesian estimate (delta_fitness_bayesian).
+    # Both are GLM-derived -> loose tolerance in validate_test.py.
     if 'delta_fitness_ratio' in df.columns:
         summary['delta_fitness_ratio_sum'] = float(df['delta_fitness_ratio'].sum())
     if 'delta_fitness_bayesian' in df.columns:

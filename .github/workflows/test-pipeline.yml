@@ -902,8 +902,8 @@ jobs:
         print(f'Columns: {list(agg.columns)[:10]}...')
 
         if len(agg) > 0:
-            # Check required columns (aggregate uses the v6 renamed delta columns;
-            # per-clade files keep the internal names).
+            # Check required columns: the v6 delta columns, named consistently
+            # across the per-clade and aggregate files.
             assert 'delta_fitness_bayesian' in agg.columns, 'Missing delta_fitness_bayesian'
             assert 'delta_fitness_ratio' in agg.columns, 'Missing delta_fitness_ratio'
             # Note: aa_mutation may not be present if upstream data doesn't have it

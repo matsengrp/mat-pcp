@@ -6,8 +6,8 @@ including ``bte.yml`` (``pcp_from_tree.py``) and ``default.yml``
 (``clade_founder_fasta.py``).
 
 Coordinates are **1-based and inclusive on both ends**, relative to the
-Wuhan-Hu-1 reference (NC_045512.2), matching the ``pcp_gene_region`` and GTF
-conventions used elsewhere in the pipeline.
+Wuhan-Hu-1 reference (NC_045512.2), matching the GTF coordinate conventions
+used elsewhere in the pipeline.
 """
 
 

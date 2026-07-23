@@ -219,9 +219,9 @@ def add_nsps(df, orf1ab_to_nsps_df):
     return df_orig
 
 
-def naive_fitness(aa_counts, fitness_pseudocount=0.5):
+def ratio_fitness(aa_counts, fitness_pseudocount=0.5):
     """
-    Add naive (log ratio) fitness estimate.
+    Add the pseudocount log-ratio fitness estimate (delta_fitness_ratio).
 
     Args:
         aa_counts: DataFrame with expected_count and actual_count columns

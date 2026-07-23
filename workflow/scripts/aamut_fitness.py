@@ -95,8 +95,8 @@ else:
         aa_counts = aamutfit.aggregate_counts(ntmut_fit_coding, explode_cols)
         log(f"Aggregated to {len(aa_counts)} amino acid mutations")
 
-        # Add naive fitness estimates
-        aamutfit.naive_fitness(aa_counts, fitness_pseudocount=fitness_pseudocount)
+        # Add the pseudocount log-ratio fitness estimate
+        aamutfit.ratio_fitness(aa_counts, fitness_pseudocount=fitness_pseudocount)
 
         # Get refined fitness estimates (weighted average)
         aa_fit = aamutfit.aa_fitness(ntmut_fit_coding, explode_cols)
