@@ -3,6 +3,9 @@ channels:
   - https://prefix.dev/conda-forge
   - https://prefix.dev/bioconda
 dependencies:
+  # Pinned to 3.9 (not a range like the other envs) to keep chronumental's
+  # jax/numpyro dependency chain on a resolvable, tested wheel set. Loosen only
+  # after re-verifying the pip install and a pipeline run.
   - python=3.9
   - pip>=23
   - pip:

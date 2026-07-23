@@ -481,9 +481,19 @@ rule chronumental:
         metadata=rules.filter_metadata.output.filtered_metadata
     output:
         dates_in=os.path.join(OUTDIR, "mat/chronumental_dates_input.tsv"),
-        node_dates=os.path.join(OUTDIR, "mat/node_dates.tsv")
+        node_dates=os.path.join(OUTDIR, "mat/node_dates.tsv"),
+        # chronumental always writes the dated Newick tree; declare it (default
+        # path is derived from --tree, so pass --tree_out explicitly) so it is
+        # tracked/cleaned like any other output rather than left on disk.
+        dated_tree=os.path.join(OUTDIR, "mat/chronumental_timetree.nwk")
     params:
         chronumental_kwargs=config.get("chronumental_kwargs", "")
+    threads: get_threads("chronumental")
+    resources:
+        mem_mb=16000,
+        runtime=240
+    benchmark:
+        os.path.join(OUTDIR, "benchmarks/chronumental.tsv")
     log:
         stdout=os.path.join(OUTDIR, "log/chronumental.stdout"),
         stderr=os.path.join(OUTDIR, "log/chronumental.stderr")
@@ -491,14 +501,19 @@ rule chronumental:
         "envs/chronumental.yml"
     shell:
         """
-        zcat {input.metadata} | \
-        awk -F'\\t' 'NR==1 {{for(i=1;i<=NF;i++){{if($i=="strain")s=i; if($i=="date")d=i}}
-                            print "strain\\tdate"; next}}
-                    s&&d {{print $s"\\t"$d}}' > {output.dates_in}
+        (
+            zcat {input.metadata} | \
+            awk -F'\\t' 'NR==1 {{for(i=1;i<=NF;i++){{if($i=="strain")s=i; if($i=="date")d=i}}
+                                print "strain\\tdate"; next}}
+                        s&&d {{print $s"\\t"$d}}
+                        END {{if(!s||!d){{print "chronumental: strain/date column not found in metadata header" > "/dev/stderr"; exit 1}}}}' \
+                > {output.dates_in}
+        ) 2>> {log.stderr}
 
         chronumental --tree {input.nwk} {params.chronumental_kwargs} \
             --dates {output.dates_in} --dates_out {output.node_dates} \
-            > {log.stdout} 2> {log.stderr}
+            --tree_out {output.dated_tree} \
+            >> {log.stdout} 2>> {log.stderr}
         """
 
 
@@ -520,6 +535,12 @@ rule chronumental_qc:
         max_median_abs_tip_residual_days=config.get(
             "chronumental_max_median_abs_tip_residual_days", 30
         )
+    threads: get_threads("chronumental_qc")
+    resources:
+        mem_mb=16000,
+        runtime=120
+    benchmark:
+        os.path.join(OUTDIR, "benchmarks/chronumental_qc.tsv")
     log:
         os.path.join(OUTDIR, "log/chronumental_qc.log")
     conda:

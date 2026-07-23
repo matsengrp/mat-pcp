@@ -47,6 +47,7 @@ def log(msg):
 # date). Column names are "strain"/"predicted_date" but we read positionally so
 # the check does not depend on those labels.
 nd = pd.read_csv(node_dates_path, sep="\t")
+assert len(nd.columns) >= 2, f"node_dates.tsv has < 2 columns: {list(nd.columns)}"
 id_col, date_col = nd.columns[0], nd.columns[1]
 nd[date_col] = pd.to_datetime(nd[date_col], errors="coerce")
 n_unparseable = int(nd[date_col].isna().sum())
@@ -57,6 +58,7 @@ tree = bte.MATree(tree_path)
 nodes = tree.depth_first_expansion()
 node_ids = {str(n.id) for n in nodes}
 n_nodes = len(node_ids)
+assert n_nodes > 0, "tree has no nodes"
 
 # Edges (parent -> child) and root detection, both from the child lists so we
 # never rely on a ``.parent`` accessor.
@@ -67,6 +69,7 @@ for n in nodes:
         edges.append((str(n.id), str(c.id)))
         child_ids.add(str(c.id))
 root_ids = node_ids - child_ids
+assert len(root_ids) == 1, f"expected exactly one root, found {len(root_ids)}"
 
 results = []  # (check, status, detail)
 failures = []
@@ -79,7 +82,9 @@ def record(check, ok, detail):
 
 
 # --- check 1: node-ID correspondence ----------------------------------------
-dated_ids = set(node_date)
+# Membership requires a *parseable* date, not just a row in node_dates.tsv, so a
+# node with a garbled date string counts as missing here (not silently "dated").
+dated_ids = {i for i, d in node_date.items() if pd.notna(d)}
 missing = node_ids - dated_ids
 # Allow the root(s) to be undated; anything else is a real mismatch.
 missing_non_root = missing - root_ids
@@ -117,11 +122,20 @@ record(
 )
 
 # --- check 4: tip residuals --------------------------------------------------
-meta = pd.read_csv(metadata_path, sep="\t", usecols=["strain", "date"])
-# Day resolution only (YYYY-MM-DD): exclude MONTH/YEAR/MISSING, matching
-# filter_metadata's treatment of date resolution.
-meta = meta[meta["date"].astype(str).str.count("-") == 2].copy()
+meta = pd.read_csv(
+    metadata_path, sep="\t", usecols=["strain", "date", "date_resolution_str"]
+)
+# Day resolution only: exclude MONTH/YEAR/MISSING. filter_metadata imputes
+# month/year dates to a fabricated day (mid-month / mid-year) and rewrites every
+# surviving value to YYYY-MM-DD, so we must filter on its recorded resolution
+# rather than re-deriving it from the (already-imputed) date string -- otherwise
+# the residual gate would silently compare predictions against fabricated dates
+# if the upstream resolution filter is ever loosened.
+meta = meta[meta["date_resolution_str"] == "DAY"].copy()
 meta["observed"] = pd.to_datetime(meta["date"], errors="coerce")
+n_dropped_obs = int(meta["observed"].isna().sum())
+if n_dropped_obs:
+    log(f"tip_residual: dropped {n_dropped_obs} day-resolution row(s) with unparseable date")
 meta = meta.dropna(subset=["observed"])
 meta["predicted"] = meta["strain"].astype(str).map(node_date)
 res = meta.dropna(subset=["predicted"]).copy()

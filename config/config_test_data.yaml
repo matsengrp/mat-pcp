@@ -251,6 +251,8 @@ threads:
   filter_metadata: 1
   filter_mat_tree: 1
   optimize_mat_tree: 12
+  chronumental: 1
+  chronumental_qc: 1
   mat_clade_subset: 4
   extract_pcps: 1
   count_mutations: 1

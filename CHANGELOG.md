@@ -28,8 +28,9 @@ every node of the filtered tree; nothing existing changes.
 **Changes**:
 
 - New per-tree outputs under `mat/`: `node_dates.tsv` (chronumental-inferred
-  date for every tip and internal node), plus the always-on QC artifacts
-  `node_dates_qc.tsv` and `node_dates_residuals.csv`.
+  date for every tip and internal node), `chronumental_timetree.nwk` (the dated
+  time-scaled tree), plus the always-on QC artifacts `node_dates_qc.tsv` and
+  `node_dates_residuals.csv`.
 - New rules `export_newick`, `chronumental`, `chronumental_qc` and a new conda
   env `workflow/envs/chronumental.yml`.
 - New config keys `chronumental_kwargs` and

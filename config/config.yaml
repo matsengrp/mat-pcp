@@ -73,9 +73,11 @@ mat_subset_kwargs: ""
 # =============================================================================
 # Node Dating (chronumental)
 # =============================================================================
-# Passed verbatim to chronumental (e.g. "--steps 5000", "--use_gpu"). An unset
-# value runs chronumental's own default step count; production step tuning is
-# deferred (EPIC #115).
+# Passed verbatim to chronumental (e.g. "--steps 5000"). An unset value runs
+# chronumental's own default step count; production step tuning is deferred
+# (EPIC #115). NOTE: "--use_gpu" requires the CUDA jaxlib wheel that is
+# commented out in envs/chronumental.yml; with the CPU-only env it silently
+# falls back to CPU, so don't add it until GPU support is enabled there.
 chronumental_kwargs: "--steps 1000"
 # chronumental_qc gate: fail the run if the median absolute tip-date residual
 # (chronumental-predicted minus metadata collection date, in days) exceeds this.
@@ -311,6 +313,8 @@ threads:
   filter_metadata: 1
   filter_mat_tree: 4
   optimize_mat_tree: 12
+  chronumental: 4
+  chronumental_qc: 1
   mat_clade_subset: 4
   extract_pcps: 1
   count_mutations: 1

@@ -234,6 +234,11 @@ node of `mat/filtered_tree.nwk`.
 | `strain` | string | Node identifier — a strain name for tips, an internal-node id (e.g. `node_123`) for internal nodes. Matches the `bte` `node.id` used downstream. |
 | `predicted_date` | date | chronumental-inferred date (`YYYY-MM-DD`). |
 
+### `mat/chronumental_timetree.nwk`
+
+chronumental's `--tree_out`: the input tree rescaled so branch lengths are in
+time, with the same topology and node labels as `mat/filtered_tree.nwk`.
+
 ### `mat/node_dates_qc.tsv`
 
 Per-check pass/fail report from `chronumental_qc` (one row per check).

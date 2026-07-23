@@ -469,6 +469,7 @@ results/
 │   ├── filtered_metadata.tsv.gz   # QC-filtered metadata
 │   ├── filtered_tree_raw.pb       # Filtered MAT tree
 │   ├── filtered_tree.nwk          # Newick export (for chronumental)
+│   ├── chronumental_timetree.nwk  # chronumental dated (time-scaled) tree
 │   ├── node_dates.tsv             # chronumental node dates (tips + internal)
 │   ├── node_dates_qc.tsv          # chronumental_qc pass/fail report
 │   ├── node_dates_residuals.csv   # Per-tip predicted vs observed date
