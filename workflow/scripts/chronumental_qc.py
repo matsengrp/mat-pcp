@@ -7,10 +7,11 @@ violation; the tip-residual check reports every run and fails only when the
 median absolute residual exceeds the configured threshold.
 
 Checks:
-  1. Node-ID correspondence (hard): every non-root ``bte`` node id has a date in
-     ``node_dates.tsv``. This is the load-bearing assumption for windowed fitness
-     (#117): matUtils Newick node names (which chronumental keys on) must equal
-     the ``bte`` node ids the windowing will traverse on the same ``.pb``.
+  1. Node-ID correspondence (hard): every ``bte`` node id -- root included --
+     has a date in ``node_dates.tsv``. This is the load-bearing assumption for
+     windowed fitness (#117): matUtils Newick node names (which chronumental keys
+     on) must equal the ``bte`` node ids the windowing will traverse on the same
+     ``.pb``, and windowing relies on all nodes being dated (no contingency).
   2. Time monotonicity (hard): along every edge, parent date <= child date (+eps).
   3. Coverage / no missing dates (hard): every node dated, no unparseable dates.
   4. Tip residuals (report + configurable gate): predicted - observed (days) for
@@ -84,14 +85,16 @@ def record(check, ok, detail):
 # --- check 1: node-ID correspondence ----------------------------------------
 # Membership requires a *parseable* date, not just a row in node_dates.tsv, so a
 # node with a garbled date string counts as missing here (not silently "dated").
+# chronumental dates the FULL time-tree -- every node including the root -- so we
+# require every bte node id (root included) to have a date. This is the invariant
+# downstream windowing (#117) relies on to key node ids into dates without any
+# undated-node contingency; an undated node here means something is broken.
 dated_ids = {i for i, d in node_date.items() if pd.notna(d)}
 missing = node_ids - dated_ids
-# Allow the root(s) to be undated; anything else is a real mismatch.
-missing_non_root = missing - root_ids
 record(
     "node_id_correspondence",
-    not missing_non_root,
-    f"{len(missing_non_root)} non-root node(s) without a date "
+    not missing,
+    f"{len(missing)} node(s) without a date "
     f"(roots={len(root_ids)}, total nodes={n_nodes})",
 )
 
@@ -116,7 +119,7 @@ record(
 # --- check 3: coverage / no missing dates ------------------------------------
 record(
     "date_coverage",
-    n_unparseable == 0 and not missing_non_root,
+    n_unparseable == 0 and not missing,
     f"{n_unparseable} unparseable date(s); "
     f"{len(dated_ids)} dated vs {n_nodes} tree nodes",
 )
