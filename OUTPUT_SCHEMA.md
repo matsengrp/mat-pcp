@@ -273,8 +273,9 @@ time windows over the full dated tree. Windows are anchored at the end date
 (`window_end_time`, default = latest node date) and tiled backwards in
 `window_step`-day strides, so the most recent window is always the full
 `window_size`; the oldest window may extend before the start date. Branch QC is
-identical to the clade path (`count_mutations.py`). Counts are **coding only**
-(no expected counts / `delta_fitness_ratio` yet — Phase 3).
+identical to the clade path (`count_mutations.py`). Counts are **coding only**;
+per-window expected counts and `delta_fitness_ratio` are added by
+`window_expected_counts` in `windows/fitness_trajectory.csv` (Phase 3, below).
 
 ### `windows/subtree_counts.csv`
 

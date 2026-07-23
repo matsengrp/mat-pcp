@@ -105,6 +105,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | Stage | Description | Key Outputs |
 |-------|-------------|-------------|
 | 1. Input & Reference | Filter metadata, link inputs, fetch reference genome and annotations | `filtered_metadata.tsv.gz`, `ref.fa`, `coding_sites.csv` |
+| 1b. Node Dating & Sliding Windows | Date every node with chronumental (QC-gated), then bucket branch mutations into sliding time windows over the full dated tree and compute per-window expected counts + `delta_fitness_ratio` (EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115)) | `mat/node_dates.tsv`, `windows/subtree_counts.csv`, `windows/fitness_trajectory.csv` |
 | 2. Clade Processing & PCPs | Identify clades, extract clade subtrees, and emit curated PCPs in one pass (identical-slice branches are dropped during extraction), fanned over each protein in `pcp_genes`. DASM-training-ready siblings are emitted alongside. | `clade_counts.csv`, `clades/{clade}_tree.pb`, `pcps/{gene}/{clade}_pcps.csv`, `pcps/{gene}/all_pcps.csv`, `pcps/{gene}/{clade}_pcps_dasm_ready.csv`, `pcps/{gene}/all_pcps_dasm_ready.csv`, `pcps/{gene}/pcp_curation_report.txt` |
 | 3a. Clade Founders | Download and process clade founder sequences (whole-genome + one gene-sliced founder per protein in `pcp_genes`) | `clade_founders/{clade}.fa`, `clade_founders/{gene}/{clade}.fa`, `clade_founder_nts.csv` |
 | 3b. Mutation Counting | Translate mutations, count per-clade mutations (harmonized with PCP filtering) | `mutations/{clade}_mutations.tsv`, `mutation_counts/aggregated.csv` |
@@ -138,6 +139,9 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
 | `aamut_fitness/all_aamut_fitness.csv` | Amino acid-level fitness estimates |
 | `validation/<gene>/pcp_vs_counts_report.txt` | PCP vs counts validation report (one per protein) |
+| `mat/node_dates.tsv` | chronumental-inferred date for every tip and internal node (+ `node_dates_qc.tsv` / `node_dates_residuals.csv` QC artifacts) |
+| `windows/subtree_counts.csv` | Per-window, per-mutation actual counts over the full dated tree (coding only); `windows/founder_muts.csv` holds the per-window subtree founders |
+| `windows/fitness_trajectory.csv` | Mutation × time-window fitness trajectory: per-window `expected_count` and `delta_fitness_ratio` (comparable to `aamut_fitness`) |
 
 ## Fitness Estimation Methodology
 
@@ -294,6 +298,25 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 | `qc_filter_options.valid_hosts` | Allowed host species | `["Human", "Homo sapiens"]` |
 | `qc_filter_options.min_genome_length` | Minimum genome length | `28000` |
 | `subset_frac` | Random sampling fraction (1.0 = no sampling) | `1.0` |
+
+### Node Dating (chronumental)
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `chronumental_kwargs` | Extra flags passed verbatim to `chronumental` (e.g. `--steps N`) | `""` |
+| `chronumental_max_median_abs_tip_residual_days` | `chronumental_qc` gate: the run fails if the median absolute tip-date residual (predicted − collection date, days) exceeds this | `30` |
+
+### Window Fitness (sliding time windows)
+
+Windows tile the full dated tree, anchored at the end date and stepping backwards. See EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115).
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `window_size` | Window width in days | `90` |
+| `window_step` | Window stride in days (`< window_size` ⇒ overlapping windows) | `45` |
+| `window_start_time` | Oldest window bound (ISO date), or `null` for the tree's earliest node date | `null` |
+| `window_end_time` | Newest window anchor (ISO date), or `null` for the tree's latest node date | `null` |
+| `window_min_subtree_size` | Drop founders whose subtree is ≤ this before computing expected counts (`0` keeps all) | `0` |
 
 ### Clade Configuration
 

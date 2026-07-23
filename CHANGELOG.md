@@ -18,7 +18,17 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
-### Unreleased (additive; no version bump)
+### v7
+
+**Time-resolved fitness (EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115)).**
+The coordinated version bump for the three phases below. Each phase was purely
+additive (new output files, reading no existing schema and read by no current
+downstream consumer) and shipped no individual bump per maintainer decision; this
+is the single bump that lands the whole EPIC. The new outputs are `mat/node_dates*`
++ `mat/chronumental_timetree.nwk` (Phase 1), `windows/subtree_counts.csv` +
+`windows/founder_muts.csv` (Phase 2), and `windows/fitness_trajectory.csv`
+(Phase 3). Everything that existed at v6 is byte-identical apart from the version
+dir name.
 
 **chronumental node dating** — Phase 1 of EPIC
 [#115](https://github.com/matsengrp/mat-pcp/issues/115) (issue
@@ -35,14 +45,6 @@ every node of the filtered tree; nothing existing changes.
   env `workflow/envs/chronumental.yml`.
 - New config keys `chronumental_kwargs` and
   `chronumental_max_median_abs_tip_residual_days`.
-
-**No version bump.** This change is purely additive — it introduces new output
-files and reads no existing schema, and no current downstream consumer reads the
-new files, so nothing trained on v6 breaks. Per maintainer decision, the version
-is **not** bumped for any individual phase of EPIC
-[#115](https://github.com/matsengrp/mat-pcp/issues/115); a single coordinated bump
-lands once the **entire EPIC is complete** (after the final phase). See the
-versioning carve-out in `CLAUDE.md`.
 
 **sliding-window subtree counts** — Phase 2 of EPIC
 [#115](https://github.com/matsengrp/mat-pcp/issues/115) (issue
@@ -72,9 +74,6 @@ or `delta_fitness_ratio` yet (Phase 3).
   CI-only `validate_windowing` rule
   (`workflow/scripts/validate_windowing_tree.py`, bte env). The tree-level rule
   is **not** in `results_files`.
-
-**No version bump** — same additive rationale and coordinated-bump policy as
-Phase 1 above.
 
 **windowed expected counts + `delta_fitness_ratio`** — Phase 3 of EPIC
 [#115](https://github.com/matsengrp/mat-pcp/issues/115) (issue
@@ -114,9 +113,6 @@ window (matching `aamutfit.ratio_fitness`).
   (`sum(actual_syn) == sum(expected_syn)` per window, exact by construction), a
   synonymous-centering sanity check, a formula check, and test-data regression
   sentinels for the trajectory.
-
-**No version bump** — same additive rationale and coordinated-bump policy as
-Phase 1 above.
 
 ### v6
 
