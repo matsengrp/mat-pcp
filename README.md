@@ -153,7 +153,7 @@ Masked mutations are excluded from every fitness output. Any mutation flagged `e
 | `delta_fitness_bayesian`, `uncertainty` | `aamut_fitness/all_aamut_fitness.csv` | inherited from the nucleotide estimates | **Inverse-variance weighted average** of the nucleotide `f_mean` values over codon-equivalent mutations |
 | `delta_fitness_pseudo` | `aamut_fitness/all_aamut_fitness.csv` | `expected_count` (GLM) | Smoothed log-ratio: `log((actual_count + 0.5) / (expected_count + 0.5))` |
 
-> **Output column names (v6):** in the aggregate `all_aamut_fitness.csv`, the two delta columns are named **`delta_fitness_pseudo`** (the primary per-mutation signal) and **`delta_fitness_bayesian`**. These were renamed in v6 from `naive_delta_fitness` and `delta_fitness` respectively. The rename is applied only at the aggregate write boundary; the per-clade `{clade}_aamut_fitness.csv` files and the computation described below still use the internal names `naive_delta_fitness` / `delta_fitness`.
+> **Output column names (v6):** the two delta columns are named **`delta_fitness_pseudo`** (the pseudocount log-ratio, the primary per-mutation signal) and **`delta_fitness_bayesian`** (the inverse-variance-weighted estimate). They were renamed in v6 from `naive_delta_fitness` and `delta_fitness` respectively, and the new names are used consistently across the per-clade `{clade}_aamut_fitness.csv` files, the aggregate, and the computation described below.
 
 ### Nucleotide-level Bayesian fitness
 
@@ -161,10 +161,10 @@ For each nucleotide mutation, the observed count is modeled with a Bayesian Pois
 
 ### From nucleotide to amino-acid fitness
 
-The amino-acid `delta_fitness` is an **inverse-variance weighted average** of the nucleotide-level `f_mean` estimates across every codon change that produces the same amino-acid substitution (`workflow/modules/aamutfit.py`, `aa_fitness`):
+The amino-acid `delta_fitness_bayesian` is an **inverse-variance weighted average** of the nucleotide-level `f_mean` estimates across every codon change that produces the same amino-acid substitution (`workflow/modules/aamutfit.py`, `aa_fitness`):
 
 - per-nucleotide weight: `weight = 1 / (f_st_dev² + 0.001)` (the `0.001` is a numerical-stability constant)
-- `delta_fitness = Σ(f_mean · weight) / Σ(weight)`
+- `delta_fitness_bayesian = Σ(f_mean · weight) / Σ(weight)`
 - `uncertainty = sqrt(1 / Σ(weight))`
 
 Cross-clade aggregation into `all_aamut_fitness.csv` (`workflow/scripts/aggregate_aamut_fitness.py`) sums the counts and re-applies the same inverse-variance weighting across the contributing clades, weighting each clade's estimate by `1 / (uncertainty² + 0.001)`.
@@ -175,9 +175,9 @@ There is a single neutral baseline: `expected_count`, the **GLM-predicted** neut
 (incorporating substitution type, flanking-nucleotide context, RNA secondary structure, and
 light-switch position). Both fitness estimators use it:
 
-- `naive_delta_fitness` is a raw pseudocount-smoothed log-ratio against `expected_count`:
+- `delta_fitness_pseudo` is a raw pseudocount-smoothed log-ratio against `expected_count`:
   `log((actual_count + 0.5) / (expected_count + 0.5))`.
-- the primary `delta_fitness` is the Bayesian estimate built on `expected_count` (via the Poisson
+- `delta_fitness_bayesian` is the Bayesian estimate built on `expected_count` (via the Poisson
   rate `expected_count · exp(f)` and the GLM variance component `tau_squared`) — it is **not** a
   raw log-ratio.
 

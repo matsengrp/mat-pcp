@@ -108,7 +108,7 @@ Per-clade amino acid fitness estimates. Same schema as above but with `cluster` 
 
 (Other columns same as `all_aamut_fitness.csv`, excluding `source_clade`.)
 
-> **Column names:** the v6 delta-column renames (`naive_delta_fitness` → `delta_fitness_pseudo`, `delta_fitness` → `delta_fitness_bayesian`) are applied **only** at the aggregate write boundary. Per-clade `{clade}_aamut_fitness.csv` files retain the internal names `naive_delta_fitness` and `delta_fitness`, because the aggregator re-reads them by those names.
+> **Column names:** these two delta columns were renamed in v6 (`naive_delta_fitness` → `delta_fitness_pseudo`, `delta_fitness` → `delta_fitness_bayesian`) and the new names are used consistently across the per-clade `{clade}_aamut_fitness.csv` files and the aggregate `all_aamut_fitness.csv`.
 
 ### `fitness/ntmut_fitness_aggregated.csv`
 

@@ -876,7 +876,8 @@ jobs:
 
                 # Check fitness columns
                 if len(fit_df) > 0:
-                    assert 'delta_fitness' in fit_df.columns, 'Missing delta_fitness'
+                    assert 'delta_fitness_bayesian' in fit_df.columns, 'Missing delta_fitness_bayesian'
+                    assert 'delta_fitness_pseudo' in fit_df.columns, 'Missing delta_fitness_pseudo'
                     # Note: aa_mutation may not be present if upstream data doesn't have it
                     # (aa_mutation info is in actual counts but not expected counts)
                     if 'aa_mutation' in fit_df.columns:

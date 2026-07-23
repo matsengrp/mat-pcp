@@ -54,13 +54,13 @@ hardcoded gene (Spike) to a config-driven list of proteins. Tracks EPIC
   natively by the pipeline, superseding the post-hoc `slice_spike_founders.sh`
   step ([#97](https://github.com/matsengrp/mat-pcp/issues/97)).
 
-- **Delta-fitness columns renamed in `aamut_fitness/all_aamut_fitness.csv`**
+- **Delta-fitness columns renamed in the amino-acid fitness outputs**
   ([#89](https://github.com/matsengrp/mat-pcp/issues/89)): `naive_delta_fitness`
   -> **`delta_fitness_pseudo`** (the primary per-mutation signal) and
   `delta_fitness` -> **`delta_fitness_bayesian`** (inverse-variance-weighted
-  estimate). Pure rename applied only at the aggregate write boundary; values
-  are unchanged and per-clade `{clade}_aamut_fitness.csv` files retain the
-  internal names.
+  estimate). Pure rename (values unchanged), applied consistently across the
+  per-clade `{clade}_aamut_fitness.csv` files and the aggregate
+  `all_aamut_fitness.csv`.
 
 - **Consolidated production config**
   ([#113](https://github.com/matsengrp/mat-pcp/issues/113)): the four per-tree

@@ -71,9 +71,9 @@ if len(ntmut_fit) == 0 or len(explode_cols) == 0:
             "aa_mutation",
             "expected_count",
             "actual_count",
-            "naive_delta_fitness",
+            "delta_fitness_pseudo",
             "subset_of_ORF1ab",
-            "delta_fitness",
+            "delta_fitness_bayesian",
             "uncertainty",
         ]
     )
