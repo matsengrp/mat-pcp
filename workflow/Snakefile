@@ -279,6 +279,9 @@ results_files = [
     # windows/founder_muts.csv. Additive output (no schema/consumer yet), so it
     # ships no-bump per the EPIC #115 coordinated-bump decision.
     "windows/subtree_counts.csv",
+    # Windowed expected counts + delta_fitness_ratio (#118). Additive output,
+    # also no-bump per the EPIC #115 coordinated-bump decision.
+    "windows/fitness_trajectory.csv",
 ]
 
 rule all:
@@ -692,6 +695,11 @@ rule validate_windowing:
         "envs/bte.yml"
     script:
         "scripts/validate_windowing_tree.py"
+
+
+# NOTE: rule window_expected_counts (EPIC #115 Phase 3, #118) is defined after
+# the GLM stage (it depends on rules.master_table / rules.curate_counts, which
+# Snakemake resolves at parse time), just below rule master_table.
 
 
 # =============================================================================
@@ -1337,6 +1345,59 @@ rule get_rates_table:
         "envs/default.yml"
     script:
         "scripts/get_rates_table.py"
+
+
+rule window_expected_counts:
+    """Windowed expected counts + delta_fitness_ratio (EPIC #115 Phase 3, #118).
+
+    Turns the Phase-2 per-window founders + actual counts into a mutation x
+    time-window fitness trajectory. For each window's subtree founder, enumerates
+    all possible coding mutations from the founder sequence and looks up mat-pcp's
+    GLM neutral rate for each mutation's founder-sequence context. Expected counts
+    use mat-pcp's own clade-path ``evol_time`` normalization (``rates.py``) applied
+    per window: ``T_window = (observed synonymous count) / (rate summed over all
+    possible synonymous mutations)`` and ``expected(ID) = T_window x sum_founders
+    rate(context)``, so total expected synonymous == total observed synonymous by
+    construction. Then ``delta_fitness_ratio = log((actual + p) / (expected + p))``
+    (matching ``aamutfit.ratio_fitness``).
+
+    Expected counts come ONLY from the GLM (no synonymous-average fallback). ``T``
+    divides out the rate's absolute scale, so the raw GLM rate is used directly.
+    Pure pandas/numpy (no bte) -- runs in the default env. Placed here (after the
+    GLM stage) because it depends on ``rules.master_table``.
+    """
+    input:
+        founder_muts=rules.window_subtree_counts.output.founder_muts,
+        subtree_counts=rules.window_subtree_counts.output.subtree_counts,
+        master_table=rules.master_table.output.master_table,
+        coding_sites=rules.ref_coding_sites.output.csv,
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta,
+        site_mask=rules.get_site_mask.output.csv,
+        rna_structure=config["rna_structure_data"],
+    output:
+        trajectory=os.path.join(OUTDIR, "windows/fitness_trajectory.csv"),
+    params:
+        # Global (clade-independent) masked sites reuse the clade path's config.
+        sites_to_exclude=config.get("sites_to_exclude", []),
+        site_include_range=config.get(
+            "site_include_range", {"start": 266, "end": 29674}
+        ),
+        fitness_pseudocount=config.get("fitness_pseudocount", 0.5),
+        # Drop founders whose subtree is <= this size (s2trajectory's
+        # min_founder_children gate; default 0 keeps every subtree).
+        min_subtree_size=config.get("window_min_subtree_size", 0),
+    threads: get_threads("window_expected_counts")
+    resources:
+        mem_mb=16000,
+        runtime=240
+    benchmark:
+        os.path.join(OUTDIR, "benchmarks/window_expected_counts.tsv")
+    log:
+        os.path.join(OUTDIR, "log/window_expected_counts.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/window_expected_counts.py"
 
 
 rule get_problematic_sites:

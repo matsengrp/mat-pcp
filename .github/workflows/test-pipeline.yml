@@ -983,6 +983,27 @@ jobs:
         print(f'Distinct windows: {counts[\"window_start\"].nunique()}')
         "
 
+    - name: Verify windowed fitness trajectory (#118)
+      run: |
+        test -f $OUTPUT_DIR/windows/fitness_trajectory.csv
+        pixi run python -c "
+        import pandas as pd
+        traj = pd.read_csv('${OUTPUT_DIR}/windows/fitness_trajectory.csv')
+        print(f'Trajectory rows: {len(traj)}; windows: {traj[\"window_start\"].nunique()}')
+        expected = ['window_start','ID','gene','aa_site','aa_mutation','wt_aa',
+                    'mut_aa','synonymous','actual_count','expected_count',
+                    'delta_fitness_ratio']
+        assert list(traj.columns) == expected, f'unexpected columns: {list(traj.columns)}'
+        assert len(traj) > 0, 'empty fitness trajectory'
+        assert (traj['gene'] == 'ORF1a').sum() == 0, 'ORF1a should be folded into ORF1ab'
+        syn = traj[traj['synonymous'] == True]
+        # Per-window evol_time T makes sum(actual_syn)==sum(expected_syn) by construction.
+        ratio = syn['actual_count'].sum() / syn['expected_count'].sum()
+        print(f'Synonymous calibration sum(actual)/sum(expected): {ratio:.6f} (should be ~1)')
+        assert abs(ratio - 1.0) < 1e-3, f'synonymous calibration off: {ratio}'
+        print(f'Synonymous delta_fitness_ratio median: {syn[\"delta_fitness_ratio\"].median():.4f}')
+        "
+
     - name: Validate windowing (pure + output CSV checks)
       run: |
         pixi run python workflow/scripts/validate_windowing.py $OUTPUT_DIR

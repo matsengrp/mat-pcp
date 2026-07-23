@@ -304,3 +304,37 @@ One row per `(founder_id, window_start)` subtree founder.
 | `subtree_size` | int | # nodes in the subtree, including the founder. |
 | `branches_with_mutations` | int | # subtree branches with ≥1 mutation. |
 | `founder_nt_mutations` | string | Space-joined founder haplotype vs. reference (e.g. `C241T C3037T`); empty when the founder equals the reference. |
+
+### `windows/fitness_trajectory.csv`
+
+EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115) Phase 3
+([#118](https://github.com/matsengrp/mat-pcp/issues/118)). The
+`window_expected_counts` rule turns the per-window founders + actual counts into
+a mutation × time-window fitness trajectory. For each window's subtree founder it
+enumerates all possible coding mutations from the founder sequence and looks up
+mat-pcp's GLM neutral rate for each mutation's founder-sequence context. Expected
+counts use mat-pcp's own clade-path `evol_time` normalization (`rates.py`) applied
+per window: `T = (observed synonymous count) / (rate summed over all possible
+synonymous mutations)` and `expected(ID) = T × Σ_founders rate(context)`, so total
+expected synonymous equals total observed synonymous by construction. Expected
+counts come only from the GLM (no synonymous-average fallback). Coding only; ORF1a
+is dropped in favor of ORF1ab (matching `aamut_fitness`). A window with **no
+observed synonymous mutations** cannot be calibrated (its `T` is undefined) and is
+omitted, so this file may cover fewer windows than `subtree_counts.csv`.
+
+One row per `(window_start, ID)`, where `ID` is the amino-acid mutation identity
+`<gene>-<wt_aa><aa_site><mut_aa>`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `window_start` | date | Window start (`YYYY-MM-DD`). |
+| `ID` | string | Amino-acid mutation identity, `<gene>-<wt_aa><aa_site><mut_aa>` (e.g. `S-D614G`). |
+| `gene` | string | Gene name (ORF1a folded into ORF1ab). |
+| `aa_site` | int | Codon (amino-acid) site within the gene. |
+| `aa_mutation` | string | Amino-acid change `<wt_aa><aa_site><mut_aa>`. |
+| `wt_aa` | string | Founder (wild-type) amino acid. |
+| `mut_aa` | string | Mutant amino acid (`*` = stop). |
+| `synonymous` | bool | `wt_aa == mut_aa`. |
+| `actual_count` | float | Observed count summed over the window's subtrees. |
+| `expected_count` | float | GLM-predicted count, `rate × subtree_mut_count` summed over subtrees (can be slightly negative for sparse contexts). |
+| `delta_fitness_ratio` | float | `log((actual_count + p) / (expected_count + p))`, natural log, pseudocount `p = fitness_pseudocount`. Synonymous mutations center near 0. `NaN` in the rare case `expected_count + p ≤ 0` (a very negative sparse-context rate), matching the clade-path `aamut_fitness` `delta_fitness_ratio`. |

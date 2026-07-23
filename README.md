@@ -474,9 +474,10 @@ results/
 │   ├── node_dates_qc.tsv          # chronumental_qc pass/fail report
 │   ├── node_dates_residuals.csv   # Per-tip predicted vs observed date
 │   └── clade_counts.csv           # Sample counts per clade
-├── windows/                       # Sliding-window subtree counts (EPIC #115 Phase 2)
+├── windows/                       # Sliding-window fitness (EPIC #115 Phases 2-3)
 │   ├── subtree_counts.csv         # Per-window per-mutation actual counts (coding)
-│   └── founder_muts.csv           # Per-window subtree founders + haplotypes
+│   ├── founder_muts.csv           # Per-window subtree founders + haplotypes
+│   └── fitness_trajectory.csv     # Per-window expected counts + delta_fitness_ratio
 ├── pcps/                          # One subdir per protein in pcp_genes (S, ORF1ab, E, ...)
 │   └── {gene}/
 │       ├── {clade}_pcps.csv           # Curated parent-child pairs per clade

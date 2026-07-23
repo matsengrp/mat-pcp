@@ -66,6 +66,47 @@ WINDOW_COUNT_SENTINELS = {
 }
 COUNT_REL_TOL = 1e-6
 
+# ---- Phase 3 (#118): windowed expected counts + delta_fitness_ratio ---------
+FITNESS_TRAJECTORY_COLUMNS = [
+    "window_start",
+    "ID",
+    "gene",
+    "aa_site",
+    "aa_mutation",
+    "wt_aa",
+    "mut_aa",
+    "synonymous",
+    "actual_count",
+    "expected_count",
+    "delta_fitness_ratio",
+]
+
+# The headline correctness proof: per-window synonymous calibration. Expected
+# counts are scaled by the evol_time factor T so that, per window, total expected
+# synonymous == total observed synonymous BY CONSTRUCTION (rates.py evol_time
+# strategy, same as the clade path). So sum(actual_syn)/sum(expected_syn) must be
+# ~1 (exactly, up to float). A departure means the T normalization or the
+# synonymous bookkeeping is wrong.
+SYN_CALIBRATION_REL_TOL = 1e-4
+# Secondary sanity check: synonymous delta_fitness_ratio should also center near 0.
+SYN_CENTER_ABS_TOL_MEDIAN = 0.1
+SYN_CENTER_ABS_TOL_MEAN = 0.3
+
+# Regression sentinels for the windowed fitness trajectory on config_test_data.
+# Integer-valued counts are exact (COUNT_REL_TOL); expected_count is a float sum
+# and gets the looser FITNESS_FLOAT_REL_TOL, matching how validate_test.py treats
+# the clade delta_fitness_*_sum. Update deliberately on an intended change.
+# n_windows is 18 (not 19): window 2020-05-23 has no observed synonymous mutations,
+# so its evol_time T is undefined and it is skipped (logged), unlike the actual-only
+# subtree_counts.csv which keeps all 19 windows.
+WINDOW_FITNESS_SENTINELS = {
+    "n_traj_rows": 1278390,
+    "n_windows": 18,
+    "actual_sum": 4165.0,
+    "expected_sum": 5631.0864,
+}
+FITNESS_FLOAT_REL_TOL = 0.01
+
 failures = []
 
 
@@ -354,6 +395,96 @@ def check_outputs(output_dir, cfg):
             print(f"[SKIP] count sentinels (non-test output dir {output_dir})")
 
 
+# =============================================================================
+# (C) Windowed expected counts + delta_fitness_ratio (#118)
+# =============================================================================
+
+def check_expected_outputs(output_dir, cfg):
+    import numpy as np
+
+    traj_path = os.path.join(output_dir, "windows/fitness_trajectory.csv")
+    if not os.path.exists(traj_path):
+        print(f"[SKIP] fitness_trajectory.csv not found under {output_dir}")
+        return
+
+    traj = pd.read_csv(traj_path)
+    check(
+        "fitness_trajectory columns",
+        list(traj.columns) == FITNESS_TRAJECTORY_COLUMNS,
+        list(traj.columns),
+    )
+    check("fitness_trajectory non-empty", len(traj) >= 1, f"{len(traj)} rows")
+    if not len(traj):
+        return
+
+    # ORF1a is dropped in favor of ORF1ab (aamutfit convention).
+    check(
+        "fitness_trajectory has no ORF1a rows",
+        int((traj["gene"] == "ORF1a").sum()) == 0,
+        f"{int((traj['gene'] == 'ORF1a').sum())} ORF1a rows",
+    )
+
+    syn = traj[traj["synonymous"] == True]  # noqa: E712
+    check("synonymous rows present", len(syn) >= 1, f"{len(syn)} rows")
+
+    # Headline correctness proof: per-window synonymous calibration is exact by
+    # construction (T = observed_syn / rate_syn), so sum(actual_syn) ==
+    # sum(expected_syn) per window (and overall). This is a real, sensitive check
+    # (unlike the median, it is NOT dominated by unobserved mutations).
+    if len(syn):
+        for w, g in syn.groupby("window_start"):
+            exp_sum = g["expected_count"].sum()
+            act_sum = g["actual_count"].sum()
+            check(
+                f"synonymous calibration sum(actual)==sum(expected) [{w}]",
+                is_close(act_sum, exp_sum, rel_tol=SYN_CALIBRATION_REL_TOL),
+                f"actual={act_sum:.4f}, expected={exp_sum:.4f}",
+            )
+        # Secondary sanity: the log-ratios also center near 0.
+        dfr = syn["delta_fitness_ratio"]
+        check(
+            "synonymous delta_fitness_ratio centered (|median| small)",
+            abs(dfr.median()) <= SYN_CENTER_ABS_TOL_MEDIAN,
+            f"median={dfr.median():.4f} (tol {SYN_CENTER_ABS_TOL_MEDIAN})",
+        )
+
+    # delta_fitness_ratio consistency with the pseudocount log-ratio formula.
+    p = cfg.get("fitness_pseudocount", 0.5)
+    recomputed = (
+        (traj["actual_count"] + p) / (traj["expected_count"] + p)
+    ).apply(lambda x: float("nan") if x <= 0 else x)
+    ok = np.allclose(
+        traj["delta_fitness_ratio"].to_numpy(),
+        np.log(recomputed.to_numpy()),
+        equal_nan=True,
+        atol=1e-9,
+    )
+    check("delta_fitness_ratio == log((actual+p)/(expected+p))", ok)
+
+    # Regression sentinels -- test data only. Sentinels left as None until a green
+    # run fills them in (avoids locking in a stale pre-redesign number).
+    if "test_data" in os.path.basename(os.path.normpath(output_dir)):
+        observed = {
+            "n_traj_rows": (int(len(traj)), COUNT_REL_TOL),
+            "n_windows": (int(traj["window_start"].nunique()), COUNT_REL_TOL),
+            "actual_sum": (float(traj["actual_count"].sum()), COUNT_REL_TOL),
+            "expected_sum": (float(traj["expected_count"].sum()), FITNESS_FLOAT_REL_TOL),
+        }
+        for key, expected in WINDOW_FITNESS_SENTINELS.items():
+            got, tol = observed[key]
+            if expected is None:
+                print(f"[INFO] fitness sentinel {key} observed = {got} (not yet pinned)")
+                continue
+            check(
+                f"fitness sentinel: {key}",
+                is_close(got, expected, rel_tol=tol),
+                f"got {got}, expected {expected} "
+                f"(update WINDOW_FITNESS_SENTINELS if intended)",
+            )
+    else:
+        print(f"[SKIP] fitness sentinels (non-test output dir {output_dir})")
+
+
 def main():
     with open(TEST_CONFIG) as fh:
         cfg = yaml.safe_load(fh)
@@ -372,6 +503,9 @@ def main():
     print("\n=== (B) output-CSV structural checks ===")
     output_dir = sys.argv[1] if len(sys.argv) > 1 else default_output_dir()
     check_outputs(output_dir, cfg)
+
+    print("\n=== (C) windowed expected counts + delta_fitness_ratio (#118) ===")
+    check_expected_outputs(output_dir, cfg)
 
     print()
     if failures:

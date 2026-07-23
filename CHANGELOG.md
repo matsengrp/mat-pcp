@@ -76,6 +76,48 @@ or `delta_fitness_ratio` yet (Phase 3).
 **No version bump** — same additive rationale and coordinated-bump policy as
 Phase 1 above.
 
+**windowed expected counts + `delta_fitness_ratio`** — Phase 3 of EPIC
+[#115](https://github.com/matsengrp/mat-pcp/issues/115) (issue
+[#118](https://github.com/matsengrp/mat-pcp/issues/118)). Turns the Phase-2
+per-window founders + actual counts into a mutation × time-window fitness
+trajectory: for each window's subtree founder it enumerates all possible coding
+mutations from the founder sequence and looks up mat-pcp's GLM neutral rate for
+each mutation's founder-sequence context. Expected counts use mat-pcp's **own
+clade-path `evol_time` normalization** (`rates.py`) applied **per window** — the
+same neutral-model application as the clade-based `aamut_fitness`, so the two are
+directly comparable — rather than s2trajectory's `rate × subtree_mut_count`. Then
+`delta_fitness_ratio = log((actual + p) / (expected + p))` per mutation per
+window (matching `aamutfit.ratio_fitness`).
+
+**Changes**:
+
+- New per-tree output `windows/fitness_trajectory.csv` (per `(window_start,
+  amino-acid ID)`: actual count, expected count, `delta_fitness_ratio`). Coding
+  only; ORF1a dropped in favor of ORF1ab (aamutfit convention).
+- New module `workflow/modules/expected_counts.py` (a pure-`pandas`/`numpy`
+  founder-context enumeration ported from s2trajectory's `PossibleMutations` — no
+  `bte`) and thin wrapper `workflow/scripts/window_expected_counts.py`; new rule
+  `window_expected_counts` (default env, after the GLM stage).
+- Expected counts come **only** from the GLM (via `glm/master_table.csv`); there
+  is no synonymous-average fallback. Per window,
+  `T = (observed synonymous count) / (rate summed over all possible synonymous
+  mutations)` and `expected(ID) = T × Σ_founders rate(context)`, so total expected
+  synonymous equals total observed synonymous **by construction** (the calibration
+  that makes synonymous `delta_fitness_ratio` center at 0). Because `T` divides out
+  the rate's absolute scale, mat-pcp's `rate` is used as-is (no `n_sites`/fraction
+  renormalization).
+- New shared helper `masking.global_masked_sites` — the single definition of the
+  clade-independent global site mask (config `sites_to_exclude` ∪ ProblematicSites
+  VCF ∪ outside `site_include_range`), reused as the windowed path's "bad sites".
+- New config key `window_min_subtree_size` (default 0 — keep all subtrees).
+- `validate_windowing.py` gains a per-window synonymous-calibration proof
+  (`sum(actual_syn) == sum(expected_syn)` per window, exact by construction), a
+  synonymous-centering sanity check, a formula check, and test-data regression
+  sentinels for the trajectory.
+
+**No version bump** — same additive rationale and coordinated-bump policy as
+Phase 1 above.
+
 ### v6
 
 **Multi-protein pipeline** — generalizes PCP extraction, founder slicing, DASM

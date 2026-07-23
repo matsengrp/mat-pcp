@@ -60,6 +60,9 @@ window_size: 90            # window width in days (~3 months)
 window_step: 45            # window stride in days (half of window_size => 50% overlap)
 window_start_time: null    # ISO date, or null to use the tree's earliest node date
 window_end_time: null      # ISO date, or null to use the tree's latest node date
+# Windowed expected counts + delta_fitness_ratio (Phase 3, #118). Drop founders
+# whose subtree is <= this size before computing expected counts (0 keeps all).
+window_min_subtree_size: 0
 
 # =============================================================================
 # Clade Configuration
@@ -266,6 +269,7 @@ threads:
   chronumental: 1
   chronumental_qc: 1
   window_subtree_counts: 1
+  window_expected_counts: 1
   mat_clade_subset: 4
   extract_pcps: 1
   count_mutations: 1
