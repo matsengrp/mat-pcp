@@ -46,7 +46,34 @@ SUBTREE_COUNTS_COLUMNS = [
     "count",
 ]
 
+# Regression sentinels for the config_test_data windowing outputs. These lock
+# Phase 2's counts down while later EPIC #115 phases churn windowing.py, so an
+# unintended counting regression surfaces immediately. chronumental is
+# deterministic run-to-run (PRNGKey(0); verified byte-identical node dates across
+# reruns), so these actual (integer) counts are exact -- matching how
+# validate_test.py treats clade `actual_count` (rel_tol=1e-6). Phase 3 will add
+# windowed expected-count / fitness sums here; those are floats and get the
+# looser rel_tol=0.01, like the clade `delta_fitness_*_sum`.
+#
+# UPDATE these deliberately when the output intentionally changes (a
+# windowing-logic change, OR a chronumental/jax version bump that shifts a node
+# across a window boundary). A mismatch with no such intended change is a bug.
+WINDOW_COUNT_SENTINELS = {
+    "n_windows": 19,
+    "n_founder_rows": 370,
+    "n_count_rows": 4041,
+    "total_count": 4150,
+}
+COUNT_REL_TOL = 1e-6
+
 failures = []
+
+
+def is_close(actual, expected, rel_tol=COUNT_REL_TOL, abs_tol=1e-9):
+    """Float-tolerant equality, mirroring validate_test.py."""
+    if expected == 0:
+        return abs(actual) <= abs_tol
+    return abs(actual - expected) <= max(rel_tol * abs(expected), abs_tol)
 
 
 def check(name, ok, detail=""):
@@ -306,6 +333,25 @@ def check_outputs(output_dir, cfg):
             off_grid = set(counts["window_start"].astype(str)) - grid
             check("every window_start on the window grid", not off_grid,
                   f"off-grid: {sorted(off_grid)[:5]}")
+
+        # Regression sentinels -- test data only (the values are specific to
+        # config_test_data; a production tree would legitimately differ).
+        if "test_data" in os.path.basename(os.path.normpath(output_dir)):
+            observed = {
+                "n_windows": int(counts["window_start"].nunique()),
+                "n_founder_rows": int(len(founders)),
+                "n_count_rows": int(len(counts)),
+                "total_count": int(counts["count"].sum()),
+            }
+            for key, expected in WINDOW_COUNT_SENTINELS.items():
+                check(
+                    f"count sentinel: {key}",
+                    is_close(observed[key], expected),
+                    f"got {observed[key]}, expected {expected} "
+                    f"(update WINDOW_COUNT_SENTINELS if intended)",
+                )
+        else:
+            print(f"[SKIP] count sentinels (non-test output dir {output_dir})")
 
 
 def main():

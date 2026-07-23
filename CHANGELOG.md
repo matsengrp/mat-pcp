@@ -68,7 +68,8 @@ or `delta_fitness_ratio` yet (Phase 3).
 - New config keys `window_size`, `window_step`, `window_start_time`,
   `window_end_time`.
 - New correctness harness: `workflow/scripts/validate_windowing.py` (pure +
-  output-CSV checks, base env) and the CI-only `validate_windowing` rule
+  output-CSV checks + test-data count regression sentinels, base env) and the
+  CI-only `validate_windowing` rule
   (`workflow/scripts/validate_windowing_tree.py`, bte env). The tree-level rule
   is **not** in `results_files`.
 
