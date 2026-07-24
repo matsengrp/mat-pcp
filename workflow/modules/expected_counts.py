@@ -381,13 +381,31 @@ class ExpectedCounts:
         return table
 
     def _touched_sites(self, founder_muts):
-        """All sites in codons touched by any founder mutation (bad sites removed)."""
+        """Sites whose GLM rate can change under this founder (bad sites removed).
+
+        A founder mutation shifts the rate of two distinct site sets, and the
+        recompute must cover **both** or a subset of rates goes stale:
+
+        1. **Translation** -- a mutation rewrites its whole codon, so every site
+           in that codon needs re-translating (``wt_aa``/``is_synonymous``).
+        2. **Motif context** -- the GLM rate keys on the 3-nt motif
+           ``ref_seq[s-2:s+1]`` *centered* on ``s``, so a mutation at site ``X``
+           changes the motif of its immediate neighbors ``X-1`` and ``X+1`` even
+           when they lie in a *different* codon. This ±1 halo is keyed on every
+           founder mutation (coding or not -- a noncoding mutation still shifts a
+           coding neighbor's motif).
+
+        Recompute the union of both. (The halo was previously omitted, silently
+        staling the rate of coding sites adjacent to a founder mutation across a
+        codon boundary -- roughly one neighbor per codon-boundary mutation.)
+        """
         mut_sites = list(founder_muts.keys())
         codon_data = self.tall_coding_sites.query(
             "site.isin(@mut_sites) & codon_position != 'noncoding'"
         )
         starts = codon_data.site - codon_data.codon_position.astype(int) + 1
         sites = {start + j for start in starts for j in range(3)}
+        sites.update(x + d for x in mut_sites for d in (-1, 0, 1))
         return sorted(sites & self._keep_sites)
 
     def founder_rate_table(self, founder_muts):

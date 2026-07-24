@@ -103,7 +103,7 @@ WINDOW_FITNESS_SENTINELS = {
     "n_traj_rows": 1278390,
     "n_windows": 18,
     "actual_sum": 4165.0,
-    "expected_sum": 5631.0864,
+    "expected_sum": 5631.6126,
 }
 FITNESS_FLOAT_REL_TOL = 0.01
 
@@ -485,6 +485,80 @@ def check_expected_outputs(output_dir, cfg):
         print(f"[SKIP] fitness sentinels (non-test output dir {output_dir})")
 
 
+def check_founder_rate_table_invariant(output_dir, cfg):
+    """The per-founder diff-splice must equal a full-genome rebuild.
+
+    ``ExpectedCounts.founder_rate_table`` recomputes GLM rates only for the sites
+    a founder's mutations touch and splices them into the shared reference
+    enumeration. That optimization is correct **iff** the recomputed site set
+    covers every site whose rate can change -- both the mutated codons (for
+    translation) and the ±1 motif halo (the 3-nt rate context). A regression here
+    (previously: the motif halo was omitted, silently staling the rate of coding
+    sites adjacent to a founder mutation across a codon boundary) is invisible to
+    the aggregate synonymous calibration, so guard it directly: rebuild the whole
+    genome from the founder sequence and require a byte-for-byte-equal rate table.
+    """
+    import numpy as np
+
+    needed = {
+        "master": os.path.join(output_dir, "glm/master_table.csv"),
+        "coding": os.path.join(output_dir, "ref/coding_sites.csv"),
+        "ref": os.path.join(output_dir, "ref/ref.fa"),
+        "site_mask": os.path.join(output_dir, "ref/site_mask.csv"),
+        "founders": os.path.join(output_dir, "windows/founder_muts.csv"),
+    }
+    rna = cfg.get("rna_structure_data")
+    if not all(os.path.exists(p) for p in needed.values()) or not (
+        rna and os.path.exists(rna)
+    ):
+        print(f"[SKIP] founder_rate_table invariant (inputs missing under {output_dir})")
+        return
+
+    EC = workflow_loader.load_workflow_module("expected_counts")
+    masking = workflow_loader.load_workflow_module("masking")
+
+    ref_seq = EC.load_reference_from_fasta(needed["ref"])
+    rates_df = EC.prepare_rates_df(needed["master"])
+    vcf_sites = pd.read_csv(needed["site_mask"])["site"].tolist()
+    bad_sites = masking.global_masked_sites(
+        sites_to_exclude=cfg.get("sites_to_exclude", []),
+        vcf_masked_sites=vcf_sites,
+        site_include_range=cfg.get("site_include_range", {}),
+        genome_len=len(ref_seq),
+    )
+    basepair_df = EC.build_site_unpaired_map(rna, len(ref_seq))
+    ec = EC.ExpectedCounts(
+        ref_seq, needed["coding"], bad_sites, basepair_df, rates_df
+    )
+
+    founders = pd.read_csv(needed["founders"]).fillna({"founder_nt_mutations": ""})
+    founders["_n"] = founders["founder_nt_mutations"].str.split().apply(len)
+    # The most-mutated founder maximizes codon-boundary coverage (the failure mode).
+    top = founders.sort_values("_n", ascending=False).head(1)
+    if top.empty or int(top["_n"].iloc[0]) == 0:
+        print("[SKIP] founder_rate_table invariant (no mutated founders)")
+        return
+    fmuts = EC.founder_muts_to_dict(top["founder_nt_mutations"].iloc[0], bad_sites)
+
+    key = ["site", "mut_nt", "gene"]
+    opt = ec.founder_rate_table(fmuts).set_index(key)["rate"].sort_index()
+    founder_seq = EC.apply_muts(ref_seq, fmuts)
+    full_map = ec.reference_site_map.assign(
+        wt_nt=[fmuts.get(s, ref_seq[s - 1]) for s in ec.reference_site_map.site]
+    )
+    truth = ec._build_rate_table(full_map, founder_seq).set_index(key)["rate"].sort_index()
+    joined = opt.to_frame("opt").join(truth.to_frame("truth"), how="outer")
+    n_mismatch = int(
+        (~np.isclose(joined["opt"], joined["truth"], equal_nan=True)).sum()
+    )
+    check(
+        "founder_rate_table == full-genome rebuild (motif halo)",
+        n_mismatch == 0,
+        f"{n_mismatch} rate mismatches for founder "
+        f"{top['founder_id'].iloc[0]} ({int(top['_n'].iloc[0])} muts)",
+    )
+
+
 def main():
     with open(TEST_CONFIG) as fh:
         cfg = yaml.safe_load(fh)
@@ -506,6 +580,7 @@ def main():
 
     print("\n=== (C) windowed expected counts + delta_fitness_ratio (#118) ===")
     check_expected_outputs(output_dir, cfg)
+    check_founder_rate_table_invariant(output_dir, cfg)
 
     print()
     if failures:
