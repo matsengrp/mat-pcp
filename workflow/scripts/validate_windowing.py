@@ -100,10 +100,10 @@ SYN_CENTER_ABS_TOL_MEAN = 0.3
 # so its evol_time T is undefined and it is skipped (logged), unlike the actual-only
 # subtree_counts.csv which keeps all 19 windows.
 WINDOW_FITNESS_SENTINELS = {
-    "n_traj_rows": 1278390,
+    "n_traj_rows": 1277219,
     "n_windows": 18,
-    "actual_sum": 4165.0,
-    "expected_sum": 5631.6126,
+    "actual_sum": 4112.0,
+    "expected_sum": 5600.3459,
 }
 FITNESS_FLOAT_REL_TOL = 0.01
 

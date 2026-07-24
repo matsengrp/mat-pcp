@@ -108,6 +108,12 @@ window (matching `aamutfit.ratio_fitness`).
 - New shared helper `masking.global_masked_sites` — the single definition of the
   clade-independent global site mask (config `sites_to_exclude` ∪ ProblematicSites
   VCF ∪ outside `site_include_range`), reused as the windowed path's "bad sites".
+- **Founder→reference reversions are masked** on the windowed path, mirroring the
+  clade path's `to_nt == ref_nt` exclusion (`build_count_table`): a possible
+  mutation whose destination is the reference base (arising only at
+  founder-mutated sites) is dropped from both the expected enumeration and the
+  actual counts, so these artifact-prone reversions are treated identically to
+  the clade-based path and windowed fitness stays comparable to `aamut_fitness`.
 - New config key `window_min_subtree_size` (default 0 — keep all subtrees).
 - `validate_windowing.py` gains a per-window synonymous-calibration proof
   (`sum(actual_syn) == sum(expected_syn)` per window, exact by construction), a

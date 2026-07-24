@@ -468,6 +468,12 @@ def compute_fitness_trajectory(
     construction (the calibration that makes synonymous ``delta_fitness_ratio``
     center at 0). Then ``delta_fitness_ratio = log((actual + p) / (expected + p))``.
 
+    Founder->reference reversions (a possible mutation whose destination is the
+    reference base, arising only at founder-mutated sites) are masked from both
+    the expected enumeration and the actual counts, mirroring the clade path's
+    ``to_nt == ref_nt`` exclusion so the two paths treat these artifact-prone
+    reversions identically.
+
     Args:
         founder_muts_df: ``windows/founder_muts.csv`` as a dataframe.
         subtree_counts_df: ``windows/subtree_counts.csv`` as a dataframe.
@@ -495,6 +501,7 @@ def compute_fitness_trajectory(
     )
 
     unmatched_obs = 0
+    reversion_obs = 0
     total_obs = 0
     skipped_windows = 0
     out_frames = []
@@ -509,6 +516,23 @@ def compute_fitness_trajectory(
             founder_id = frow["founder_id"]
             fmuts = frow["founder_muts"]
             frt = ec.founder_rate_table(fmuts)
+
+            # Mask founder->reference reversions (mirror the clade path's
+            # to_nt == ref_nt exclusion in build_count_table): a possible mutation
+            # whose destination base equals the *reference* base. These arise only
+            # at founder-mutated sites (elsewhere wt == ref, so no away-mutation
+            # lands on ref) and are enriched for sequencing/recurrent artifacts,
+            # exactly like clade-defining reversions -- so drop them from BOTH the
+            # expected enumeration and the actual counts (below), keeping the
+            # windowed path comparable to the clade-based aamut_fitness. Keyed on
+            # ``fmuts`` (O(#founder mutations)); sites not founder-mutated map to
+            # NaN and are never dropped.
+            ref_at_mut = {s: ec.ref_seq[s - 1] for s in fmuts} if fmuts else {}
+            if ref_at_mut:
+                frt = frt[
+                    ~frt["site"].map(ref_at_mut).eq(frt["mut_nt"]).fillna(False)
+                ]
+
             syn_ids.update(frt.loc[frt["is_synonymous"], "ID"].unique())
 
             contrib = frt.groupby("ID")["rate"].sum()
@@ -527,6 +551,15 @@ def compute_fitness_trajectory(
                 obs = fc[["nt_site", "nt_mutation", "count"]].copy()
                 obs["mut_nt"] = obs["nt_mutation"].str[-1]
                 obs = obs.rename(columns={"nt_site": "site"})
+                # Same founder->reference reversion mask on the actual side, so a
+                # reversion enters neither the expected enumeration nor the
+                # observed counts / calibration.
+                if ref_at_mut:
+                    obs_rev = (
+                        obs["site"].map(ref_at_mut).eq(obs["mut_nt"]).fillna(False)
+                    )
+                    reversion_obs += int(obs_rev.sum())
+                    obs = obs[~obs_rev]
                 total_obs += len(obs)
                 merged = obs.merge(
                     frt[["site", "mut_nt", "ID"]], on=["site", "mut_nt"], how="left"
@@ -575,10 +608,16 @@ def compute_fitness_trajectory(
             window_df.drop(columns=["rate_by_id"]).reset_index()
         )
 
+    if reversion_obs:
+        log(
+            f"Masked {reversion_obs} observed founder->reference reversion(s) "
+            f"(dropped from actual counts + expected enumeration)"
+        )
     if total_obs:
         log(
-            f"Observed count rows: {total_obs}; unmatched to founder enumeration: "
-            f"{unmatched_obs} ({100.0 * unmatched_obs / total_obs:.2f}%)"
+            f"Observed count rows (post-reversion-mask): {total_obs}; unmatched to "
+            f"founder enumeration: {unmatched_obs} "
+            f"({100.0 * unmatched_obs / total_obs:.2f}%)"
         )
     if skipped_windows:
         log(f"Skipped {skipped_windows} window(s) lacking synonymous calibration data")

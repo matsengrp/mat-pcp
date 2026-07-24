@@ -319,9 +319,13 @@ per window: `T = (observed synonymous count) / (rate summed over all possible
 synonymous mutations)` and `expected(ID) = T × Σ_founders rate(context)`, so total
 expected synonymous equals total observed synonymous by construction. Expected
 counts come only from the GLM (no synonymous-average fallback). Coding only; ORF1a
-is dropped in favor of ORF1ab (matching `aamut_fitness`). A window with **no
-observed synonymous mutations** cannot be calibrated (its `T` is undefined) and is
-omitted, so this file may cover fewer windows than `subtree_counts.csv`.
+is dropped in favor of ORF1ab (matching `aamut_fitness`). **Founder→reference
+reversions** (a possible mutation whose destination is the reference base, arising
+only at founder-mutated sites) are masked from both the expected enumeration and
+the actual counts, mirroring the clade path's `to_nt == ref_nt` exclusion. A window
+with **no observed synonymous mutations** cannot be calibrated (its `T` is
+undefined) and is omitted, so this file may cover fewer windows than
+`subtree_counts.csv`.
 
 One row per `(window_start, ID)`, where `ID` is the amino-acid mutation identity
 `<gene>-<wt_aa><aa_site><mut_aa>`.
