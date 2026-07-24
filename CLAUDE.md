@@ -200,7 +200,7 @@ The configuration (`config/config.yaml`) is organized into:
    expected synonymous == total observed synonymous per window by construction, and
    windowed fitness is directly comparable to the clade-based `aamut_fitness`.
 5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
-6. **PCP Extraction**: `pcp_genes`, `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`
+6. **PCP Extraction**: `pcp_genes` (PCP branch QC reuses the shared Mutation-Counting keys `max_nt_mutations` / `max_reversions_to_ref` / `max_reversions_to_clade_founder`)
 7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources)
 8. **Mutation Counting**: `max_nt_mutations`, `max_reversions_*`, `site_include_range`
 9. **GLM**: `rna_structure_data`, `glm_lightswitch_boundaries`

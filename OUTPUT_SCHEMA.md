@@ -22,7 +22,7 @@ Curated parent-child sequence pairs extracted from the mutation-annotated tree. 
 **Notes:**
 - Sequences are already sliced to the gene region of interest, so they can be used directly for training.
 - PCPs have been curated to remove branches with identical parent/child sequences (in the gene region). As of v2, this filter is applied during extraction in the same pass that builds the table; there is no separate `mat/clades/{clade}_pcps_raw.csv` file.
-- The filtering criteria (max mutations, max reversions) are controlled by config parameters `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`, and `pcp_max_reversions_to_clade_founder`.
+- The filtering criteria (max mutations, max reversions) are controlled by the shared Mutation-Counting config parameters `max_nt_mutations`, `max_reversions_to_ref`, and `max_reversions_to_clade_founder` (as of v8; PCP extraction and clade/window mutation counting filter branches identically).
 
 ### `pcps/{gene}/all_pcps_dasm_ready.csv` and `pcps/{gene}/{clade}_pcps_dasm_ready.csv` (v2+)
 

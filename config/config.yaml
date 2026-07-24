@@ -61,9 +61,6 @@ qc_filter_options:
 
 subset_frac: 1.0  # No random sampling - use all samples
 
-# Skip QC filtering to match SARS2-mut-fitness behavior (only apply datetime cutoff)
-skip_qc_filtering: true
-
 # =============================================================================
 # Tree Processing
 # =============================================================================
@@ -78,7 +75,7 @@ mat_subset_kwargs: ""
 # (EPIC #115). NOTE: "--use_gpu" requires the CUDA jaxlib wheel that is
 # commented out in envs/chronumental.yml; with the CPU-only env it silently
 # falls back to CPU, so don't add it until GPU support is enabled there.
-chronumental_kwargs: "--steps 1000"
+chronumental_kwargs: "--steps 5000"
 # chronumental_qc gate: fail the run if the median absolute tip-date residual
 # (chronumental-predicted minus metadata collection date, in days) exceeds this.
 chronumental_max_median_abs_tip_residual_days: 30
@@ -132,10 +129,9 @@ reference_clade: "19A"
 pcp_genes:
   - S
 
-# PCP filtering parameters (match SARS2-mut-fitness)
-pcp_max_nt_mutations: 4
-pcp_max_reversions_to_ref: 1
-pcp_max_reversions_to_clade_founder: 1
+# PCP branch QC reuses the shared Mutation-Counting keys (max_nt_mutations /
+# max_reversions_to_ref / max_reversions_to_clade_founder), so PCP extraction
+# and clade/window mutation counting filter branches identically.
 
 # =============================================================================
 # Clade Founder Configuration
@@ -258,9 +254,8 @@ fitness_pseudocount: 0.5
 fitness_N_f: 300
 fitness_N_n_exp: 300
 
-# ORF1ab to NSP mapping (amino acid site ranges)
-# NOTE: We explicitly define ALL NSPs here to avoid merging with default config.yaml
-# which uses different names (nsp5 vs "nsp5 (Mpro)", nsp12 vs "nsp12 (RdRp)")
+# ORF1ab to NSP mapping (amino acid site ranges). Note the display names
+# "nsp5 (Mpro)" and "nsp12 (RdRp)" for those two NSPs.
 orf1ab_to_nsps:
   nsp1: [1, 180]
   nsp2: [181, 818]
