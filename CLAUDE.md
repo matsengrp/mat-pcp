@@ -14,11 +14,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Stage | Description | Key Rules |
 |-------|-------------|-----------|
-| 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `get_ref_fasta`, `ref_coding_sites` |
+| 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `export_newick`, `chronumental`, `chronumental_qc`, `window_subtree_counts`, `get_ref_fasta`, `ref_coding_sites` |
 | 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade` |
 | 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
 | 5 | Unified Count Table | `build_count_table` (full mutation grid + actual counts + masking flags, via `modules/masking.py`) |
-| 6 | GLM Rate Estimation | `annotate_counts`, `curate_counts`, `master_table`, `get_rates_table` |
+| 6 | GLM Rate Estimation | `annotate_counts`, `curate_counts`, `master_table`, `get_rates_table`, `window_expected_counts` (windowed expected counts + `delta_fitness_ratio`) |
 | 7 | Fitness Estimation | `ntmut_fitness_by_clade`, `aamut_fitness_by_clade`, `aggregate_*_fitness` |
 | 8 | Validation | `extract_mutations_from_pcps`, `validate_pcp_vs_counts` |
 
@@ -42,6 +42,8 @@ Any change that affects downstream consumers requires a version bump:
 - Changes to GLM rate estimation
 
 In general, any change to the pipeline is a breaking change since models trained on one version's outputs may not work with another's.
+
+**Additive-output carve-out.** A change that only *adds* new output files — reading no existing schema and read by no current downstream consumer — may ship without a version bump; the coordinated bump then rides with the next schema-breaking change. (Example: the additive outputs of EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115) — `mat/node_dates*` (Phase 1), `windows/subtree_counts.csv` + `founder_muts.csv` (Phase 2), `windows/fitness_trajectory.csv` (Phase 3) — each shipped no-bump; per maintainer decision the single coordinated bump for the whole EPIC landed as **v7** with Phase 4 (#119).)
 
 ### How to Bump Version
 
@@ -175,6 +177,28 @@ The configuration (`config/config.yaml`) is organized into:
    may override `max_leaf_date`. `max_leaf_date` is optional; when unset it
    defaults to `None`, meaning no upper date cutoff.
 4. **Tree Processing**: `optimize_tree`, `mat_subset_kwargs`
+4b. **Node Dating (chronumental)**: `chronumental_kwargs` (passed verbatim to
+   `chronumental`, e.g. `--steps`), `chronumental_max_median_abs_tip_residual_days`
+   (the `chronumental_qc` gate — the run fails if the median absolute tip-date
+   residual exceeds it). The QC rule runs on every tree.
+4c. **Window Fitness (sliding windows)** (EPIC #115 Phases 2-3): `window_size`,
+   `window_step`, `window_start_time`, `window_end_time`, `window_min_subtree_size`.
+   The `window_subtree_counts` rule (Phase 2) buckets branch mutations into
+   overlapping time windows (anchored at the end date, tiled backwards) and emits
+   the `windows/` actual-count outputs. Its branch QC reuses the Mutation-Counting
+   keys (`max_nt_mutations` / `max_reversions_to_ref` /
+   `max_reversions_to_clade_founder`), so the clade-based and window-based paths
+   filter branches identically. The `window_expected_counts` rule (Phase 3, #118,
+   `modules/expected_counts.py` — a pure-pandas port of s2trajectory's
+   `PossibleMutations`, no bte) then computes per-window expected counts from the
+   GLM neutral model (`glm/master_table.csv`) and emits
+   `windows/fitness_trajectory.csv` with
+   `delta_fitness_ratio = log((actual + p) / (expected + p))`. Expected counts use
+   the GLM only (no synonymous-average fallback) and **mat-pcp's own clade-path
+   `evol_time` normalization applied per window** (`T = observed_syn / rate_syn`;
+   `expected = T × rate`), NOT s2trajectory's `rate × subtree_mut_count` — so total
+   expected synonymous == total observed synonymous per window by construction, and
+   windowed fitness is directly comparable to the clade-based `aamut_fitness`.
 5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
 6. **PCP Extraction**: `pcp_genes`, `pcp_max_nt_mutations`, `pcp_max_reversions_to_ref`
 7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources)
@@ -189,6 +213,7 @@ The configuration (`config/config.yaml`) is organized into:
 
 Results are stored per tree in `{output_root}/{label}_{version}/`:
 - `mat/`: Filtered trees, clade subtrees
+- `windows/`: Sliding-window subtree counts + founders (Phase 2) + per-window expected counts / `delta_fitness_ratio` trajectory (Phase 3)
 - `pcps/`: Curated parent-child pairs
 - `ref/`: Reference genome, coding sites
 - `mutation_counts/`: Per-clade and aggregated counts

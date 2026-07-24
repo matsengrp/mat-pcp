@@ -1,0 +1,16 @@
+name: chronumental
+channels:
+  - https://prefix.dev/conda-forge
+  - https://prefix.dev/bioconda
+dependencies:
+  # Pinned to 3.9 (not a range like the other envs) to keep chronumental's
+  # jax/numpyro dependency chain on a resolvable, tested wheel set. Loosen only
+  # after re-verifying the pip install and a pipeline run.
+  - python=3.9
+  - pip>=23
+  - pip:
+    - chronumental==0.0.65
+    # GPU support (deferred; see EPIC #115 Risks). chronumental uses JAX; a
+    # CUDA11/cuDNN8.6 jaxlib wheel enables `--use_gpu`. Left commented until
+    # production-tree dating is tackled.
+    # - https://storage.googleapis.com/jax-releases/cuda11/jaxlib-0.4.14+cuda11.cudnn86-cp39-cp39-manylinux2014_x86_64.whl

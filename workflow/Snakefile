@@ -272,6 +272,16 @@ results_files = [
     "rates_table.csv",
     "fitness/ntmut_fitness_aggregated.csv",
     "aamut_fitness/all_aamut_fitness.csv",
+    # chronumental node dating (#116): the QC report transitively builds
+    # mat/node_dates.tsv and gates the run on every tree.
+    "mat/node_dates_qc.tsv",
+    # Sliding-window per-mutation actual counts (#117); transitively builds
+    # windows/founder_muts.csv. Additive output (no schema/consumer yet), so it
+    # ships no-bump per the EPIC #115 coordinated-bump decision.
+    "windows/subtree_counts.csv",
+    # Windowed expected counts + delta_fitness_ratio (#118). Additive output,
+    # also no-bump per the EPIC #115 coordinated-bump decision.
+    "windows/fitness_trajectory.csv",
 ]
 
 rule all:
@@ -448,6 +458,95 @@ rule optimize_mat_tree:
         """
 
 
+rule export_newick:
+    """Export the filtered MAT to Newick for chronumental (needs Newick, not .pb)."""
+    input:
+        tree=get_final_tree()
+    output:
+        nwk=os.path.join(OUTDIR, "mat/filtered_tree.nwk")
+    log:
+        stdout=os.path.join(OUTDIR, "log/export_newick.stdout"),
+        stderr=os.path.join(OUTDIR, "log/export_newick.stderr")
+    conda:
+        "envs/usher.yml"
+    shell:
+        """
+        matUtils extract -i {input.tree} -t {output.nwk} \
+            > {log.stdout} 2> {log.stderr}
+        """
+
+
+rule chronumental:
+    """Infer node dates (tips + internal) for the full filtered tree.
+
+    Feeds the filtered metadata straight to chronumental, which auto-detects the
+    strain/date columns (verified to give byte-identical dates to a hand-built
+    strain->date table). Output ``node_dates.tsv`` has a header row then
+    ``<node_id>\\t<predicted_date>`` for every node.
+    """
+    input:
+        nwk=rules.export_newick.output.nwk,
+        metadata=rules.filter_metadata.output.filtered_metadata
+    output:
+        node_dates=os.path.join(OUTDIR, "mat/node_dates.tsv"),
+        # chronumental always writes the dated Newick tree; declare it (default
+        # path is derived from --tree, so pass --tree_out explicitly) so it is
+        # tracked/cleaned like any other output rather than left on disk.
+        dated_tree=os.path.join(OUTDIR, "mat/chronumental_timetree.nwk")
+    params:
+        chronumental_kwargs=config.get("chronumental_kwargs", "")
+    threads: get_threads("chronumental")
+    resources:
+        mem_mb=16000,
+        runtime=240
+    benchmark:
+        os.path.join(OUTDIR, "benchmarks/chronumental.tsv")
+    log:
+        stdout=os.path.join(OUTDIR, "log/chronumental.stdout"),
+        stderr=os.path.join(OUTDIR, "log/chronumental.stderr")
+    conda:
+        "envs/chronumental.yml"
+    shell:
+        """
+        chronumental --tree {input.nwk} {params.chronumental_kwargs} \
+            --dates {input.metadata} --dates_out {output.node_dates} \
+            --tree_out {output.dated_tree} \
+            > {log.stdout} 2> {log.stderr}
+        """
+
+
+rule chronumental_qc:
+    """Always-on per-tree sanity check of chronumental node dates.
+
+    Wired into ``rule all`` so it runs on every tree (production + CI). Fails the
+    run on any node-ID / monotonicity / coverage violation, and when the median
+    absolute tip-date residual exceeds the configured threshold.
+    """
+    input:
+        tree=get_final_tree(),
+        node_dates=rules.chronumental.output.node_dates,
+        metadata=rules.filter_metadata.output.filtered_metadata
+    output:
+        report=os.path.join(OUTDIR, "mat/node_dates_qc.tsv"),
+        residuals=os.path.join(OUTDIR, "mat/node_dates_residuals.csv")
+    params:
+        max_median_abs_tip_residual_days=config.get(
+            "chronumental_max_median_abs_tip_residual_days", 30
+        )
+    threads: get_threads("chronumental_qc")
+    resources:
+        mem_mb=16000,
+        runtime=120
+    benchmark:
+        os.path.join(OUTDIR, "benchmarks/chronumental_qc.tsv")
+    log:
+        os.path.join(OUTDIR, "log/chronumental_qc.log")
+    conda:
+        "envs/bte.yml"
+    script:
+        "scripts/chronumental_qc.py"
+
+
 rule get_ref_fasta:
     """Download reference genome FASTA."""
     params:
@@ -516,6 +615,91 @@ rule ref_coding_sites:
         "envs/default.yml"
     script:
         "scripts/ref_coding_sites.py"
+
+
+rule window_subtree_counts:
+    """Bucket branch mutations into sliding time windows over the full tree.
+
+    EPIC #115 Phase 2 (#117). Over the full dated tree, groups observed branch
+    mutations into overlapping time windows (anchored at the end date, tiled
+    backwards) and emits per-window subtree founders + per-mutation actual
+    counts. Branch QC reuses the clade path's config keys / semantics. No
+    expected counts / delta_fitness_ratio (Phase 3).
+    """
+    input:
+        tree=get_final_tree(),
+        node_dates=rules.chronumental.output.node_dates,
+        gtf=rules.edit_ref_gtf.output.gtf,
+        fasta=rules.get_ref_fasta.output.ref_fasta,
+        coding_sites=rules.ref_coding_sites.output.csv,
+    output:
+        founder_muts=os.path.join(OUTDIR, "windows/founder_muts.csv"),
+        subtree_counts=os.path.join(OUTDIR, "windows/subtree_counts.csv"),
+    params:
+        window_size=config.get("window_size", 90),
+        window_step=config.get("window_step", 45),
+        window_start_time=config.get("window_start_time", None),
+        window_end_time=config.get("window_end_time", None),
+        # Reuse the SAME branch-QC keys as the clade-based count_mutations path
+        # so the two analysis paths filter branches identically.
+        max_nt_mutations=config["max_nt_mutations"],
+        max_reversions_to_ref=config["max_reversions_to_ref"],
+        max_reversions_to_clade_founder=config["max_reversions_to_clade_founder"],
+    threads: get_threads("window_subtree_counts")
+    resources:
+        mem_mb=16000,
+        runtime=240
+    benchmark:
+        os.path.join(OUTDIR, "benchmarks/window_subtree_counts.tsv")
+    log:
+        os.path.join(OUTDIR, "log/window_subtree_counts.log")
+    conda:
+        "envs/bte.yml"
+    script:
+        "scripts/window_subtree_counts.py"
+
+
+rule validate_windowing:
+    """Tree-level correctness harness for the windowing algorithm (#117).
+
+    A CI-only target (built explicitly on the test config, NOT in
+    ``results_files``): grid anchoring, partition/overlap, and the step-vs-size
+    masking asymmetry, using synthetic times injected over the real test nodes.
+
+    Script is ``validate_windowing_tree.py`` (the bte-env tree-level checks) --
+    distinct from the standalone ``validate_windowing.py``, which CI runs
+    directly for the pure-function + output-CSV checks (base env). Threads reuse
+    the ``window_subtree_counts`` key since both are the same one-off bte pass.
+    """
+    input:
+        tree=get_final_tree(),
+        node_dates=rules.chronumental.output.node_dates,
+        gtf=rules.edit_ref_gtf.output.gtf,
+        fasta=rules.get_ref_fasta.output.ref_fasta,
+        coding_sites=rules.ref_coding_sites.output.csv,
+    output:
+        report=os.path.join(OUTDIR, "windows/validation_report.txt"),
+    params:
+        window_size=config.get("window_size", 90),
+        window_step=config.get("window_step", 45),
+        max_nt_mutations=config["max_nt_mutations"],
+        max_reversions_to_ref=config["max_reversions_to_ref"],
+        max_reversions_to_clade_founder=config["max_reversions_to_clade_founder"],
+    threads: get_threads("window_subtree_counts")
+    resources:
+        mem_mb=16000,
+        runtime=240
+    log:
+        os.path.join(OUTDIR, "log/validate_windowing.log")
+    conda:
+        "envs/bte.yml"
+    script:
+        "scripts/validate_windowing_tree.py"
+
+
+# NOTE: rule window_expected_counts (EPIC #115 Phase 3, #118) is defined after
+# the GLM stage (it depends on rules.master_table / rules.curate_counts, which
+# Snakemake resolves at parse time), just below rule master_table.
 
 
 # =============================================================================
@@ -1161,6 +1345,59 @@ rule get_rates_table:
         "envs/default.yml"
     script:
         "scripts/get_rates_table.py"
+
+
+rule window_expected_counts:
+    """Windowed expected counts + delta_fitness_ratio (EPIC #115 Phase 3, #118).
+
+    Turns the Phase-2 per-window founders + actual counts into a mutation x
+    time-window fitness trajectory. For each window's subtree founder, enumerates
+    all possible coding mutations from the founder sequence and looks up mat-pcp's
+    GLM neutral rate for each mutation's founder-sequence context. Expected counts
+    use mat-pcp's own clade-path ``evol_time`` normalization (``rates.py``) applied
+    per window: ``T_window = (observed synonymous count) / (rate summed over all
+    possible synonymous mutations)`` and ``expected(ID) = T_window x sum_founders
+    rate(context)``, so total expected synonymous == total observed synonymous by
+    construction. Then ``delta_fitness_ratio = log((actual + p) / (expected + p))``
+    (matching ``aamutfit.ratio_fitness``).
+
+    Expected counts come ONLY from the GLM (no synonymous-average fallback). ``T``
+    divides out the rate's absolute scale, so the raw GLM rate is used directly.
+    Pure pandas/numpy (no bte) -- runs in the default env. Placed here (after the
+    GLM stage) because it depends on ``rules.master_table``.
+    """
+    input:
+        founder_muts=rules.window_subtree_counts.output.founder_muts,
+        subtree_counts=rules.window_subtree_counts.output.subtree_counts,
+        master_table=rules.master_table.output.master_table,
+        coding_sites=rules.ref_coding_sites.output.csv,
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta,
+        site_mask=rules.get_site_mask.output.csv,
+        rna_structure=config["rna_structure_data"],
+    output:
+        trajectory=os.path.join(OUTDIR, "windows/fitness_trajectory.csv"),
+    params:
+        # Global (clade-independent) masked sites reuse the clade path's config.
+        sites_to_exclude=config.get("sites_to_exclude", []),
+        site_include_range=config.get(
+            "site_include_range", {"start": 266, "end": 29674}
+        ),
+        fitness_pseudocount=config.get("fitness_pseudocount", 0.5),
+        # Drop founders whose subtree is <= this size (s2trajectory's
+        # min_founder_children gate; default 0 keeps every subtree).
+        min_subtree_size=config.get("window_min_subtree_size", 0),
+    threads: get_threads("window_expected_counts")
+    resources:
+        mem_mb=16000,
+        runtime=240
+    benchmark:
+        os.path.join(OUTDIR, "benchmarks/window_expected_counts.tsv")
+    log:
+        os.path.join(OUTDIR, "log/window_expected_counts.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/window_expected_counts.py"
 
 
 rule get_problematic_sites:

@@ -71,6 +71,35 @@ optimize_tree: false
 mat_subset_kwargs: ""
 
 # =============================================================================
+# Node Dating (chronumental)
+# =============================================================================
+# Passed verbatim to chronumental (e.g. "--steps 5000"). An unset value runs
+# chronumental's own default step count; production step tuning is deferred
+# (EPIC #115). NOTE: "--use_gpu" requires the CUDA jaxlib wheel that is
+# commented out in envs/chronumental.yml; with the CPU-only env it silently
+# falls back to CPU, so don't add it until GPU support is enabled there.
+chronumental_kwargs: "--steps 1000"
+# chronumental_qc gate: fail the run if the median absolute tip-date residual
+# (chronumental-predicted minus metadata collection date, in days) exceeds this.
+chronumental_max_median_abs_tip_residual_days: 30
+
+# =============================================================================
+# Window Fitness (sliding time windows)
+# =============================================================================
+# Sliding time windows over the full dated tree (EPIC #115 Phase 2+). Windows
+# are anchored at window_end_time and tile backwards, so the most recent window
+# is always the full window_size. Branch QC reuses the Mutation-Counting keys
+# (max_nt_mutations / max_reversions_to_ref / max_reversions_to_clade_founder),
+# so the clade-based and window-based paths filter branches identically.
+window_size: 90            # window width in days (~3 months)
+window_step: 45            # window stride in days (half of window_size => 50% overlap)
+window_start_time: null    # ISO date, or null to use the tree's earliest node date
+window_end_time: null      # ISO date, or null to use the tree's latest node date
+# Windowed expected counts + delta_fitness_ratio (Phase 3, #118). Drop founders
+# whose subtree is <= this size before computing expected counts (0 keeps all).
+window_min_subtree_size: 0
+
+# =============================================================================
 # Clade Configuration
 # =============================================================================
 # Use Nextstrain_clade from tree annotations (annotation_1 in matUtils summary)
@@ -300,6 +329,10 @@ threads:
   filter_metadata: 1
   filter_mat_tree: 4
   optimize_mat_tree: 12
+  chronumental: 4
+  chronumental_qc: 1
+  window_subtree_counts: 4
+  window_expected_counts: 4
   mat_clade_subset: 4
   extract_pcps: 1
   count_mutations: 1

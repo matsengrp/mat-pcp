@@ -63,6 +63,36 @@ def load_usher_masks(path):
     return clade_sites, clade_mutations
 
 
+def global_masked_sites(
+    *,
+    sites_to_exclude,
+    vcf_masked_sites,
+    site_include_range,
+    genome_len,
+):
+    """Return the set of *globally* (clade-independent) masked nucleotide sites.
+
+    This is the subset of :func:`compute_exclusions`'s reasons that does not
+    depend on a clade: the config ``sites_to_exclude`` (``in_config``), the
+    ProblematicSites VCF sites (``in_vcf``), and everything outside
+    ``site_include_range`` (``out_of_range``). The per-clade UShER-yaml site and
+    mutation masks and the founder->reference reversions are intentionally NOT
+    included -- they are clade/mutation specific and have no meaning on the
+    clade-free full tree used by the sliding-window path.
+
+    :func:`compute_exclusions` remains the per-row authority (it must keep
+    ``in_vcf`` separable to build ``masked_in_usher``); this helper is the shared
+    definition of the global set for callers that need it as a plain site list
+    (currently the windowed expected-count path). Sites are 1-based.
+    """
+    start = site_include_range.get("start", 266)
+    end = site_include_range.get("end", 29674)
+    masked = {int(s) for s in (sites_to_exclude or [])}
+    masked.update(int(s) for s in (vcf_masked_sites or []))
+    masked.update(s for s in range(1, genome_len + 1) if s < start or s > end)
+    return masked
+
+
 def compute_exclusions(
     df,
     *,

@@ -217,3 +217,129 @@ Estimated neutral mutation rates by sequence context and RNA structure, derived 
 **Notes:**
 - These rates are used to compute expected mutation counts for fitness estimation.
 - The `unpaired` column reflects RNA secondary structure from Lan et al. 2022.
+
+## Node Dates (chronumental)
+
+Time estimates for every node of the filtered tree, produced by the
+`chronumental` rule and sanity-checked by the always-on `chronumental_qc` rule.
+Added in Phase 1 of EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115).
+
+### `mat/node_dates.tsv`
+
+chronumental's `--dates_out`: an inferred date for every tip **and** internal
+node of `mat/filtered_tree.nwk`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `strain` | string | Node identifier — a strain name for tips, an internal-node id (e.g. `node_123`) for internal nodes. Matches the `bte` `node.id` used downstream. |
+| `predicted_date` | date | chronumental-inferred date (`YYYY-MM-DD`). |
+
+### `mat/chronumental_timetree.nwk`
+
+chronumental's `--tree_out`: the input tree rescaled so branch lengths are in
+time, with the same topology and node labels as `mat/filtered_tree.nwk`.
+
+### `mat/node_dates_qc.tsv`
+
+Per-check pass/fail report from `chronumental_qc` (one row per check).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `check` | string | `node_id_correspondence`, `time_monotonicity`, `date_coverage`, or `tip_residual`. |
+| `status` | string | `PASS` or `FAIL`. |
+| `detail` | string | Measured numbers for the check. |
+
+The rule raises (fails the run) on any hard-invariant violation, and on a
+`tip_residual` median above `chronumental_max_median_abs_tip_residual_days`.
+
+### `mat/node_dates_residuals.csv`
+
+Per-tip comparison of predicted vs. observed collection date (day-resolution tips
+only).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `strain` | string | Tip strain name. |
+| `predicted` | date | chronumental-inferred date. |
+| `observed` | date | Metadata collection date. |
+| `residual_days` | int | `predicted − observed` in days. |
+
+## Sliding-Window Subtree Counts (windows/)
+
+EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115) Phase 2
+([#117](https://github.com/matsengrp/mat-pcp/issues/117)). The
+`window_subtree_counts` rule buckets observed branch mutations into overlapping
+time windows over the full dated tree. Windows are anchored at the end date
+(`window_end_time`, default = latest node date) and tiled backwards in
+`window_step`-day strides, so the most recent window is always the full
+`window_size`; the oldest window may extend before the start date. Branch QC is
+identical to the clade path (`count_mutations.py`). Counts are **coding only**;
+per-window expected counts and `delta_fitness_ratio` are added by
+`window_expected_counts` in `windows/fitness_trajectory.csv` (Phase 3, below).
+
+### `windows/subtree_counts.csv`
+
+One row per `(window_start, founder_id, nt_mutation)`; genes overlapping a site
+are `;`-collapsed exactly as in `aggregated.csv`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `window_start` | date | Window start (`YYYY-MM-DD`). |
+| `founder_id` | string | `bte` node id of the subtree founder. |
+| `protein` | string | `;`-joined gene name(s) for the site (e.g. `ORF1a;ORF1ab`). |
+| `nt_site` | int | 1-based nucleotide position. |
+| `nt_mutation` | string | Nucleotide mutation (e.g. `C8782T`). |
+| `aa_mutation` | string | `;`-joined per-protein amino-acid change(s). |
+| `codon_change` | string | `;`-joined `orig>alt` codon(s). |
+| `synonymous` | bool | `all()` over the collapsed genes' synonymy. |
+| `count` | int | # subtree branches carrying exactly this mutation (shared across collapsed genes, not summed). |
+
+### `windows/founder_muts.csv`
+
+One row per `(founder_id, window_start)` subtree founder.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `founder_id` | string | `bte` node id of the subtree founder. |
+| `window_start` | date | Window start (`YYYY-MM-DD`). |
+| `subtree_size` | int | # nodes in the subtree, including the founder. |
+| `branches_with_mutations` | int | # subtree branches with ≥1 mutation. |
+| `founder_nt_mutations` | string | Space-joined founder haplotype vs. reference (e.g. `C241T C3037T`); empty when the founder equals the reference. |
+
+### `windows/fitness_trajectory.csv`
+
+EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115) Phase 3
+([#118](https://github.com/matsengrp/mat-pcp/issues/118)). The
+`window_expected_counts` rule turns the per-window founders + actual counts into
+a mutation × time-window fitness trajectory. For each window's subtree founder it
+enumerates all possible coding mutations from the founder sequence and looks up
+mat-pcp's GLM neutral rate for each mutation's founder-sequence context. Expected
+counts use mat-pcp's own clade-path `evol_time` normalization (`rates.py`) applied
+per window: `T = (observed synonymous count) / (rate summed over all possible
+synonymous mutations)` and `expected(ID) = T × Σ_founders rate(context)`, so total
+expected synonymous equals total observed synonymous by construction. Expected
+counts come only from the GLM (no synonymous-average fallback). Coding only; ORF1a
+is dropped in favor of ORF1ab (matching `aamut_fitness`). **Founder→reference
+reversions** (a possible mutation whose destination is the reference base, arising
+only at founder-mutated sites) are masked from both the expected enumeration and
+the actual counts, mirroring the clade path's `to_nt == ref_nt` exclusion. A window
+with **no observed synonymous mutations** cannot be calibrated (its `T` is
+undefined) and is omitted, so this file may cover fewer windows than
+`subtree_counts.csv`.
+
+One row per `(window_start, ID)`, where `ID` is the amino-acid mutation identity
+`<gene>-<wt_aa><aa_site><mut_aa>`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `window_start` | date | Window start (`YYYY-MM-DD`). |
+| `ID` | string | Amino-acid mutation identity, `<gene>-<wt_aa><aa_site><mut_aa>` (e.g. `S-D614G`). |
+| `gene` | string | Gene name (ORF1a folded into ORF1ab). |
+| `aa_site` | int | Codon (amino-acid) site within the gene. |
+| `aa_mutation` | string | Amino-acid change `<wt_aa><aa_site><mut_aa>`. |
+| `wt_aa` | string | Founder (wild-type) amino acid. |
+| `mut_aa` | string | Mutant amino acid (`*` = stop). |
+| `synonymous` | bool | `wt_aa == mut_aa`. |
+| `actual_count` | float | Observed count summed over the window's subtrees. |
+| `expected_count` | float | GLM-predicted count, `rate × subtree_mut_count` summed over subtrees (can be slightly negative for sparse contexts). |
+| `delta_fitness_ratio` | float | `log((actual_count + p) / (expected_count + p))`, natural log, pseudocount `p = fitness_pseudocount`. Synonymous mutations center near 0. `NaN` in the rare case `expected_count + p ≤ 0` (a very negative sparse-context rate), matching the clade-path `aamut_fitness` `delta_fitness_ratio`. |

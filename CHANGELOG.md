@@ -18,6 +18,108 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### v7
+
+**Time-resolved fitness (EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115)).**
+The coordinated version bump for the three phases below. Each phase was purely
+additive (new output files, reading no existing schema and read by no current
+downstream consumer) and shipped no individual bump per maintainer decision; this
+is the single bump that lands the whole EPIC. The new outputs are `mat/node_dates*`
++ `mat/chronumental_timetree.nwk` (Phase 1), `windows/subtree_counts.csv` +
+`windows/founder_muts.csv` (Phase 2), and `windows/fitness_trajectory.csv`
+(Phase 3). Everything that existed at v6 is byte-identical apart from the version
+dir name.
+
+**chronumental node dating** — Phase 1 of EPIC
+[#115](https://github.com/matsengrp/mat-pcp/issues/115) (issue
+[#116](https://github.com/matsengrp/mat-pcp/issues/116)). Adds time estimates for
+every node of the filtered tree; nothing existing changes.
+
+**Changes**:
+
+- New per-tree outputs under `mat/`: `node_dates.tsv` (chronumental-inferred
+  date for every tip and internal node), `chronumental_timetree.nwk` (the dated
+  time-scaled tree), plus the always-on QC artifacts `node_dates_qc.tsv` and
+  `node_dates_residuals.csv`.
+- New rules `export_newick`, `chronumental`, `chronumental_qc` and a new conda
+  env `workflow/envs/chronumental.yml`.
+- New config keys `chronumental_kwargs` and
+  `chronumental_max_median_abs_tip_residual_days`.
+
+**sliding-window subtree counts** — Phase 2 of EPIC
+[#115](https://github.com/matsengrp/mat-pcp/issues/115) (issue
+[#117](https://github.com/matsengrp/mat-pcp/issues/117)). Buckets observed branch
+mutations into overlapping time windows over the full dated tree and emits, per
+window, each subtree founder plus per-mutation actual counts. No expected counts
+or `delta_fitness_ratio` yet (Phase 3).
+
+**Changes**:
+
+- New per-tree outputs under `windows/`: `subtree_counts.csv` (per-window,
+  per-mutation actual counts — coding only, with the same multi-gene `;`-collapse
+  as `aggregated.csv`) and `founder_muts.csv` (per-window subtree founders +
+  reconstructed haplotypes).
+- New module `workflow/modules/windowing.py` (`WindowedMAT` + pure helpers) and
+  thin wrapper `workflow/scripts/window_subtree_counts.py`; new rule
+  `window_subtree_counts` (bte env). Windows are anchored at the end date and
+  tiled backwards, so the most recent window is always the full `window_size`.
+- Branch QC is identical to the clade path (`count_mutations.py`): it reuses the
+  existing `max_nt_mutations` / `max_reversions_to_ref` /
+  `max_reversions_to_clade_founder` keys and the unconditional
+  drop-branches-with->1-nt-mutation-per-codon filter.
+- New config keys `window_size`, `window_step`, `window_start_time`,
+  `window_end_time`.
+- New correctness harness: `workflow/scripts/validate_windowing.py` (pure +
+  output-CSV checks + test-data count regression sentinels, base env) and the
+  CI-only `validate_windowing` rule
+  (`workflow/scripts/validate_windowing_tree.py`, bte env). The tree-level rule
+  is **not** in `results_files`.
+
+**windowed expected counts + `delta_fitness_ratio`** — Phase 3 of EPIC
+[#115](https://github.com/matsengrp/mat-pcp/issues/115) (issue
+[#118](https://github.com/matsengrp/mat-pcp/issues/118)). Turns the Phase-2
+per-window founders + actual counts into a mutation × time-window fitness
+trajectory: for each window's subtree founder it enumerates all possible coding
+mutations from the founder sequence and looks up mat-pcp's GLM neutral rate for
+each mutation's founder-sequence context. Expected counts use mat-pcp's **own
+clade-path `evol_time` normalization** (`rates.py`) applied **per window** — the
+same neutral-model application as the clade-based `aamut_fitness`, so the two are
+directly comparable — rather than s2trajectory's `rate × subtree_mut_count`. Then
+`delta_fitness_ratio = log((actual + p) / (expected + p))` per mutation per
+window (matching `aamutfit.ratio_fitness`).
+
+**Changes**:
+
+- New per-tree output `windows/fitness_trajectory.csv` (per `(window_start,
+  amino-acid ID)`: actual count, expected count, `delta_fitness_ratio`). Coding
+  only; ORF1a dropped in favor of ORF1ab (aamutfit convention).
+- New module `workflow/modules/expected_counts.py` (a pure-`pandas`/`numpy`
+  founder-context enumeration ported from s2trajectory's `PossibleMutations` — no
+  `bte`) and thin wrapper `workflow/scripts/window_expected_counts.py`; new rule
+  `window_expected_counts` (default env, after the GLM stage).
+- Expected counts come **only** from the GLM (via `glm/master_table.csv`); there
+  is no synonymous-average fallback. Per window,
+  `T = (observed synonymous count) / (rate summed over all possible synonymous
+  mutations)` and `expected(ID) = T × Σ_founders rate(context)`, so total expected
+  synonymous equals total observed synonymous **by construction** (the calibration
+  that makes synonymous `delta_fitness_ratio` center at 0). Because `T` divides out
+  the rate's absolute scale, mat-pcp's `rate` is used as-is (no `n_sites`/fraction
+  renormalization).
+- New shared helper `masking.global_masked_sites` — the single definition of the
+  clade-independent global site mask (config `sites_to_exclude` ∪ ProblematicSites
+  VCF ∪ outside `site_include_range`), reused as the windowed path's "bad sites".
+- **Founder→reference reversions are masked** on the windowed path, mirroring the
+  clade path's `to_nt == ref_nt` exclusion (`build_count_table`): a possible
+  mutation whose destination is the reference base (arising only at
+  founder-mutated sites) is dropped from both the expected enumeration and the
+  actual counts, so these artifact-prone reversions are treated identically to
+  the clade-based path and windowed fitness stays comparable to `aamut_fitness`.
+- New config key `window_min_subtree_size` (default 0 — keep all subtrees).
+- `validate_windowing.py` gains a per-window synonymous-calibration proof
+  (`sum(actual_syn) == sum(expected_syn)` per window, exact by construction), a
+  synonymous-centering sanity check, a formula check, and test-data regression
+  sentinels for the trajectory.
+
 ### v6
 
 **Multi-protein pipeline** — generalizes PCP extraction, founder slicing, DASM
