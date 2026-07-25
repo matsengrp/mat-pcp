@@ -41,9 +41,6 @@ outputs — changes.
 - Fixes the `chronumental_qc` crash on production configs: the QC path emits the
   `date_resolution_str` column that `chronumental_qc` requires, which the skip path never
   created (`ValueError: Usecols do not match columns` on the missing column).
-- Bumped `chronumental_kwargs` from `--steps 1000` to `--steps 5000` in the production
-  configs (`config/config.yaml`, `config/config-2026-04-22-gisaid-and-public-S-ORF1a.yaml`)
-  as convergence insurance for the dating stage; the test config stays at `--steps 100`.
 - Removed the redundant `pcp_max_nt_mutations` / `pcp_max_reversions_to_ref` /
   `pcp_max_reversions_to_clade_founder` config keys. PCP extraction now reuses the shared
   Mutation-Counting keys (`max_nt_mutations` / `max_reversions_to_ref` /

@@ -54,7 +54,7 @@ mat_subset_kwargs: ""
 # (EPIC #115). NOTE: "--use_gpu" requires the CUDA jaxlib wheel that is
 # commented out in envs/chronumental.yml; with the CPU-only env it silently
 # falls back to CPU, so don't add it until GPU support is enabled there.
-chronumental_kwargs: "--steps 5000"
+chronumental_kwargs: "--steps 1000"
 # chronumental_qc gate: fail the run if the median absolute tip-date residual
 # (chronumental-predicted minus metadata collection date, in days) exceeds this.
 chronumental_max_median_abs_tip_residual_days: 30
