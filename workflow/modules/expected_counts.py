@@ -268,6 +268,15 @@ class ExpectedCounts:
             "~site.isin(@self.bad_site_list)"
         )
         self._keep_sites = set(self.reference_site_map.site)
+        # Coding subset of the keep-sites. _touched_sites intersects against this
+        # (not _keep_sites) so a founder whose mutations touch only noncoding
+        # sites yields no touched sites and short-circuits to the reference table.
+        # _possible_mutations_df drops noncoding rows anyway, so an all-noncoding
+        # founder would otherwise build an empty frame whose codon/merge-key
+        # columns come back float64 and crash the .str / rate-merge steps (#122).
+        self._coding_keep_sites = self._keep_sites & set(
+            self.tall_coding_sites.query("codon_position != 'noncoding'").site
+        )
         # The reference enumeration + rates is computed once; each founder only
         # recomputes the codons its mutations touch (s2trajectory's optimization).
         # Founder tables are NOT cached: subtree founders are almost always unique
@@ -406,7 +415,7 @@ class ExpectedCounts:
         starts = codon_data.site - codon_data.codon_position.astype(int) + 1
         sites = {start + j for start in starts for j in range(3)}
         sites.update(x + d for x in mut_sites for d in (-1, 0, 1))
-        return sorted(sites & self._keep_sites)
+        return sorted(sites & self._coding_keep_sites)
 
     def founder_rate_table(self, founder_muts):
         """Return the per-mutation GLM rate table for one founder subtree.

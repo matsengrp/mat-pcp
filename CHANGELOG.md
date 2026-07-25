@@ -47,6 +47,13 @@ outputs — changes.
   `max_reversions_to_clade_founder`), so PCP extraction and clade/window mutation counting
   filter branches with the same thresholds. (Config values were already identical, so this
   is a no-op on the shipped configs.)
+- Fixed a crash in `window_expected_counts` (`modules/expected_counts.py`) on founders
+  whose touched sites are all noncoding: `_touched_sites` now intersects against the coding
+  keep-sites, so such a founder short-circuits to the reference table instead of building an
+  empty frame whose codon/merge-key columns come back `float64` and raise
+  `AttributeError: Can only use .str accessor with string values!`. Behavior-preserving on
+  founders that touch any coding site (noncoding rows were always dropped downstream); it
+  only surfaced on full-scale production trees, not the test data.
 
 ### v7
 
