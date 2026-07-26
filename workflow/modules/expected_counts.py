@@ -58,6 +58,16 @@ CODON_TABLE = {
     "TGC": "C", "TGT": "C", "TGA": "*", "TGG": "W",
 }
 
+# The three alternate nucleotides for each wt base, in the order all_poss_muts
+# enumerates them. Shared by all_poss_muts and ExpectedCounts._founder_rec so the
+# two enumeration paths cannot drift (grouping is order-independent, but keeping a
+# single source of truth removes the "must match" comment-only invariant).
+ALT_NUC = [
+    {"A": "C", "T": "C", "C": "T", "G": "C"},
+    {"A": "T", "T": "A", "C": "A", "G": "T"},
+    {"A": "G", "T": "G", "C": "G", "G": "A"},
+]
+
 
 # --------------------------------------------------------------------------- #
 # Pure helpers
@@ -95,11 +105,7 @@ def all_poss_muts(site_map):
     Ported verbatim from s2trajectory.
     """
     ret = site_map.copy()
-    alt_nuc = [
-        {"A": "C", "T": "C", "C": "T", "G": "C"},
-        {"A": "T", "T": "A", "C": "A", "G": "T"},
-        {"A": "G", "T": "G", "C": "G", "G": "A"},
-    ]
+    alt_nuc = ALT_NUC
     re_pattern = re.compile("A|T|C|G")
     for j in range(3):
         fn = lambda x, j=j: alt_nuc[j][x.group(0)]
@@ -328,13 +334,6 @@ class ExpectedCounts:
         self._base_ids_at_site = base_ids_at_site
 
         # --- lookups for the pure-python per-founder recompute ---
-        # Alternate nts per wt base, in all_poss_muts' order (grouping is
-        # order-independent, but keep it identical for clarity).
-        self._alt = [
-            {"A": "C", "T": "C", "C": "T", "G": "C"},
-            {"A": "T", "T": "A", "C": "A", "G": "T"},
-            {"A": "G", "T": "G", "C": "G", "G": "A"},
-        ]
         tcs = self.tall_coding_sites
         site_coding = defaultdict(list)
         for site, gene, cp, cs in zip(tcs["site"].to_numpy(), tcs["gene"].to_numpy(),
@@ -376,8 +375,9 @@ class ExpectedCounts:
         if not sites:
             return rec_rate, rec_syn, rec_obs
         ref = self.ref_seq
+        n = len(ref)
         CT = CODON_TABLE
-        alt, coding = self._alt, self._site_coding
+        alt, coding = ALT_NUC, self._site_coding
         unpaired, boundary, rate_lookup = (
             self._site_unpaired, self._boundary, self._rate_lookup
         )
@@ -390,6 +390,15 @@ class ExpectedCounts:
             annots = coding.get(s)
             if not annots:  # noncoding site -> no coding rows (dropped)
                 continue
+            # Codon (start..start+2, start >= s-2) and motif (s-1..s+1) reads must
+            # stay in-bounds; guard rather than let fbase() silently wrap on ref[-1]
+            # (all coding sites are interior for SARS-CoV-2, so this never fires --
+            # it is a fail-fast tripwire for a future genome/config).
+            if not (3 <= s <= n - 2):
+                raise ValueError(
+                    f"touched coding site {s} is too close to a genome boundary for "
+                    f"codon/motif context (genome length {n})"
+                )
             wt_nt = fmuts.get(s, ref[s - 1])
             muts = (alt[0][wt_nt], alt[1][wt_nt], alt[2][wt_nt])
             motif = fbase(s - 1) + fbase(s) + fbase(s + 1)  # founder-context 3-mer
@@ -418,9 +427,10 @@ class ExpectedCounts:
                     nsbb = bool(s < boundary[mut_type])
                     rate = rate_lookup.get((mut_type, motif, up, nsbb))
                     if rate is None:
-                        raise KeyError(
+                        raise ValueError(
                             f"no GLM rate for context {(mut_type, motif, up, nsbb)} "
-                            f"at site {s}; the master-table grid should be complete"
+                            f"at site {s}; the master-table context grid should be "
+                            f"complete (mirrors _build_rate_table's rate-merge check)"
                         )
                     rec_rate[the_id] += rate
                     if wt_aa == mut_aa:
@@ -750,7 +760,7 @@ def compute_fitness_trajectory(
         rate_by_id.index.name = "ID"
         act_by_id = pd.Series(act) if act else None
 
-        window_df = rate_by_id.rename("rate_by_id").to_frame()
+        window_df = rate_by_id.to_frame()
         window_df["actual_count"] = (
             act_by_id if act_by_id is not None else 0.0
         )

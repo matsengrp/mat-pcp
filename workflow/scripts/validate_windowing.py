@@ -592,6 +592,82 @@ def check_founder_rate_table_invariant(output_dir, cfg):
         f"{top['founder_id'].iloc[0]}",
     )
 
+    # Multi-founder accumulation guard (#123): compute_fitness_trajectory's
+    # per-window delta accumulation (N*base - touched-site subtractions + rec
+    # additions, with the "fully-removed reference ID" pop) is the subtlest part of
+    # the fast path and is only exercised when a window has several founders. Check
+    # it end-to-end against a naive reference that sums the trusted founder_rate_table
+    # over the founders of the most-populated window -- exactly what the OLD driver
+    # did -- and compare expected/actual per ID.
+    counts_path = os.path.join(output_dir, "windows/subtree_counts.csv")
+    if not os.path.exists(counts_path):
+        print("[SKIP] multi-founder accumulation (subtree_counts.csv missing)")
+        return
+    min_subtree = cfg.get("window_min_subtree_size", 0)
+    kept = founders[founders["subtree_size"] > min_subtree]
+    if kept.empty:
+        print("[SKIP] multi-founder accumulation (no founders past subtree filter)")
+        return
+    win = kept["window_start"].value_counts().idxmax()
+    n_founders_win = int((kept["window_start"] == win).sum())
+    subtree_counts = pd.read_csv(counts_path)
+    w_founders = kept[kept["window_start"] == win]
+    w_counts = subtree_counts[subtree_counts["window_start"] == win]
+
+    # naive OLD-style reference for this one window (sum over founders of the
+    # reversion-masked founder_rate_table), reusing the trusted per-founder table.
+    rate_by_id = None
+    act_by_id = None
+    syn = set()
+    for _, fr in w_founders.iterrows():
+        fm = EC.founder_muts_to_dict(fr["founder_nt_mutations"], bad_sites)
+        t = ec.founder_rate_table(fm)
+        ram = {s: ref_seq[s - 1] for s in fm}
+        if ram:
+            t = t[~t["site"].map(ram).eq(t["mut_nt"]).fillna(False)]
+        syn |= set(t.loc[t["is_synonymous"], "ID"].unique())
+        c = t.groupby("ID")["rate"].sum()
+        rate_by_id = c if rate_by_id is None else rate_by_id.add(c, fill_value=0.0)
+        fc = w_counts[w_counts["founder_id"] == fr["founder_id"]]
+        if len(fc):
+            obs = fc[["nt_site", "nt_mutation", "count"]].copy()
+            obs["mut_nt"] = obs["nt_mutation"].str[-1]
+            obs = obs.rename(columns={"nt_site": "site"})
+            if ram:
+                obs = obs[~obs["site"].map(ram).eq(obs["mut_nt"]).fillna(False)]
+            m = obs.merge(
+                t[["site", "mut_nt", "ID"]], on=["site", "mut_nt"], how="left"
+            ).dropna(subset=["ID"])
+            if len(m):
+                a = m.groupby("ID")["count"].sum()
+                act_by_id = a if act_by_id is None else act_by_id.add(a, fill_value=0.0)
+    naive = rate_by_id.rename("rate_by_id").to_frame()
+    naive["actual_count"] = act_by_id if act_by_id is not None else 0.0
+    naive["actual_count"] = naive["actual_count"].fillna(0.0)
+    sm = naive.index.isin(syn)
+    t_win = naive.loc[sm, "actual_count"].sum() / naive.loc[sm, "rate_by_id"].sum()
+    naive["expected_count"] = t_win * naive["rate_by_id"]
+
+    # fast path, restricted to the same single window
+    fast = EC.compute_fitness_trajectory(
+        w_founders, w_counts, ec, bad_sites,
+        pseudocount=cfg.get("fitness_pseudocount", 0.5),
+        min_subtree_size=min_subtree, log=lambda *a: None,
+    ).set_index("ID")
+
+    joined = naive.join(fast[["actual_count", "expected_count"]],
+                        how="outer", lsuffix="_n", rsuffix="_f")
+    exp_bad = int((~np.isclose(joined["expected_count_n"].fillna(-1),
+                               joined["expected_count_f"].fillna(-1))).sum())
+    act_bad = int((~np.isclose(joined["actual_count_n"].fillna(-1),
+                               joined["actual_count_f"].fillna(-1))).sum())
+    check(
+        "compute_fitness_trajectory multi-founder accumulation (#123)",
+        exp_bad == 0 and act_bad == 0 and len(naive) == len(fast),
+        f"window {win} ({n_founders_win} founders): {exp_bad} expected + {act_bad} actual "
+        f"mismatch(es); IDs naive={len(naive)} fast={len(fast)}",
+    )
+
 
 def main():
     with open(TEST_CONFIG) as fh:
