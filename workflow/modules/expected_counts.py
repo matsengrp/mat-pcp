@@ -367,7 +367,8 @@ class ExpectedCounts:
         per-founder ``recomputed`` block of :meth:`founder_rate_table` grouped by
         ID -- the founder->reference reversion mask and the ORF1a->ORF1ab drop are
         applied inline -- but built with dict lookups instead of per-founder pandas.
-        Verified bit-for-bit (to ~1e-16) against the pandas path on the test data.
+        Equivalence to :meth:`founder_rate_table` is guarded by
+        ``validate_windowing.py`` (equal to float tolerance, ~1e-16).
         """
         rec_rate = defaultdict(float)
         rec_syn = set()

@@ -558,6 +558,40 @@ def check_founder_rate_table_invariant(output_dir, cfg):
         f"{top['founder_id'].iloc[0]} ({int(top['_n'].iloc[0])} muts)",
     )
 
+    # The production driver (compute_fitness_trajectory) does NOT call
+    # founder_rate_table -- it uses the O(#touched-sites) ExpectedCounts._founder_rec
+    # + delta accumulation (#123). Guard that fast path directly: for the same
+    # founder, _founder_rec's recomputed touched-site rows must match the
+    # touched-site portion of founder_rate_table (which the check above already
+    # ties to the full-genome rebuild). Covers per-ID rate, synonymous set, and the
+    # (site, mut_nt) -> ID observed-count mapping.
+    sites = ec._touched_sites(fmuts)
+    touched = set(sites)
+    rec_rate, rec_syn, rec_obs = ec._founder_rec(fmuts, sites)
+    ref_at_mut = {s: ref_seq[s - 1] for s in fmuts}
+    frt = ec.founder_rate_table(fmuts)
+    frt = frt[~frt["site"].map(ref_at_mut).eq(frt["mut_nt"]).fillna(False)]
+    frt_rec = frt[frt["site"].isin(touched)]  # recomputed (touched-site) rows
+    truth_rate = frt_rec.groupby("ID")["rate"].sum()
+    fast_rate = pd.Series(rec_rate, dtype=float)
+    joined = truth_rate.to_frame("truth").join(
+        fast_rate.to_frame("fast"), how="outer"
+    )
+    rate_bad = int((~np.isclose(joined["truth"], joined["fast"], equal_nan=True)).sum())
+    truth_syn = set(frt_rec.loc[frt_rec["is_synonymous"], "ID"].unique())
+    truth_obs = {
+        (int(s), m): frozenset(sub["ID"])
+        for (s, m), sub in frt_rec.groupby(["site", "mut_nt"])
+    }
+    fast_obs = {k: frozenset(v) for k, v in rec_obs.items()}
+    check(
+        "_founder_rec == founder_rate_table recomputed rows (#123 fast path)",
+        rate_bad == 0 and rec_syn == truth_syn and fast_obs == truth_obs,
+        f"{rate_bad} rate mismatch(es); syn set {'ok' if rec_syn == truth_syn else 'DIFFERS'}; "
+        f"obs map {'ok' if fast_obs == truth_obs else 'DIFFERS'} for founder "
+        f"{top['founder_id'].iloc[0]}",
+    )
+
 
 def main():
     with open(TEST_CONFIG) as fh:
