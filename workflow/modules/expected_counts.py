@@ -33,6 +33,7 @@ neutral-model footing as the clade-based ``aamut_fitness``. Finally
 """
 
 import re
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -285,6 +286,146 @@ class ExpectedCounts:
         self._reference_table = self._build_rate_table(
             self.reference_site_map, self.ref_seq
         )
+        self._init_fast_lookups()
+
+    def _init_fast_lookups(self):
+        """Precompute reference aggregates + per-site lookups (called once).
+
+        These back :func:`compute_fitness_trajectory`'s O(#touched-sites)
+        per-founder path. Everything genome-scale is computed here exactly once;
+        each founder then only touches the codons its mutations reach. Without
+        this, the driver rebuilt and re-reduced the full ~90k-row genome-wide rate
+        table per founder-window (~20 h on a full tree, #123).
+
+        Alternate-nucleotide order and every derived value match
+        :func:`all_poss_muts` / :meth:`_build_rate_table`, so
+        :meth:`_founder_rec` reproduces :meth:`founder_rate_table`'s recomputed
+        rows (verified to float precision on the test data).
+        """
+        rt = self._reference_table
+        # reference per-ID rate sum + synonymous-ID set (the per-founder base)
+        self._base_by_id = rt.groupby("ID")["rate"].sum()
+        self._base_syn_ids = set(rt.loc[rt["is_synonymous"], "ID"].unique())
+        # per-site reference (ID -> rate) rows, for the delta subtraction
+        ref_site_idrate = defaultdict(list)
+        g = rt.groupby(["site", "ID"])["rate"].sum().reset_index()
+        for site, the_id, r in zip(g["site"].to_numpy(), g["ID"].to_numpy(),
+                                   g["rate"].to_numpy()):
+            ref_site_idrate[int(site)].append((the_id, float(r)))
+        self._ref_site_idrate = ref_site_idrate
+        # per base ID -> its reference sites (membership: fully-removed test)
+        self._base_id_sites = {
+            i: frozenset(s) for i, s in rt.groupby("ID")["site"].agg(set).items()
+        }
+        # observed (site, mut_nt) -> [IDs] (reference context) + IDs present per site
+        base_obs_map = defaultdict(list)
+        base_ids_at_site = defaultdict(set)
+        for site, mut_nt, the_id in zip(rt["site"].to_numpy(), rt["mut_nt"].to_numpy(),
+                                        rt["ID"].to_numpy()):
+            base_obs_map[(int(site), mut_nt)].append(the_id)
+            base_ids_at_site[int(site)].add(the_id)
+        self._base_obs_map = base_obs_map
+        self._base_ids_at_site = base_ids_at_site
+
+        # --- lookups for the pure-python per-founder recompute ---
+        # Alternate nts per wt base, in all_poss_muts' order (grouping is
+        # order-independent, but keep it identical for clarity).
+        self._alt = [
+            {"A": "C", "T": "C", "C": "T", "G": "C"},
+            {"A": "T", "T": "A", "C": "A", "G": "T"},
+            {"A": "G", "T": "G", "C": "G", "G": "A"},
+        ]
+        tcs = self.tall_coding_sites
+        site_coding = defaultdict(list)
+        for site, gene, cp, cs in zip(tcs["site"].to_numpy(), tcs["gene"].to_numpy(),
+                                      tcs["codon_position"].to_numpy(),
+                                      tcs["codon_sites"].to_numpy()):
+            if cp == "noncoding":
+                continue
+            site_coding[int(site)].append((gene, int(cp), str(cs)))
+        self._site_coding = site_coding
+        self._site_unpaired = {
+            int(s): bool(u) for s, u in zip(self.basepair_df["site"].to_numpy(),
+                                            self.basepair_df["unpaired"].to_numpy())
+        }
+        self._boundary = {k: int(v) for k, v in self.boundary_df.items()}
+        rate_lookup = {}
+        r = self.rates_df
+        for mt, mo, up, nb, rate in zip(r["mut_type"].to_numpy(), r["motif"].to_numpy(),
+                                        r["unpaired"].to_numpy(),
+                                        r["nt_site_before_boundary"].to_numpy(),
+                                        r["rate"].to_numpy()):
+            rate_lookup[(mt, mo, bool(up), bool(nb))] = float(rate)
+        self._rate_lookup = rate_lookup
+
+    def _founder_rec(self, fmuts, sites):
+        """O(#touched-sites) recompute of a founder's touched-codon rate rows.
+
+        Returns ``(rec_rate, rec_syn, rec_obs)`` where ``rec_rate`` is
+        ``{ID: summed rate}``, ``rec_syn`` the synonymous IDs, and ``rec_obs`` maps
+        ``(site, mut_nt) -> [ID, ...]`` (broadcasting to overlap genes). This is the
+        per-founder ``recomputed`` block of :meth:`founder_rate_table` grouped by
+        ID -- the founder->reference reversion mask and the ORF1a->ORF1ab drop are
+        applied inline -- but built with dict lookups instead of per-founder pandas.
+        Verified bit-for-bit (to ~1e-16) against the pandas path on the test data.
+        """
+        rec_rate = defaultdict(float)
+        rec_syn = set()
+        rec_obs = defaultdict(list)
+        if not sites:
+            return rec_rate, rec_syn, rec_obs
+        ref = self.ref_seq
+        CT = CODON_TABLE
+        alt, coding = self._alt, self._site_coding
+        unpaired, boundary, rate_lookup = (
+            self._site_unpaired, self._boundary, self._rate_lookup
+        )
+
+        def fbase(p):
+            v = fmuts.get(p)
+            return v if v is not None else ref[p - 1]
+
+        for s in sites:
+            annots = coding.get(s)
+            if not annots:  # noncoding site -> no coding rows (dropped)
+                continue
+            wt_nt = fmuts.get(s, ref[s - 1])
+            muts = (alt[0][wt_nt], alt[1][wt_nt], alt[2][wt_nt])
+            motif = fbase(s - 1) + fbase(s) + fbase(s + 1)  # founder-context 3-mer
+            up = unpaired[s]
+            s_is_fmut = s in fmuts
+            ref_s = ref[s - 1]
+            for gene, j, cs in annots:
+                if gene == "ORF1a":  # ORF1a->ORF1ab dedup (matches _build_rate_table)
+                    continue
+                start = s - j + 1  # 1-based codon start
+                c0, c1, c2 = fbase(start), fbase(start + 1), fbase(start + 2)
+                wt_codon = c0 + c1 + c2
+                wt_aa = CT[wt_codon]
+                for mut_nt in muts:
+                    if s_is_fmut and mut_nt == ref_s:  # founder->reference reversion
+                        continue
+                    if j == 1:
+                        mut_codon = mut_nt + c1 + c2
+                    elif j == 2:
+                        mut_codon = c0 + mut_nt + c2
+                    else:
+                        mut_codon = c0 + c1 + mut_nt
+                    mut_aa = CT[mut_codon]
+                    the_id = gene + "-" + wt_aa + cs + mut_aa
+                    mut_type = wt_nt + mut_nt
+                    nsbb = bool(s < boundary[mut_type])
+                    rate = rate_lookup.get((mut_type, motif, up, nsbb))
+                    if rate is None:
+                        raise KeyError(
+                            f"no GLM rate for context {(mut_type, motif, up, nsbb)} "
+                            f"at site {s}; the master-table grid should be complete"
+                        )
+                    rec_rate[the_id] += rate
+                    if wt_aa == mut_aa:
+                        rec_syn.add(the_id)
+                    rec_obs[(s, mut_nt)].append(the_id)
+        return rec_rate, rec_syn, rec_obs
 
     def _possible_mutations_df(self, site_map, ref_seq):
         """All possible coding mutations for ``site_map`` under ``ref_seq``.
@@ -509,6 +650,20 @@ def compute_fitness_trajectory(
         lambda s: founder_muts_to_dict(s, bad_sites)
     )
 
+    # Per-founder rate contributions are accumulated as a *delta* on the reference
+    # enumeration, which is identical for every founder. Per window:
+    #     rate_by_id = N * base                       (N = #founders in the window)
+    #                  - reference rows at each founder's touched sites
+    #                  + each founder's founder-context recomputed rows
+    # This keeps per-founder work at O(#touched sites) instead of rebuilding and
+    # reducing the full ~90k-row genome-wide table per founder (which made this
+    # ~20 h on a full tree, #123). The result is identical -- to float precision --
+    # to summing ec.founder_rate_table over founders (see the reversion mask and
+    # ORF1a drop inside ec._founder_rec). ec._ref_site_idrate / _base_ids_at_site /
+    # _base_id_sites / _base_obs_map are the precomputed reference structures.
+    base_by_id = ec._base_by_id
+    base_syn_ids = ec._base_syn_ids
+
     unmatched_obs = 0
     reversion_obs = 0
     total_obs = 0
@@ -516,74 +671,83 @@ def compute_fitness_trajectory(
     out_frames = []
 
     for window_start, w_founders in founders.groupby("window_start", sort=True):
-        rate_by_id = None   # sum over founders of GLM rate, grouped by amino-acid ID
-        act_by_id = None    # sum over founders of observed counts, grouped by ID
-        syn_ids = set()     # amino-acid IDs that are synonymous (wt_aa == mut_aa)
         w_counts = subtree_counts_df[subtree_counts_df["window_start"] == window_start]
+        n_founders = len(w_founders)
+        rate = (base_by_id * float(n_founders)).to_dict()  # N * base
+        act = defaultdict(float)
+        syn_ids = set(base_syn_ids)   # reference syn IDs; founder-context ones added
+        removed_count = defaultdict(int)  # base ID -> #founders that fully remove it
+        rec_ids_seen = set()
 
         for _, frow in w_founders.iterrows():
             founder_id = frow["founder_id"]
             fmuts = frow["founder_muts"]
-            frt = ec.founder_rate_table(fmuts)
-
-            # Mask founder->reference reversions (mirror the clade path's
-            # to_nt == ref_nt exclusion in build_count_table): a possible mutation
-            # whose destination base equals the *reference* base. These arise only
-            # at founder-mutated sites (elsewhere wt == ref, so no away-mutation
-            # lands on ref) and are enriched for sequencing/recurrent artifacts,
-            # exactly like clade-defining reversions -- so drop them from BOTH the
-            # expected enumeration and the actual counts (below), keeping the
-            # windowed path comparable to the clade-based aamut_fitness. Keyed on
-            # ``fmuts`` (O(#founder mutations)); sites not founder-mutated map to
-            # NaN and are never dropped.
+            sites = ec._touched_sites(fmuts) if fmuts else []
+            touched = set(sites)
+            # Founder->reference reversions (destination base == reference base)
+            # arise only at founder-mutated sites; masked from both the expected
+            # enumeration (inside _founder_rec) and the actual counts (below), to
+            # mirror the clade path's to_nt == ref_nt exclusion.
             ref_at_mut = {s: ec.ref_seq[s - 1] for s in fmuts} if fmuts else {}
-            if ref_at_mut:
-                frt = frt[
-                    ~frt["site"].map(ref_at_mut).eq(frt["mut_nt"]).fillna(False)
-                ]
 
-            syn_ids.update(frt.loc[frt["is_synonymous"], "ID"].unique())
+            # founder-context recomputed rows for touched codons, as compact per-ID
+            # dicts (reversion mask + ORF1a drop applied inside).
+            rec_rate, rec_syn, rec_obs = ec._founder_rec(fmuts, sites)
 
-            contrib = frt.groupby("ID")["rate"].sum()
-            rate_by_id = (
-                contrib if rate_by_id is None
-                else rate_by_id.add(contrib, fill_value=0.0)
-            )
+            # rate delta: remove reference rows at touched sites, add recomputed rows
+            for s in touched:
+                for the_id, r in ec._ref_site_idrate.get(s, ()):
+                    rate[the_id] = rate.get(the_id, 0.0) - r
+            for the_id, r in rec_rate.items():
+                rate[the_id] = rate.get(the_id, 0.0) + r
+            rec_ids_seen.update(rec_rate.keys())
+            syn_ids.update(rec_syn)
 
-            # Actual per ID: attach each observed (site, mut_nt) count to the
-            # founder-context amino-acid ID(s) at that site (broadcasts to each
-            # overlap gene). The observed wt_nt is intentionally ignored -- every
-            # observed mutation is interpreted in the founder's sequence context, so
-            # actual and expected share one ID system.
+            # membership: a reference-context ID whose codon *every* founder touches
+            # never appears in the summed-over-founders table -> track so it can be
+            # dropped (its accumulated rate cancels to ~0 from N*base - N*base).
+            if touched:
+                candidates = set()
+                for s in touched:
+                    candidates |= ec._base_ids_at_site.get(s, set())
+                for the_id in candidates:
+                    if ec._base_id_sites[the_id] <= touched:
+                        removed_count[the_id] += 1
+
+            # actual per ID: map each observed (site, mut_nt) to the founder-context
+            # ID(s) at that site (recomputed at touched sites, reference elsewhere;
+            # broadcasts to each overlap gene). Reversion-masked to match expected.
             fc = w_counts[w_counts["founder_id"] == founder_id]
             if len(fc):
-                obs = fc[["nt_site", "nt_mutation", "count"]].copy()
-                obs["mut_nt"] = obs["nt_mutation"].str[-1]
-                obs = obs.rename(columns={"nt_site": "site"})
-                # Same founder->reference reversion mask on the actual side, so a
-                # reversion enters neither the expected enumeration nor the
-                # observed counts / calibration.
-                if ref_at_mut:
-                    obs_rev = (
-                        obs["site"].map(ref_at_mut).eq(obs["mut_nt"]).fillna(False)
-                    )
-                    reversion_obs += int(obs_rev.sum())
-                    obs = obs[~obs_rev]
-                total_obs += len(obs)
-                merged = obs.merge(
-                    frt[["site", "mut_nt", "ID"]], on=["site", "mut_nt"], how="left"
-                )
-                unmatched_obs += int(merged["ID"].isna().sum())
-                merged = merged.dropna(subset=["ID"])
-                if len(merged):
-                    act_contrib = merged.groupby("ID")["count"].sum()
-                    act_by_id = (
-                        act_contrib if act_by_id is None
-                        else act_by_id.add(act_contrib, fill_value=0.0)
-                    )
+                for nt_site, nt_mutation, cnt in zip(
+                    fc["nt_site"].to_numpy(), fc["nt_mutation"].to_numpy(),
+                    fc["count"].to_numpy(),
+                ):
+                    site = int(nt_site)
+                    mut_nt = nt_mutation[-1]
+                    if ref_at_mut.get(site) == mut_nt:
+                        reversion_obs += 1
+                        continue
+                    total_obs += 1
+                    ids = (rec_obs.get((site, mut_nt)) if site in touched
+                           else ec._base_obs_map.get((site, mut_nt)))
+                    if not ids:
+                        unmatched_obs += 1
+                        continue
+                    for the_id in ids:
+                        act[the_id] += float(cnt)
 
-        if rate_by_id is None:
+        # drop reference IDs fully removed by every founder (unless re-added as a
+        # founder-context ID); their summed rate is ~0 from exact cancellation.
+        for the_id, c in removed_count.items():
+            if c == n_founders and the_id not in rec_ids_seen:
+                rate.pop(the_id, None)
+        if not rate:
             continue
+
+        rate_by_id = pd.Series(rate, name="rate_by_id").sort_index()
+        rate_by_id.index.name = "ID"
+        act_by_id = pd.Series(act) if act else None
 
         window_df = rate_by_id.rename("rate_by_id").to_frame()
         window_df["actual_count"] = (

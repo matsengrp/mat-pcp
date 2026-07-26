@@ -54,6 +54,16 @@ outputs — changes.
   `AttributeError: Can only use .str accessor with string values!`. Behavior-preserving on
   founders that touch any coding site (noncoding rows were always dropped downstream); it
   only surfaced on full-scale production trees, not the test data.
+- Performance: `window_expected_counts` now scales to full production trees. The driver
+  previously rebuilt and re-reduced the full ~90k-row genome-wide rate table for **every**
+  founder-window (~1.5M on a full tree → ~20 h). It now (a) accumulates each window's
+  per-ID rate as a *delta* on a once-computed reference base (`N·base − touched-site
+  reference rows + founder recomputed rows`), and (b) recomputes each founder's touched
+  codons via O(#touched-sites) dict lookups (`ExpectedCounts._founder_rec`) instead of
+  per-founder pandas. On the test data this is bit-for-bit identical to the old output
+  (max abs diff ~1e-16 in `expected_count` / `delta_fitness_ratio`), and the per-founder
+  rate-table build drops ~50× (≈19 ms → ≈0.38 ms), cutting the rule from ~20 h to tens of
+  minutes on the 2026-04-22 tree. Output schema is unchanged. (#123)
 
 ### v7
 
