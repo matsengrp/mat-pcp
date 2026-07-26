@@ -578,6 +578,11 @@ class ExpectedCounts:
         are re-translated per founder. Columns: ``ID``, ``gene``, ``aa_site``,
         ``wt_aa``, ``mut_aa``, ``is_synonymous``, ``site``, ``mut_nt``,
         ``aa_mutation``, ``rate``.
+
+        Retained as the trusted (slow) reference implementation for
+        ``workflow/scripts/validate_windowing.py``'s invariant checks; the
+        production driver ``compute_fitness_trajectory`` no longer calls it (it
+        uses the delta-accumulation fast path instead).
         """
         if not founder_muts:
             return self._reference_table

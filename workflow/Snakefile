@@ -166,6 +166,7 @@ REQUIRED_CONFIG_PARAMS = [
     "ref_gtf",
     "max_nt_mutations",
     "max_reversions_to_ref",
+    "max_reversions_to_clade_founder",
     "site_include_range",
     "qc_filter_options",
     "min_clade_size",
@@ -176,7 +177,6 @@ REQUIRED_CONFIG_PARAMS = [
 OPTIONAL_CONFIG_PARAMS = [
     "site_mask_vcf",
     "usher_masked_sites",
-    "max_reversions_to_clade_founder",
     "clade_founders",
 ]
 
@@ -861,7 +861,7 @@ rule extract_pcps_by_clade:
     params:
         max_nt_mutations=config["max_nt_mutations"],
         max_reversions_to_ref=config["max_reversions_to_ref"],
-        max_reversions_to_clade_founder=config.get("max_reversions_to_clade_founder", 1)
+        max_reversions_to_clade_founder=config["max_reversions_to_clade_founder"]
     threads: get_threads("extract_pcps")
     resources:
         mem_mb=8000,
@@ -1185,9 +1185,9 @@ rule count_mutations_clade:
     output:
         csv=os.path.join(OUTDIR, "mutation_counts/{clade}.csv")
     params:
-        max_nt_mutations=config.get("max_nt_mutations", 4),
-        max_reversions_to_ref=config.get("max_reversions_to_ref", 1),
-        max_reversions_to_clade_founder=config.get("max_reversions_to_clade_founder", 1)
+        max_nt_mutations=config["max_nt_mutations"],
+        max_reversions_to_ref=config["max_reversions_to_ref"],
+        max_reversions_to_clade_founder=config["max_reversions_to_clade_founder"]
     log:
         os.path.join(OUTDIR, "log/count_mutations_{clade}.log")
     conda:
