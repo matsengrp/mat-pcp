@@ -485,6 +485,251 @@ def check_expected_outputs(output_dir, cfg):
         print(f"[SKIP] fitness sentinels (non-test output dir {output_dir})")
 
 
+def _load_expected_counts(output_dir, cfg):
+    """Build an ``ExpectedCounts`` from the test outputs (shared by the invariant,
+    multi-founder, and drop-branch checks).
+
+    Returns ``(EC_module, ec, ref_seq, bad_sites, founders_df)`` or ``None`` when
+    the required inputs (GLM master table, coding sites, ref, site mask, founder
+    muts, RNA structure) are not all present.
+    """
+    needed = {
+        "master": os.path.join(output_dir, "glm/master_table.csv"),
+        "coding": os.path.join(output_dir, "ref/coding_sites.csv"),
+        "ref": os.path.join(output_dir, "ref/ref.fa"),
+        "site_mask": os.path.join(output_dir, "ref/site_mask.csv"),
+        "founders": os.path.join(output_dir, "windows/founder_muts.csv"),
+    }
+    rna = cfg.get("rna_structure_data")
+    if not all(os.path.exists(p) for p in needed.values()) or not (
+        rna and os.path.exists(rna)
+    ):
+        return None
+
+    EC = workflow_loader.load_workflow_module("expected_counts")
+    masking = workflow_loader.load_workflow_module("masking")
+
+    ref_seq = EC.load_reference_from_fasta(needed["ref"])
+    rates_df = EC.prepare_rates_df(needed["master"])
+    vcf_sites = pd.read_csv(needed["site_mask"])["site"].tolist()
+    bad_sites = masking.global_masked_sites(
+        sites_to_exclude=cfg.get("sites_to_exclude", []),
+        vcf_masked_sites=vcf_sites,
+        site_include_range=cfg.get("site_include_range", {}),
+        genome_len=len(ref_seq),
+    )
+    basepair_df = EC.build_site_unpaired_map(rna, len(ref_seq))
+    ec = EC.ExpectedCounts(ref_seq, needed["coding"], bad_sites, basepair_df, rates_df)
+    founders = pd.read_csv(needed["founders"]).fillna({"founder_nt_mutations": ""})
+    return EC, ec, ref_seq, bad_sites, founders
+
+
+def _fast_vs_naive_window(EC, ec, ref_seq, bad_sites, w_founders, w_counts, cfg):
+    """Compare ``compute_fitness_trajectory`` (fast path, #123) against the naive
+    OLD-style ``sum-over-founder_rate_table`` reference on one window.
+
+    ``w_founders`` must already be filtered to the founders that survive the
+    ``window_min_subtree_size`` gate (the fast path re-applies it internally, so
+    the two agree only if the caller pre-filters). Returns
+    ``(exp_bad, act_bad, n_naive, n_fast)`` -- counts of per-ID expected/actual
+    mismatches plus the two ID-set sizes (a surviving-but-should-be-dropped ID
+    shows up as ``n_fast > n_naive``).
+    """
+    import numpy as np
+
+    min_subtree = cfg.get("window_min_subtree_size", 0)
+    rate_by_id = None
+    act_by_id = None
+    syn = set()
+    for _, fr in w_founders.iterrows():
+        fm = EC.founder_muts_to_dict(fr["founder_nt_mutations"], bad_sites)
+        t = ec.founder_rate_table(fm)
+        ram = {s: ref_seq[s - 1] for s in fm}
+        if ram:
+            t = t[~t["site"].map(ram).eq(t["mut_nt"]).fillna(False)]
+        syn |= set(t.loc[t["is_synonymous"], "ID"].unique())
+        c = t.groupby("ID")["rate"].sum()
+        rate_by_id = c if rate_by_id is None else rate_by_id.add(c, fill_value=0.0)
+        fc = w_counts[w_counts["founder_id"] == fr["founder_id"]]
+        if len(fc):
+            obs = fc[["nt_site", "nt_mutation", "count"]].copy()
+            obs["mut_nt"] = obs["nt_mutation"].str[-1]
+            obs = obs.rename(columns={"nt_site": "site"})
+            if ram:
+                obs = obs[~obs["site"].map(ram).eq(obs["mut_nt"]).fillna(False)]
+            m = obs.merge(
+                t[["site", "mut_nt", "ID"]], on=["site", "mut_nt"], how="left"
+            ).dropna(subset=["ID"])
+            if len(m):
+                a = m.groupby("ID")["count"].sum()
+                act_by_id = a if act_by_id is None else act_by_id.add(a, fill_value=0.0)
+    naive = rate_by_id.rename("rate_by_id").to_frame()
+    naive["actual_count"] = act_by_id if act_by_id is not None else 0.0
+    naive["actual_count"] = naive["actual_count"].fillna(0.0)
+    sm = naive.index.isin(syn)
+    t_win = naive.loc[sm, "actual_count"].sum() / naive.loc[sm, "rate_by_id"].sum()
+    naive["expected_count"] = t_win * naive["rate_by_id"]
+
+    fast = EC.compute_fitness_trajectory(
+        w_founders, w_counts, ec, bad_sites,
+        pseudocount=cfg.get("fitness_pseudocount", 0.5),
+        min_subtree_size=min_subtree, log=lambda *a: None,
+    ).set_index("ID")
+
+    joined = naive.join(fast[["actual_count", "expected_count"]],
+                        how="outer", lsuffix="_n", rsuffix="_f")
+    exp_bad = int((~np.isclose(joined["expected_count_n"].fillna(-1),
+                               joined["expected_count_f"].fillna(-1))).sum())
+    act_bad = int((~np.isclose(joined["actual_count_n"].fillna(-1),
+                               joined["actual_count_f"].fillna(-1))).sum())
+    return exp_bad, act_bad, len(naive), len(fast)
+
+
+def _find_drop_branch_codon(ec, EC):
+    """Find a synthetic-test codon that can force the drop branch.
+
+    Looks for a single-gene (no overlap), non-ORF1a coding codon whose three
+    sites are all keep-sites clear of the genome-boundary halo, and whose
+    position-1 and position-3 each admit a *nonsynonymous* substitution (so a
+    founder mutating there changes the codon's ``wt_aa`` and genuinely removes the
+    reference-``wt_aa`` IDs rather than re-adding them). Returns
+    ``(gene, codon_idx, [s1, s2, s3], wt_aa, {s1: alt1, s3: alt3})`` or ``None``.
+    """
+    CT = EC.CODON_TABLE
+    ALT = EC.ALT_NUC
+    n = len(ec.ref_seq)
+    tcs = ec.tall_coding_sites
+    coding = tcs[tcs["codon_position"] != "noncoding"]
+    single_gene = coding.groupby("site")["gene"].nunique()
+    single = set(single_gene[single_gene == 1].index)
+    coding = coding[coding["site"].isin(single) & (coding["gene"] != "ORF1a")]
+
+    def nonsyn_alt(ref_codon, pos_idx, wt_nt, wt_aa):
+        for d in ALT:
+            alt_nt = d[wt_nt]
+            mc = list(ref_codon)
+            mc[pos_idx] = alt_nt
+            mc = "".join(mc)
+            if CT.get(mc) not in (None, "*", wt_aa):
+                return alt_nt
+        return None
+
+    for (gene, codon_idx), grp in coding.groupby(["gene", "codon_sites"]):
+        pos = {int(r.codon_position): int(r.site) for r in grp.itertuples()}
+        if set(pos) != {1, 2, 3}:
+            continue
+        s1, s2, s3 = pos[1], pos[2], pos[3]
+        if not all(s in ec._coding_keep_sites for s in (s1, s2, s3)):
+            continue
+        if not all(3 <= s <= n - 2 for s in (s1, s2, s3)):
+            continue
+        ref_codon = ec.ref_seq[s1 - 1] + ec.ref_seq[s2 - 1] + ec.ref_seq[s3 - 1]
+        wt_aa = CT.get(ref_codon)
+        if wt_aa in (None, "*"):
+            continue
+        a1 = nonsyn_alt(ref_codon, 0, ec.ref_seq[s1 - 1], wt_aa)
+        a3 = nonsyn_alt(ref_codon, 2, ec.ref_seq[s3 - 1], wt_aa)
+        if a1 and a3:
+            return gene, str(codon_idx), [s1, s2, s3], wt_aa, {s1: a1, s3: a3}
+    return None
+
+
+def _find_syn_observation(ec, exclude_sites):
+    """A reference-context ``(site, mut_nt)`` observation that hits >=1 synonymous
+    ID, at a site outside ``exclude_sites`` and clear of the boundary halo -- used
+    to give the synthetic window nonzero observed synonymous counts (so its
+    evol_time calibration is defined). Returns ``(site, mut_nt)`` or ``None``.
+    """
+    n = len(ec.ref_seq)
+    for (site, mut_nt), ids in ec._base_obs_map.items():
+        if site in exclude_sites or not (3 <= site <= n - 2):
+            continue
+        if set(ids) & ec._base_syn_ids:
+            return site, mut_nt
+    return None
+
+
+def check_drop_branch(output_dir, cfg):
+    """Force the fully-cancelled reference-ID drop branch (#123).
+
+    ``compute_fitness_trajectory`` drops a base reference ID when *every* founder
+    in a window touches its codon (the ID's ``N*base`` rate cancels against ``N``
+    per-founder subtractions) and no founder re-adds it in founder context. The
+    real test data has no window where all founders touch one codon, so this
+    branch is otherwise validated only by reasoning (the skeptic review's one
+    untested path). Build a synthetic 2-founder window whose founders both mutate
+    the SAME codon nonsynonymously -- so the codon's reference-``wt_aa`` IDs are
+    removed by both founders and re-added by neither, and must be dropped -- plus
+    one synonymous observed count elsewhere for calibration. Assert (1) the
+    reference-``wt_aa`` IDs are absent from the fast output, and (2) the fast path
+    still equals the naive sum-over-``founder_rate_table`` reference (a broken drop
+    leaves the reference IDs alive with ~0 rate, diverging on both).
+    """
+    loaded = _load_expected_counts(output_dir, cfg)
+    if loaded is None:
+        print(f"[SKIP] drop-branch check (inputs missing under {output_dir})")
+        return
+    EC, ec, ref_seq, bad_sites, _ = loaded
+
+    codon = _find_drop_branch_codon(ec, EC)
+    if codon is None:
+        print("[SKIP] drop-branch check (no suitable synthetic codon found)")
+        return
+    gene, codon_idx, (s1, s2, s3), wt_aa, alts = codon
+    halo = {s - 1 for s in (s1, s2, s3)} | {s1, s2, s3} | {s + 1 for s in (s1, s2, s3)}
+    syn_obs = _find_syn_observation(ec, halo)
+    if syn_obs is None:
+        print("[SKIP] drop-branch check (no synonymous calibration observation found)")
+        return
+    obs_site, obs_mut = syn_obs
+
+    win = "2099-01-01"  # synthetic label, distinct from any real window
+    w_founders = pd.DataFrame([
+        {"founder_id": "synA", "window_start": win, "subtree_size": 10 ** 6,
+         "branches_with_mutations": 1,
+         "founder_nt_mutations": f"{ref_seq[s1 - 1]}{s1}{alts[s1]}"},
+        {"founder_id": "synB", "window_start": win, "subtree_size": 10 ** 6,
+         "branches_with_mutations": 1,
+         "founder_nt_mutations": f"{ref_seq[s3 - 1]}{s3}{alts[s3]}"},
+    ])
+    w_counts = pd.DataFrame([
+        {"window_start": win, "founder_id": "synA", "protein": gene,
+         "nt_site": obs_site,
+         "nt_mutation": f"{ref_seq[obs_site - 1]}{obs_site}{obs_mut}",
+         "aa_mutation": "", "codon_change": "", "synonymous": True, "count": 5},
+    ])
+
+    fast = EC.compute_fitness_trajectory(
+        w_founders, w_counts, ec, bad_sites,
+        pseudocount=cfg.get("fitness_pseudocount", 0.5),
+        min_subtree_size=cfg.get("window_min_subtree_size", 0),
+        log=lambda *a: None,
+    )
+    # (1) The codon's reference-wt_aa IDs must have been dropped. Surviving rows
+    # for this codon carry each founder's mutated wt_aa (both != reference wt_aa).
+    codon_rows = fast[
+        (fast["gene"] == gene) & (fast["aa_site"].astype(str) == codon_idx)
+    ]
+    survived = codon_rows[codon_rows["wt_aa"] == wt_aa]
+    check(
+        "drop-branch: fully-cancelled reference IDs dropped (#123)",
+        len(survived) == 0,
+        f"{len(survived)} reference-wt_aa ID(s) for {gene} codon {codon_idx} "
+        f"(wt_aa {wt_aa}) survived: {sorted(survived['ID'].tolist())[:5]}",
+    )
+
+    # (2) End-to-end: fast == naive on this all-touch-one-codon window.
+    exp_bad, act_bad, n_naive, n_fast = _fast_vs_naive_window(
+        EC, ec, ref_seq, bad_sites, w_founders, w_counts, cfg
+    )
+    check(
+        "drop-branch: fast == naive on all-touch-one-codon window (#123)",
+        exp_bad == 0 and act_bad == 0 and n_naive == n_fast,
+        f"{gene} codon {codon_idx}: {exp_bad} expected + {act_bad} actual "
+        f"mismatch(es); IDs naive={n_naive} fast={n_fast}",
+    )
+
+
 def check_founder_rate_table_invariant(output_dir, cfg):
     """The per-founder diff-splice must equal a full-genome rebuild.
 
@@ -500,38 +745,11 @@ def check_founder_rate_table_invariant(output_dir, cfg):
     """
     import numpy as np
 
-    needed = {
-        "master": os.path.join(output_dir, "glm/master_table.csv"),
-        "coding": os.path.join(output_dir, "ref/coding_sites.csv"),
-        "ref": os.path.join(output_dir, "ref/ref.fa"),
-        "site_mask": os.path.join(output_dir, "ref/site_mask.csv"),
-        "founders": os.path.join(output_dir, "windows/founder_muts.csv"),
-    }
-    rna = cfg.get("rna_structure_data")
-    if not all(os.path.exists(p) for p in needed.values()) or not (
-        rna and os.path.exists(rna)
-    ):
+    loaded = _load_expected_counts(output_dir, cfg)
+    if loaded is None:
         print(f"[SKIP] founder_rate_table invariant (inputs missing under {output_dir})")
         return
-
-    EC = workflow_loader.load_workflow_module("expected_counts")
-    masking = workflow_loader.load_workflow_module("masking")
-
-    ref_seq = EC.load_reference_from_fasta(needed["ref"])
-    rates_df = EC.prepare_rates_df(needed["master"])
-    vcf_sites = pd.read_csv(needed["site_mask"])["site"].tolist()
-    bad_sites = masking.global_masked_sites(
-        sites_to_exclude=cfg.get("sites_to_exclude", []),
-        vcf_masked_sites=vcf_sites,
-        site_include_range=cfg.get("site_include_range", {}),
-        genome_len=len(ref_seq),
-    )
-    basepair_df = EC.build_site_unpaired_map(rna, len(ref_seq))
-    ec = EC.ExpectedCounts(
-        ref_seq, needed["coding"], bad_sites, basepair_df, rates_df
-    )
-
-    founders = pd.read_csv(needed["founders"]).fillna({"founder_nt_mutations": ""})
+    EC, ec, ref_seq, bad_sites, founders = loaded
     founders["_n"] = founders["founder_nt_mutations"].str.split().apply(len)
     # The most-mutated founder maximizes codon-boundary coverage (the failure mode).
     top = founders.sort_values("_n", ascending=False).head(1)
@@ -614,58 +832,16 @@ def check_founder_rate_table_invariant(output_dir, cfg):
     w_founders = kept[kept["window_start"] == win]
     w_counts = subtree_counts[subtree_counts["window_start"] == win]
 
-    # naive OLD-style reference for this one window (sum over founders of the
-    # reversion-masked founder_rate_table), reusing the trusted per-founder table.
-    rate_by_id = None
-    act_by_id = None
-    syn = set()
-    for _, fr in w_founders.iterrows():
-        fm = EC.founder_muts_to_dict(fr["founder_nt_mutations"], bad_sites)
-        t = ec.founder_rate_table(fm)
-        ram = {s: ref_seq[s - 1] for s in fm}
-        if ram:
-            t = t[~t["site"].map(ram).eq(t["mut_nt"]).fillna(False)]
-        syn |= set(t.loc[t["is_synonymous"], "ID"].unique())
-        c = t.groupby("ID")["rate"].sum()
-        rate_by_id = c if rate_by_id is None else rate_by_id.add(c, fill_value=0.0)
-        fc = w_counts[w_counts["founder_id"] == fr["founder_id"]]
-        if len(fc):
-            obs = fc[["nt_site", "nt_mutation", "count"]].copy()
-            obs["mut_nt"] = obs["nt_mutation"].str[-1]
-            obs = obs.rename(columns={"nt_site": "site"})
-            if ram:
-                obs = obs[~obs["site"].map(ram).eq(obs["mut_nt"]).fillna(False)]
-            m = obs.merge(
-                t[["site", "mut_nt", "ID"]], on=["site", "mut_nt"], how="left"
-            ).dropna(subset=["ID"])
-            if len(m):
-                a = m.groupby("ID")["count"].sum()
-                act_by_id = a if act_by_id is None else act_by_id.add(a, fill_value=0.0)
-    naive = rate_by_id.rename("rate_by_id").to_frame()
-    naive["actual_count"] = act_by_id if act_by_id is not None else 0.0
-    naive["actual_count"] = naive["actual_count"].fillna(0.0)
-    sm = naive.index.isin(syn)
-    t_win = naive.loc[sm, "actual_count"].sum() / naive.loc[sm, "rate_by_id"].sum()
-    naive["expected_count"] = t_win * naive["rate_by_id"]
-
-    # fast path, restricted to the same single window
-    fast = EC.compute_fitness_trajectory(
-        w_founders, w_counts, ec, bad_sites,
-        pseudocount=cfg.get("fitness_pseudocount", 0.5),
-        min_subtree_size=min_subtree, log=lambda *a: None,
-    ).set_index("ID")
-
-    joined = naive.join(fast[["actual_count", "expected_count"]],
-                        how="outer", lsuffix="_n", rsuffix="_f")
-    exp_bad = int((~np.isclose(joined["expected_count_n"].fillna(-1),
-                               joined["expected_count_f"].fillna(-1))).sum())
-    act_bad = int((~np.isclose(joined["actual_count_n"].fillna(-1),
-                               joined["actual_count_f"].fillna(-1))).sum())
+    # Compare the fast path against the naive OLD-style sum-over-founder_rate_table
+    # reference for this one window (see _fast_vs_naive_window).
+    exp_bad, act_bad, n_naive, n_fast = _fast_vs_naive_window(
+        EC, ec, ref_seq, bad_sites, w_founders, w_counts, cfg
+    )
     check(
         "compute_fitness_trajectory multi-founder accumulation (#123)",
-        exp_bad == 0 and act_bad == 0 and len(naive) == len(fast),
-        f"window {win} ({n_founders_win} founders): {exp_bad} expected + {act_bad} actual "
-        f"mismatch(es); IDs naive={len(naive)} fast={len(fast)}",
+        exp_bad == 0 and act_bad == 0 and n_naive == n_fast,
+        f"window {win} ({n_founders_win} founders): {exp_bad} expected + {act_bad} "
+        f"actual mismatch(es); IDs naive={n_naive} fast={n_fast}",
     )
 
 
@@ -691,6 +867,7 @@ def main():
     print("\n=== (C) windowed expected counts + delta_fitness_ratio (#118) ===")
     check_expected_outputs(output_dir, cfg)
     check_founder_rate_table_invariant(output_dir, cfg)
+    check_drop_branch(output_dir, cfg)
 
     print()
     if failures:
