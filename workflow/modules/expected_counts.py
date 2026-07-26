@@ -683,6 +683,14 @@ def compute_fitness_trajectory(
 
     for window_start, w_founders in founders.groupby("window_start", sort=True):
         w_counts = subtree_counts_df[subtree_counts_df["window_start"] == window_start]
+        # Group the window's observed counts by founder ONCE (O(|w_counts|)), so the
+        # per-founder lookup below is O(1). A per-founder boolean scan
+        # (`w_counts[w_counts.founder_id == fid]`) would make the actual-count join
+        # O(|w_counts| x n_founders) per window -- ~7e11 row-comparisons on the full
+        # tree, the dominant cost once the per-founder rate rebuild was removed (#123).
+        counts_by_founder = {
+            fid: g for fid, g in w_counts.groupby("founder_id", sort=False)
+        }
         n_founders = len(w_founders)
         rate = (base_by_id * float(n_founders)).to_dict()  # N * base
         act = defaultdict(float)
@@ -728,8 +736,8 @@ def compute_fitness_trajectory(
             # actual per ID: map each observed (site, mut_nt) to the founder-context
             # ID(s) at that site (recomputed at touched sites, reference elsewhere;
             # broadcasts to each overlap gene). Reversion-masked to match expected.
-            fc = w_counts[w_counts["founder_id"] == founder_id]
-            if len(fc):
+            fc = counts_by_founder.get(founder_id)
+            if fc is not None and len(fc):
                 for nt_site, nt_mutation, cnt in zip(
                     fc["nt_site"].to_numpy(), fc["nt_mutation"].to_numpy(),
                     fc["count"].to_numpy(),
