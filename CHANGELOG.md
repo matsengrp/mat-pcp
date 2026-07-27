@@ -20,6 +20,26 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ### v8
 
+**Extend `roemer_nextstrain_to_pango` to cover clades 24H-25C (no schema change).**
+The mapping previously ended at `24G: KP.2.3`, so any tree containing a more recent
+Nextstrain clade resolved no clade founder. This fails *silently*:
+`get_founder_mutations()` in `workflow/scripts/clade_founder_fasta.py` returns
+`([], None)` rather than raising, and `apply_mutations()` then returns the unmodified
+Wuhan reference — so every lineage-defining mutation in those clades would be counted as
+novel in a run that exits 0. Added `24H: LF.7`, `24I: MV.1`, `25A: LP.8.1`,
+`25B: NB.1.8.1`, `25C: XFG` (all present in the Roemer source with 127-141
+`nucSubstitutions`; mappings cross-checked against nextstrain's
+`clade_display_names.yml` and the trees' own `pango_lineage_usher` column).
+
+No version bump: additive to a lookup table, no output schema change, and none of the
+four trees in `config.yaml` contains these clades. Founder sequences *do* change for
+24H-25C on any tree that contains them (previously reference-identical), which is why
+it is recorded here.
+
+Also adds `config/config-gisaid-and-public-BA2-JN1-XFG.yaml`: three GISAID+public MAT
+snapshots chosen per variant era — `2022-06-01` (BA.2), `2024-04-01` (JN.1),
+`2026-01-01` (XFG). Config-only; identical to `config.yaml` apart from `trees:`.
+
 **Always run metadata QC; remove `skip_qc_filtering` (issue
 [#121](https://github.com/matsengrp/mat-pcp/issues/121)).** The `skip_qc_filtering`
 option — a development convenience that made `filter_metadata` a pass-through to match

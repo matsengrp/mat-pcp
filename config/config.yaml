@@ -158,6 +158,11 @@ roemer_nextstrain_to_pango:
   24E: KP.3.1.1
   24F: XEC
   24G: KP.2.3
+  24H: LF.7
+  24I: MV.1
+  25A: LP.8.1
+  25B: NB.1.8.1
+  25C: XFG
 
 # =============================================================================
 # Mutation Counting Configuration (match SARS2-mut-fitness)
