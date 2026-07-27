@@ -32,7 +32,6 @@ qc_filter_options:
   max_genome_length: 32000
 
 subset_frac: 0.1  # Random sampling fraction (1.0 = no sampling)
-skip_qc_filtering: false  # Set to true to skip all QC filtering (for SARS2-mut-fitness comparison)
 
 # =============================================================================
 # Tree Processing
@@ -90,11 +89,10 @@ pcp_genes:
   - ORF1ab
   - E
 
-# PCP filtering parameters (applied to CODING mutations only)
-# Noncoding mutations are excluded from quality criteria but still tracked
-pcp_max_nt_mutations: 4
-pcp_max_reversions_to_ref: 1
-pcp_max_reversions_to_clade_founder: 1
+# PCP branch QC reuses the shared Mutation-Counting keys (max_nt_mutations /
+# max_reversions_to_ref / max_reversions_to_clade_founder), applied to CODING
+# mutations only; noncoding mutations are excluded from quality criteria but
+# still tracked.
 
 # =============================================================================
 # Clade Founder Configuration

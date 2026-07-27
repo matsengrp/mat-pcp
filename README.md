@@ -332,9 +332,8 @@ Windows tile the full dated tree, anchored at the end date and stepping backward
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `pcp_genes` | List of protein symbols to extract PCPs and gene-sliced founders for. PCP extraction is fanned over this list; each protein's coordinates come from the reference GTF (`cds_blocks_for_gene`), so outputs land under `pcps/{gene}/` and `clade_founders/{gene}/`. ORF1ab is reconstructed as one frameshifted CDS. Must be non-empty. Production `config.yaml` ships `[S]` (Spike-only, byte-identical to v5); the test configs use `[S, ORF1ab, E]`. | `[S]` |
-| `pcp_max_nt_mutations` | Max nucleotide mutations per branch | `4` |
-| `pcp_max_reversions_to_ref` | Max reversions to reference | `1` |
-| `pcp_max_reversions_to_clade_founder` | Max reversions to clade founder | `1` |
+
+PCP branch QC reuses the shared Mutation-Counting keys (`max_nt_mutations`, `max_reversions_to_ref`, `max_reversions_to_clade_founder`; see the Mutation Counting section) — there are no separate `pcp_max_*` parameters, so PCP extraction and clade/window mutation counting filter branches identically.
 
 ### Mutation Counting
 
@@ -392,9 +391,9 @@ The pipeline applies multiple layers of filtering to ensure high-quality data fo
 
 During initial PCP extraction (`extract_pcps_by_clade`), branches are filtered based on:
 
-1. **Maximum nucleotide mutations** (`pcp_max_nt_mutations`): Branches with more than this many mutations are excluded (default: 4)
-2. **Maximum reversions to reference** (`pcp_max_reversions_to_ref`): Branches reverting too many sites to the reference are excluded (default: 1)
-3. **Maximum reversions to clade founder** (`pcp_max_reversions_to_clade_founder`): Branches reverting too many sites to the clade founder are excluded (default: 1)
+1. **Maximum nucleotide mutations** (`max_nt_mutations`): Branches with more than this many mutations are excluded (default: 4)
+2. **Maximum reversions to reference** (`max_reversions_to_ref`): Branches reverting too many sites to the reference are excluded (default: 1)
+3. **Maximum reversions to clade founder** (`max_reversions_to_clade_founder`): Branches reverting too many sites to the clade founder are excluded (default: 1)
 
 ### PCP Curation Filter
 

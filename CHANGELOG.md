@@ -18,6 +18,53 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### v8
+
+**Always run metadata QC; remove `skip_qc_filtering` (issue
+[#121](https://github.com/matsengrp/mat-pcp/issues/121)).** The `skip_qc_filtering`
+option — a development convenience that made `filter_metadata` a pass-through to match
+legacy SARS2-mut-fitness behavior — is removed. Metadata QC now always runs, so every
+tree is filtered by date cutoff (`min_leaf_date` / `max_leaf_date`), date resolution
+(MISSING/MONTH/YEAR dropped), host, and genome length before tree filtering. This is a
+breaking change: production configs previously ran with QC skipped, so the set of
+sequences entering the tree — and therefore all downstream counts, fitness, and windowed
+outputs — changes.
+
+**Changes**:
+
+- Removed the `skip_qc_filtering` config key and the corresponding branch in
+  `workflow/scripts/filter_metadata.py` / the `filter_metadata` rule params. Leftover
+  `skip_qc_filtering` keys in any config are now silently ignored (unknown global keys are
+  not validated).
+- `max_leaf_date` (per-tree) now actually takes effect; it was a no-op whenever
+  `skip_qc_filtering: true`. `subset_frac` likewise now applies on every run.
+- Fixes the `chronumental_qc` crash on production configs: the QC path emits the
+  `date_resolution_str` column that `chronumental_qc` requires, which the skip path never
+  created (`ValueError: Usecols do not match columns` on the missing column).
+- Removed the redundant `pcp_max_nt_mutations` / `pcp_max_reversions_to_ref` /
+  `pcp_max_reversions_to_clade_founder` config keys. PCP extraction now reuses the shared
+  Mutation-Counting keys (`max_nt_mutations` / `max_reversions_to_ref` /
+  `max_reversions_to_clade_founder`), so PCP extraction and clade/window mutation counting
+  filter branches with the same thresholds. (Config values were already identical, so this
+  is a no-op on the shipped configs.)
+- Fixed a crash in `window_expected_counts` (`modules/expected_counts.py`) on founders
+  whose touched sites are all noncoding: `_touched_sites` now intersects against the coding
+  keep-sites, so such a founder short-circuits to the reference table instead of building an
+  empty frame whose codon/merge-key columns come back `float64` and raise
+  `AttributeError: Can only use .str accessor with string values!`. Behavior-preserving on
+  founders that touch any coding site (noncoding rows were always dropped downstream); it
+  only surfaced on full-scale production trees, not the test data.
+- Performance: `window_expected_counts` now scales to full production trees. The driver
+  previously rebuilt and re-reduced the full ~90k-row genome-wide rate table for **every**
+  founder-window (~1.5M on a full tree → ~20 h). It now (a) accumulates each window's
+  per-ID rate as a *delta* on a once-computed reference base (`N·base − touched-site
+  reference rows + founder recomputed rows`), and (b) recomputes each founder's touched
+  codons via O(#touched-sites) dict lookups (`ExpectedCounts._founder_rec`) instead of
+  per-founder pandas. On the test data this is bit-for-bit identical to the old output
+  (max abs diff ~1e-16 in `expected_count` / `delta_fitness_ratio`), and the per-founder
+  rate-table build drops ~50× (≈19 ms → ≈0.38 ms), cutting the rule from ~20 h to tens of
+  minutes on the 2026-04-22 tree. Output schema is unchanged. (#123)
+
 ### v7
 
 **Time-resolved fitness (EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115)).**
