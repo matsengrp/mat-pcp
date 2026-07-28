@@ -93,7 +93,8 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 
 ### Testing
 ```bash
-# GLM reference-equivalence unit test (no pipeline run needed; runs first in CI)
+# GLM reference-equivalence unit test (no pipeline run needed; CI runs it
+# before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 
 # Run on test data (fast, uses max_clades=3)
@@ -166,8 +167,9 @@ mat-pcp/
 4. **Validation stage**: Cross-validates two independent mutation counting approaches (PCP-derived vs matUtils-derived) to ensure pipeline consistency.
 
 5. **The GLM's synonymous-only filter lives in the loader, not in curation.**
-   `glm/curated_counts.csv` deliberately holds *all* mutation classes (~21%
-   synonymous on production trees) because downstream rules need the full grid.
+   `glm/curated_counts.csv` deliberately holds *all* mutation classes (~22%
+   synonymous on the v7/v8 test tree; the share is tree-specific) because
+   downstream rules need the full grid.
    The neutral-rate restriction is applied when that file is *read*:
    `master_table.py` and `expected_counts_by_clade.py` both go through
    `modules/load.py::load_curated_muts`, an alias for `load_synonymous_muts`

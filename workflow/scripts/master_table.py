@@ -49,9 +49,14 @@ workflow_dir = os.path.dirname(script_dir)
 rates_module = load_workflow_module("rates", workflow_dir)
 load_module = load_workflow_module("load", workflow_dir)
 
-# Load curated counts (all curated mutations for training)
+# Load curated counts. load_curated_muts filters to synonymous mutations only --
+# curated_counts.csv itself holds every mutation class, so this call is the whole
+# neutral-rate restriction. Do NOT replace it with pd.read_csv (#126).
 log(f"Loading curated counts from {curated_counts_csv}")
 counts = load_module.load_curated_muts(curated_counts_csv)
+# validate_test.py::validate_glm_synonymous_training greps this exact wording to
+# reconcile the training count against the file's synonymous row count. Reword it
+# and that check fails; update the regex there too.
 log(f"Loaded {len(counts)} curated mutations for training")
 
 # Check required columns

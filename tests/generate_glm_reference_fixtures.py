@@ -23,6 +23,7 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 # Columns the fixture must carry: everything the reference load/GLM path reads,
@@ -51,6 +52,13 @@ FIXTURE_COLS = [
 # synonymous rows each.
 STRIDE = 6
 
+# Non-synonymous rows are thinned by a further factor on top of STRIDE. They are
+# never trained on, so they do not affect the golden table at all -- they exist
+# only so the tests can show that pooling them in *would* change the fit. A few
+# thousand is ample for that, and dropping the rest takes the committed fixture
+# from ~1.1 MB to ~0.4 MB.
+NON_SYNONYMOUS_EXTRA_STRIDE = 4
+
 # The reference implementation hard-codes these light-switch boundaries in
 # modules/glm.py (13467 = end of ORF1ab, 21562 = end of S), and mat-pcp mirrors
 # them in rates.DEFAULT_LIGHTSWITCH_BOUNDARIES. Used here only to check that the
@@ -74,7 +82,12 @@ def build_fixture(curated_counts_path):
     # semantics differ across the pandas versions this repo supports.)
     df = df.sort_values("nt_mutation", kind="mergesort").reset_index(drop=True)
     within_stratum = df.groupby(["mut_type", "mut_class"], sort=False).cumcount()
-    fixture = df[within_stratum % STRIDE == 0].reset_index(drop=True)
+    stride = np.where(
+        df["synonymous"] == True,  # noqa: E712
+        STRIDE,
+        STRIDE * NON_SYNONYMOUS_EXTRA_STRIDE,
+    )
+    fixture = df[within_stratum % stride == 0].reset_index(drop=True)
 
     fixture = fixture.sort_values("nt_mutation", kind="mergesort").reset_index(drop=True)
 
@@ -97,11 +110,16 @@ def build_fixture(curated_counts_path):
             "synonymous mutations past that site."
         )
 
-    n_classes = fixture["mut_class"].nunique()
-    if n_classes < 2:
+    # Both directions matter. Without non-synonymous rows a dropped filter would
+    # satisfy every assertion; without synonymous rows the training set is empty
+    # and the checks compare 0 == 0.
+    classes = set(fixture["mut_class"].dropna().unique())
+    if "synonymous" not in classes:
+        sys.exit("ERROR: fixture has no synonymous rows; nothing to train on")
+    if not classes - {"synonymous"}:
         sys.exit(
-            f"ERROR: fixture has only {n_classes} mut_class value(s); it must "
-            "contain non-synonymous rows or the synonymous-only test is vacuous"
+            "ERROR: fixture is entirely synonymous; it must contain other "
+            "mut_class values or the synonymous-only test is vacuous"
         )
     return fixture
 

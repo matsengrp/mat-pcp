@@ -8,14 +8,16 @@ implementation in
 
 | file | what it is |
 |---|---|
-| `glm_curated_counts_fixture.csv` | A stratified subsample of a real `glm/curated_counts.csv`. **Deliberately contains all four `mut_class` values**, so a test that trains on it can tell synonymous-only from pooled training. |
+| `glm_curated_counts_fixture.csv` | A stratified subsample of a real `glm/curated_counts.csv` (6,047 rows; 3,161 synonymous). **Deliberately contains all four `mut_class` values**, so a test that trains on it can tell synonymous-only from pooled training. Not a *proportional* sample: non-synonymous rows are thinned by a further 4x, since they are never trained on and only need to be numerous enough to show that pooling them in would change the fit. |
 | `glm_reference_rates.csv` | The 512-row rate table that the *reference* implementation produces from that fixture. |
 
 `tests/test_glm_reference_equivalence.py` feeds the fixture through mat-pcp's
 own `modules/load.py` + `modules/rates.py` and asserts the resulting rates
 match `glm_reference_rates.csv` exactly. It also fits the grid a second time on
-the *unfiltered* fixture and requires that most conditions differ, so the first
-two checks cannot pass vacuously.
+the *unfiltered* fixture and requires that most conditions differ (currently
+433 of 512), so the first two checks cannot pass vacuously. A fourth check
+asserts the shipped configs still carry the reference light-switch boundaries,
+which the pipeline passes explicitly rather than taking from the module default.
 
 Both the fixture fit and the frozen reference table contain negative rates, and
 running the test prints a `WARNING: N conditions have negative rates` block even
@@ -40,11 +42,14 @@ valid no matter which tree the pipeline is run on.
 
 The committed fixture was subsampled from a **v7** test run
 (`results/test_data_v7/glm/curated_counts.csv`, 87,777 rows: 64,183
-nonsynonymous / 18,934 synonymous / 4,129 nonsense / 531 noncoding). Those
-counts are tree- and version-specific and will not reproduce on a v8+ run — #122
-changed which sequences enter the tree. Nothing in the tests depends on
-reproducing them; the fixture is frozen precisely so the comparison does not
-move with the pipeline.
+nonsynonymous / 18,934 synonymous / 4,129 nonsense / 531 noncoding). A v8 run
+reproduces that file byte-for-byte (md5 `89fbce7c…`), since the test config
+already ran metadata QC before #122 made it unconditional.
+
+Do not rely on that holding in general: the composition is tree-specific, and
+production trees — which did run with `skip_qc_filtering: true` before #122 —
+will differ. Nothing in the tests depends on these numbers; the fixture is frozen
+precisely so the comparison does not move with the pipeline.
 
 ## Regenerating
 

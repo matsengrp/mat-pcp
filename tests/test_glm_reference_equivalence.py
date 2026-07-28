@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Pin the GLM neutral-rate model to the SARS2-mut-fitness-v2 reference (#126).
 
-Two properties are checked, both against frozen fixtures in ``tests/data`` --
-no pipeline run and no reference clone required, so this is safe to run early
-in CI:
+Two properties are checked against frozen fixtures in ``tests/data`` -- no
+pipeline run and no reference clone required, so this is safe to run early in CI:
 
 1. **The GLM trains on synonymous mutations only.** ``glm/curated_counts.csv``
    intentionally holds every mutation class, and the synonymous restriction
@@ -17,8 +16,11 @@ in CI:
    ``SARS2-mut-fitness-v2``; this asserts the port still agrees to floating-point
    noise on a fixed input.
 
-A third check confirms the fixture could actually detect a dropped filter, so
-that 1 and 2 cannot pass vacuously.
+Two further checks keep those two honest: one confirms the fixture could actually
+detect a dropped filter, so 1 and 2 cannot pass vacuously; the other asserts the
+shipped configs still carry the reference light-switch boundaries, since the
+pipeline passes those explicitly rather than using the module default, and
+equivalence holds only at the reference's values.
 
 Why a frozen fixture instead of pipeline output: ``Rates.populate_rates``
 rescales rates by ``n_training_rows / total_mutations``, so every rate moves with
@@ -42,6 +44,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = REPO_ROOT / "tests" / "data" / "glm_curated_counts_fixture.csv"
@@ -60,7 +63,7 @@ GRID_COLS = ["mut_type", "motif", "unpaired", "nt_site_before_boundary"]
 RATE_RTOL = 1e-9
 RATE_ATOL = 1e-12
 
-# Floor for check_guard_is_sensitive. Currently 449 of 512 conditions move when
+# Floor for check_guard_is_sensitive. Currently 433 of 512 conditions move when
 # the synonymous filter is dropped; this leaves headroom for fixture churn while
 # still failing if the fixture stops discriminating.
 MIN_SENSITIVITY_CONDITIONS = 400
@@ -79,7 +82,13 @@ def _load_workflow_modules():
 
 
 def _normalize(df):
-    """Put grid columns in comparable dtypes (CSV round-trips bools as str)."""
+    """Put grid columns in comparable dtypes before joining.
+
+    Currently no-ops: ``read_csv`` infers ``bool`` for these columns and
+    ``Rates`` already emits them that way. Kept so the join key cannot silently
+    become dtype-sensitive. Do not reuse this idiom on a nullable column --
+    ``astype(bool)`` on object-dtype strings makes ``"False"`` truthy.
+    """
     df = df.copy()
     df["nt_site_before_boundary"] = df["nt_site_before_boundary"].astype(bool)
     df["unpaired"] = df["unpaired"].astype(int)
@@ -101,6 +110,14 @@ def check_training_set_is_synonymous_only(load_module):
         failures.append(
             "fixture contains only synonymous mutations, so it cannot detect a "
             "dropped synonymous filter -- regenerate it"
+        )
+        return failures
+    # The converse also has to hold: with zero synonymous rows the checks below
+    # would compare 0 == 0 and pass for the wrong reason.
+    if "synonymous" not in classes:
+        failures.append(
+            "fixture contains no synonymous mutations, so the checks below would "
+            "pass vacuously on an empty training set -- regenerate it"
         )
         return failures
     print(f"  fixture mut_class values: {sorted(classes)} ({len(fixture)} rows)")
@@ -197,6 +214,39 @@ def check_rates_match_reference(load_module, rates_module):
     return failures
 
 
+def check_configs_use_reference_boundaries():
+    """Shipped configs must carry the reference's light-switch boundaries.
+
+    The pipeline does not use ``DEFAULT_LIGHTSWITCH_BOUNDARIES``: ``master_table``
+    and ``expected_counts_by_clade`` are passed ``config["glm_lightswitch_boundaries"]``.
+    So pinning the module default is not enough -- a config-only edit would move
+    every production rate away from the reference while the rest of this test,
+    which fits at ``REFERENCE_BOUNDARIES`` directly, stayed green.
+    """
+    failures = []
+    config_dir = REPO_ROOT / "config"
+    configs = sorted(config_dir.glob("*.yaml"))
+    if not configs:
+        return [f"no configs found under {config_dir}"]
+
+    for path in configs:
+        with open(path) as f:
+            cfg = yaml.safe_load(f) or {}
+        if "glm_lightswitch_boundaries" not in cfg:
+            continue
+        boundaries = {str(k): int(v) for k, v in cfg["glm_lightswitch_boundaries"].items()}
+        if boundaries != REFERENCE_BOUNDARIES:
+            failures.append(
+                f"{path.name} sets glm_lightswitch_boundaries to {boundaries}, "
+                f"but reference equivalence holds only at {REFERENCE_BOUNDARIES}. "
+                "Changing these is a deliberate deviation from "
+                "SARS2-mut-fitness-v2 (see #125)."
+            )
+    if not failures:
+        print(f"  all {len(configs)} configs use the reference boundaries")
+    return failures
+
+
 def check_guard_is_sensitive(load_module, rates_module):
     """The committed fixture must be able to tell the two training sets apart.
 
@@ -233,9 +283,10 @@ def check_guard_is_sensitive(load_module, rates_module):
         failures.append(
             f"pooling non-synonymous mutations into the training set changes "
             f"only {differing}/{len(merged)} rate-grid conditions (require at "
-            f"least {MIN_SENSITIVITY_CONDITIONS}). The fixture can no longer "
-            "demonstrate that checks A and B would catch a dropped synonymous "
-            "filter -- regenerate it (#126)."
+            f"least {MIN_SENSITIVITY_CONDITIONS}), so checks A and B can no "
+            "longer demonstrate that they would catch a dropped synonymous "
+            "filter. Either the loader's filter was removed (check A's result "
+            "first) or the fixture needs regenerating (#126)."
         )
     else:
         print(
@@ -245,10 +296,11 @@ def check_guard_is_sensitive(load_module, rates_module):
     return failures
 
 
-def main():
+def run_all_checks():
+    """Run every check and return the accumulated failure messages."""
     for path in (FIXTURE, GOLDEN):
         if not path.is_file():
-            sys.exit(f"ERROR: missing fixture {path}")
+            return [f"missing fixture {path}"]
 
     load_module, rates_module = _load_workflow_modules()
 
@@ -259,7 +311,26 @@ def main():
     failures += check_rates_match_reference(load_module, rates_module)
     print("Checking the fixture can detect a dropped synonymous filter...")
     failures += check_guard_is_sensitive(load_module, rates_module)
+    print("Checking configs use the reference light-switch boundaries...")
+    failures += check_configs_use_reference_boundaries()
+    return failures
 
+
+def test_glm_reference_equivalence():
+    """Pytest entry point.
+
+    This repo runs its tests as standalone scripts (``pixi run python
+    tests/<file>.py``) and does not depend on pytest. This wrapper exists so that
+    anyone who does reach for ``pytest tests/`` gets a real result: without a
+    ``test_``-prefixed *function*, pytest would collect zero tests here and exit
+    green, which reads as "the guard passed" when nothing ran.
+    """
+    failures = run_all_checks()
+    assert not failures, "\n".join(failures)
+
+
+def main():
+    failures = run_all_checks()
     if failures:
         print(f"\nFAILED ({len(failures)} problem(s)):")
         for f in failures:
