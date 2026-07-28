@@ -11,10 +11,11 @@ pipeline run and no reference clone required, so this is safe to run early in CI
    ``master_table.py`` to a bare ``pd.read_csv``, which would silently train the
    neutral model on mutations under purifying selection. See #126.
 
-2. **The rates are numerically identical to the reference implementation.**
-   mat-pcp's ``modules/rates.py`` + ``modules/glm.py`` are a port of
-   ``SARS2-mut-fitness-v2``; this asserts the port still agrees to floating-point
-   noise on a fixed input.
+2. **The rates match the reference implementation.** mat-pcp's
+   ``modules/rates.py`` + ``modules/glm.py`` are a port of
+   ``SARS2-mut-fitness-v2``; this asserts the port still agrees on a fixed input,
+   to within cross-platform floating-point noise (see ``RATE_ATOL`` -- the golden
+   table is generated on one machine and checked on another).
 
 Two further checks keep those two honest: one confirms the fixture could actually
 detect a dropped filter, so 1 and 2 cannot pass vacuously; the other asserts the
@@ -60,13 +61,36 @@ GRID_COLS = ["mut_type", "motif", "unpaired", "nt_site_before_boundary"]
 
 # Both implementations solve the same normal equations in float64, but not in a
 # bit-identical operation order, so allow float noise and nothing more.
-RATE_RTOL = 1e-9
-RATE_ATOL = 1e-12
+#
+# atol has to absorb *cross-platform* noise, not just same-machine noise. The
+# golden table is generated on one machine and compared on another (CI), where a
+# different BLAS resolves `np.linalg.inv(X.T @ X + lambda I)` slightly
+# differently. That is invisible for meaningful rates but not for the grid rows
+# where the GLM extrapolates to a near-zero rate: those come out around 1e-10,
+# and the two platforms disagree by about the same amount -- 100x an atol of
+# 1e-12, even though both are numerically zero. An earlier revision of this test
+# used rtol=1e-9/atol=1e-12, which held locally (max diff 3.6e-15) and failed CI
+# on 345 of these near-zero rows.
+#
+# Rates that carry signal span roughly -19 to 88 here, so these bounds still
+# catch any real divergence: dropping the synonymous filter moves rates by
+# factors of tens, not parts per million.
+RATE_RTOL = 1e-6
+RATE_ATOL = 1e-8
 
-# Floor for check_guard_is_sensitive. Currently 433 of 512 conditions move when
-# the synonymous filter is dropped; this leaves headroom for fixture churn while
-# still failing if the fixture stops discriminating.
-MIN_SENSITIVITY_CONDITIONS = 400
+# Floor for check_guard_is_sensitive.
+#
+# Only 64 of the 512 grid conditions carry a rate above 1e-3 -- the GLM
+# extrapolates the rest to ~1e-11, i.e. numerically zero. Dropping the synonymous
+# filter changes every one of those 64 (minimum relative change 2.7%, and 25 of
+# them move by more than half), so 64 is the real ceiling here and 50 leaves
+# headroom for fixture churn.
+#
+# Do not raise this toward 512 by tightening the tolerances instead: an earlier
+# revision counted 433 "differing" conditions at rtol=1e-9/atol=1e-12, but most of
+# that was disagreement between two numerically-zero values, which is also what
+# made the count platform-dependent (449 on CI).
+MIN_SENSITIVITY_CONDITIONS = 50
 
 
 def _load_workflow_modules():
@@ -290,8 +314,9 @@ def check_guard_is_sensitive(load_module, rates_module):
         )
     else:
         print(
-            f"  pooling would move {differing}/{len(merged)} conditions, so the "
-            "fixture can detect a dropped filter"
+            f"  pooling would move {differing}/{len(merged)} conditions "
+            f"(floor {MIN_SENSITIVITY_CONDITIONS}), so the fixture can detect a "
+            "dropped filter"
         )
     return failures
 

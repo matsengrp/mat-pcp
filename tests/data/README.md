@@ -13,9 +13,13 @@ implementation in
 
 `tests/test_glm_reference_equivalence.py` feeds the fixture through mat-pcp's
 own `modules/load.py` + `modules/rates.py` and asserts the resulting rates
-match `glm_reference_rates.csv` exactly. It also fits the grid a second time on
-the *unfiltered* fixture and requires that most conditions differ (currently
-433 of 512), so the first two checks cannot pass vacuously. A fourth check
+match `glm_reference_rates.csv`, to within cross-platform floating-point noise
+(the golden table is generated on one machine and checked on another; see
+`RATE_ATOL` in the test for why an exact match is not achievable). It also fits
+the grid a second time on the *unfiltered* fixture and requires that the
+meaningfully-non-zero rates differ. Only 64 of the 512 conditions carry a rate
+above 1e-3 — the GLM extrapolates the rest to ~1e-11 — and dropping the filter
+changes all 64. A fourth check
 asserts the shipped configs still carry the reference light-switch boundaries,
 which the pipeline passes explicitly rather than taking from the module default.
 
