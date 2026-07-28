@@ -45,9 +45,17 @@ FIXTURE_COLS = [
 ]
 
 # Keep every Nth row within each (mut_type, mut_class) stratum. Chosen so the
-# fixture stays a few thousand rows while leaving every mutation type with far
-# more observations than the GLM has parameters (~10).
+# fixture stays a few thousand rows while leaving every mutation type more
+# synonymous observations than the GLM has parameters (8 without a light-switch
+# boundary, 9 with one). The thinnest strata at this stride are GC and GT, at 45
+# synonymous rows each.
 STRIDE = 6
+
+# The reference implementation hard-codes these light-switch boundaries in
+# modules/glm.py (13467 = end of ORF1ab, 21562 = end of S), and mat-pcp mirrors
+# them in rates.DEFAULT_LIGHTSWITCH_BOUNDARIES. Used here only to check that the
+# fixture spans them.
+REFERENCE_BOUNDARIES = {"CT": 13467, "AT": 21562, "CG": 21562, "GC": 21562}
 
 
 def build_fixture(curated_counts_path):
@@ -68,15 +76,26 @@ def build_fixture(curated_counts_path):
     within_stratum = df.groupby(["mut_type", "mut_class"], sort=False).cumcount()
     fixture = df[within_stratum % STRIDE == 0].reset_index(drop=True)
 
-    # ``Rates.populate_rates`` evaluates the light-switch factor at
-    # ``nt_site.max()``, so the fixture must reach past the largest boundary
-    # (21562) or the post-boundary half of the rate grid is not exercised.
-    if fixture["nt_site"].max() < df["nt_site"].max():
-        fixture = pd.concat(
-            [fixture, df.loc[[df["nt_site"].idxmax()]]], ignore_index=True
-        )
-
     fixture = fixture.sort_values("nt_mutation", kind="mergesort").reset_index(drop=True)
+
+    # ``Rates.populate_rates`` evaluates the light-switch factor at
+    # ``df_train["nt_site"].max()``, and df_train is the *synonymous* subset. So
+    # the check has to be on the synonymous rows, not on the fixture as a whole:
+    # if the synonymous rows all sat below the largest boundary, s_max would too,
+    # every grid row would get global_context = 0, and the True/False halves of
+    # the AT/CG/GC/CT grid would collapse into duplicate rates -- silently
+    # halving what the golden table actually pins. Appending a high-site row of
+    # some other class would not help, since the loader filters it back out.
+    max_boundary = max(REFERENCE_BOUNDARIES.values())
+    syn_max_site = fixture.loc[fixture["synonymous"] == True, "nt_site"].max()  # noqa: E712
+    if not syn_max_site > max_boundary:
+        sys.exit(
+            f"ERROR: highest synonymous site in the fixture is {syn_max_site}, "
+            f"which does not exceed the largest light-switch boundary "
+            f"({max_boundary}). The post-boundary half of the rate grid would "
+            "not be exercised. Lower STRIDE or use a source table with "
+            "synonymous mutations past that site."
+        )
 
     n_classes = fixture["mut_class"].nunique()
     if n_classes < 2:

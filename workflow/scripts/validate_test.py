@@ -796,7 +796,17 @@ def validate_glm_synonymous_training(output_dir):
     counts_path = Path(output_dir) / 'glm' / 'curated_counts.csv'
     log_path = Path(output_dir) / 'log' / 'master_table.log'
 
-    if not counts_path.exists() or not log_path.exists():
+    # Skip only when the GLM stage never ran at all (partial pipeline target).
+    # If the curated table exists, master_table must have run too, and a missing
+    # log is a real problem: without it there is nothing to reconcile against,
+    # so silently passing would make this check unenforceable.
+    if not counts_path.exists():
+        return differences, None
+    if not log_path.exists():
+        differences.append(
+            f"{counts_path} exists but {log_path} does not, so the GLM's "
+            "synonymous-only training cannot be verified (#126)"
+        )
         return differences, None
 
     n_total = 0

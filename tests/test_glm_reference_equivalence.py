@@ -17,11 +17,21 @@ in CI:
    ``SARS2-mut-fitness-v2``; this asserts the port still agrees to floating-point
    noise on a fixed input.
 
+A third check confirms the fixture could actually detect a dropped filter, so
+that 1 and 2 cannot pass vacuously.
+
 Why a frozen fixture instead of pipeline output: ``Rates.populate_rates``
-rescales rates by ``n_synonymous_sites / total_mutations``, so every rate moves
-with tree size. Comparing the two implementations on *the same* curated counts
-removes that variable and makes the comparison exact rather than approximate.
-Regenerate the fixtures with ``tests/generate_glm_reference_fixtures.py``.
+rescales rates by ``n_training_rows / total_mutations``, so every rate moves with
+tree size. Comparing the two implementations on *the same* curated counts removes
+that variable and makes the comparison exact rather than approximate. Regenerate
+the fixtures with ``tests/generate_glm_reference_fixtures.py``.
+
+Expect a ``WARNING: N conditions have negative rates`` block on stdout even when
+this test passes. The fixture is a subsample, so the thinnest strata (45
+synonymous rows against 8-9 GLM parameters) extrapolate to negative rates for
+some conditions, and the frozen reference table contains them too. That is fine
+here: these checks pin *agreement with the reference*, not the plausibility of
+the fit, and the reference produces the same values.
 
 Usage:
     python tests/test_glm_reference_equivalence.py
@@ -49,6 +59,11 @@ GRID_COLS = ["mut_type", "motif", "unpaired", "nt_site_before_boundary"]
 # bit-identical operation order, so allow float noise and nothing more.
 RATE_RTOL = 1e-9
 RATE_ATOL = 1e-12
+
+# Floor for check_guard_is_sensitive. Currently 449 of 512 conditions move when
+# the synonymous filter is dropped; this leaves headroom for fixture churn while
+# still failing if the fixture stops discriminating.
+MIN_SENSITIVITY_CONDITIONS = 400
 
 
 def _load_workflow_modules():
@@ -109,8 +124,8 @@ def check_training_set_is_synonymous_only(load_module):
     bad_class = sorted(set(train["mut_class"].dropna().unique()) - {"synonymous"})
     if bad_class:
         failures.append(
-            f"training set contains mut_class values {bad_class}; these are "
-            "under purifying selection and must not inform a neutral rate (#126)"
+            f"training set contains mut_class values {bad_class}; only "
+            "synonymous mutations may inform a neutral rate (#126)"
         )
 
     if not failures:
@@ -118,7 +133,14 @@ def check_training_set_is_synonymous_only(load_module):
     return failures
 
 
-def check_rates_match_reference(rates_module):
+def _fit_rates(rates_module, train):
+    """Fit the rate grid on a given training frame."""
+    rate = rates_module.Rates(REFERENCE_BOUNDARIES)
+    rate.populate_rates(train)
+    return _normalize(rate.rates)
+
+
+def check_rates_match_reference(load_module, rates_module):
     """mat-pcp's GLM must reproduce the reference rate table on the fixture."""
     failures = []
     golden = _normalize(pd.read_csv(GOLDEN))
@@ -132,12 +154,7 @@ def check_rates_match_reference(rates_module):
             f"{REFERENCE_BOUNDARIES}"
         )
 
-    load_module, _ = _load_workflow_modules()
-    train = load_module.load_curated_muts(str(FIXTURE))
-
-    rate = rates_module.Rates(REFERENCE_BOUNDARIES)
-    rate.populate_rates(train)
-    actual = _normalize(rate.rates)
+    actual = _fit_rates(rates_module, load_module.load_curated_muts(str(FIXTURE)))
 
     if len(actual) != len(golden):
         failures.append(
@@ -180,6 +197,54 @@ def check_rates_match_reference(rates_module):
     return failures
 
 
+def check_guard_is_sensitive(load_module, rates_module):
+    """The committed fixture must be able to tell the two training sets apart.
+
+    Checks A and B both pass vacuously if the fixture's synonymous subset is
+    close enough to the whole fixture that pooling barely moves the fit. Rather
+    than trust that, fit the grid both ways on the *same* fixture -- once via
+    ``load_curated_muts``, once via a bare ``pd.read_csv`` (the #126 scenario) --
+    and require that most conditions actually differ.
+
+    Note this asserts *divergence*, not that the pooled fit looks broken: on
+    this sparse fixture the pooled rates are not uniformly lower and have fewer
+    negative values than the correct ones, because the
+    ``n_rows / total_mutations`` rescaling changes along with the training set.
+    Direction is not the signal; disagreement is.
+    """
+    failures = []
+    syn = _fit_rates(rates_module, load_module.load_curated_muts(str(FIXTURE)))
+    pooled = _fit_rates(rates_module, pd.read_csv(str(FIXTURE)))
+
+    merged = syn[GRID_COLS + ["rate"]].merge(
+        pooled[GRID_COLS + ["rate"]], on=GRID_COLS, suffixes=("_syn", "_pooled")
+    )
+    differing = int(
+        (
+            ~np.isclose(
+                merged["rate_pooled"],
+                merged["rate_syn"],
+                rtol=RATE_RTOL,
+                atol=RATE_ATOL,
+            )
+        ).sum()
+    )
+    if differing < MIN_SENSITIVITY_CONDITIONS:
+        failures.append(
+            f"pooling non-synonymous mutations into the training set changes "
+            f"only {differing}/{len(merged)} rate-grid conditions (require at "
+            f"least {MIN_SENSITIVITY_CONDITIONS}). The fixture can no longer "
+            "demonstrate that checks A and B would catch a dropped synonymous "
+            "filter -- regenerate it (#126)."
+        )
+    else:
+        print(
+            f"  pooling would move {differing}/{len(merged)} conditions, so the "
+            "fixture can detect a dropped filter"
+        )
+    return failures
+
+
 def main():
     for path in (FIXTURE, GOLDEN):
         if not path.is_file():
@@ -191,7 +256,9 @@ def main():
     print("Checking GLM training set is synonymous-only (#126)...")
     failures += check_training_set_is_synonymous_only(load_module)
     print("Checking GLM rates match SARS2-mut-fitness-v2...")
-    failures += check_rates_match_reference(rates_module)
+    failures += check_rates_match_reference(load_module, rates_module)
+    print("Checking the fixture can detect a dropped synonymous filter...")
+    failures += check_guard_is_sensitive(load_module, rates_module)
 
     if failures:
         print(f"\nFAILED ({len(failures)} problem(s)):")
