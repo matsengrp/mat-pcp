@@ -605,6 +605,10 @@ See `archives/README.md` for detailed archiving guidelines.
 # SARS2-mut-fitness-v2 (frozen fixtures; no pipeline run needed)
 pixi run python tests/test_glm_reference_equivalence.py
 
+# Unit test: an unresolvable clade founder fails loudly instead of
+# silently falling back to the Wuhan reference (no pipeline run needed)
+pixi run python tests/test_clade_founder_guards.py
+
 # Run pipeline on test data (uses max_clades=3, subset_frac=0.1)
 pixi run snakemake -j 4 --use-conda --configfile config/config_test_data.yaml
 

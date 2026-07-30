@@ -114,6 +114,14 @@ jobs:
       run: |
         pixi run python tests/test_glm_reference_equivalence.py
 
+    # Also a fixture-only unit test, for the same reason: it runs
+    # clade_founder_fasta.py against a stub snakemake object, so it needs no
+    # pipeline output. Pins the guards that stop an unresolvable clade from
+    # silently getting the Wuhan reference as its founder (#129).
+    - name: Verify clade-founder guards reject a reference fallback
+      run: |
+        pixi run python tests/test_clade_founder_guards.py
+
     - name: Validate Snakefile syntax
       run: |
         # Note: --lint returns non-zero for style suggestions (e.g., "Mixed rules and functions")

@@ -93,9 +93,10 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 
 ### Testing
 ```bash
-# GLM reference-equivalence unit test (no pipeline run needed; CI runs it
+# Unit tests over frozen fixtures (no pipeline run needed; CI runs both
 # before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
+pixi run python tests/test_clade_founder_guards.py
 
 # Run on test data (fast, uses max_clades=3)
 pixi run snakemake -j 2 --use-conda \
@@ -183,6 +184,26 @@ mat-pcp/
    `validate_test.py::validate_glm_synonymous_training` (end-to-end). See
    [#126](https://github.com/matsengrp/mat-pcp/issues/126).
 
+6. **An unresolvable clade founder is a hard failure, not a fallback.**
+   `clade_founder_fasta.py` builds each clade's founder by applying that clade's
+   defining mutations to the Wuhan reference. If the clade resolves in none of its
+   three sources (Neher JSON → Roemer via `roemer_nextstrain_to_pango` → Roemer
+   keyed directly), it used to apply *zero* mutations and write the unmodified
+   reference — exit 0, logged as ordinary output. Nothing downstream caught it
+   because the wrong founder propagated *consistently*: every consumer compared
+   against the same wrong sequence, so no internal cross-check disagreed. It
+   surfaced only when an outside consumer noticed implausible cross-clade
+   correlations (24H/24I/25A/25B/25C in v8).
+   Two guards now cover the two routes to that output — a missing *source*, and a
+   resolved source that yields no *effective* mutations (empty substitution list,
+   or every mutation dropped by the reference-base mismatch check). Both raise.
+   The second check is deliberately **genome-wide, not per-gene**: at gene level
+   reference-identity is legitimate (19B's founder equals 19A's for S, since
+   C8782T and T28144C both fall outside spike), so a per-gene assertion would need
+   an allowlist growing with every clade/gene pair — the same shape as the bug it
+   guards. Guarded by `tests/test_clade_founder_guards.py`. See
+   [#129](https://github.com/matsengrp/mat-pcp/issues/129).
+
 ### Configuration Sections
 
 The configuration (`config/config.yaml`) is organized into:
@@ -222,7 +243,16 @@ The configuration (`config/config.yaml`) is organized into:
    windowed fitness is directly comparable to the clade-based `aamut_fitness`.
 5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
 6. **PCP Extraction**: `pcp_genes` (PCP branch QC reuses the shared Mutation-Counting keys `max_nt_mutations` / `max_reversions_to_ref` / `max_reversions_to_clade_founder`)
-7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources)
+7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources),
+   `roemer_nextstrain_to_pango` (Nextstrain clade → Pango lineage, for clades not
+   in the Neher JSON), `allow_reference_identical_founders` (optional; clades
+   whose founder may legitimately equal the reference genome — the
+   `reference_clade` is exempt automatically, so this is normally empty).
+   **Every config carries its own copy of `roemer_nextstrain_to_pango`**, so
+   adding a clade to one config does not add it to the others; that is how #129
+   happened. `clade_founder_fasta.py` now raises rather than silently writing the
+   reference as an unresolvable clade's founder — see the note under "Important
+   Patterns" below.
 8. **Mutation Counting**: `max_nt_mutations`, `max_reversions_*`, `site_include_range`
 9. **GLM**: `rna_structure_data`, `glm_lightswitch_boundaries`
 11. **Fitness**: `fitness_pseudocount`, `fitness_N_f`, `fitness_N_n_exp`
