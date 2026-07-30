@@ -17,20 +17,25 @@
 # =============================================================================
 # A single `snakemake` invocation builds every tree listed here. `max_leaf_date`
 # is the only per-tree-overridable key; all other settings are global.
+#
+# Each tree's outputs land in `{output_root}/{label}_{VERSION}` -- the Snakefile
+# appends the contents of the VERSION file, so the output directory moves on every
+# bump. The comments below deliberately write `_v<VERSION>` rather than a literal
+# version: they previously said `_v5` and were three bumps stale.
 trees:
-  public_2022-04-02:                       # -> results/public_2022-04-02_v5
+  public_2022-04-02:                       # -> results/public_2022-04-02_v<VERSION>
     mat: "../mat-trees/2022-04-02-public/public-2022-04-02.all.masked.pb.gz"
     metadata: "../mat-trees/2022-04-02-public/public-2022-04-02.metadata.tsv.gz"
     max_leaf_date: "2022-04-02"
-  public_2022-06-01:                       # -> results/public_2022-06-01_v5
+  public_2022-06-01:                       # -> results/public_2022-06-01_v<VERSION>
     mat: "../mat-trees/2022-06-01-public/public-2022-06-01.all.masked.nextclade.pangolin.pb.gz"
     metadata: "../mat-trees/2022-06-01-public/public-2022-06-01.metadata.tsv.gz"
     max_leaf_date: "2022-06-01"
-  public_2023-01-01:                       # -> results/public_2023-01-01_v5
+  public_2023-01-01:                       # -> results/public_2023-01-01_v<VERSION>
     mat: "../mat-trees/2023-01-01-public/public-2023-01-01.all.masked.pb.gz"
     metadata: "../mat-trees/2023-01-01-public/public-2023-01-01.metadata.tsv.gz"
     max_leaf_date: "2023-01-01"
-  gisaid-and-public_2023-01-01:            # -> results/gisaid-and-public_2023-01-01_v5
+  gisaid-and-public_2023-01-01:            # -> results/gisaid-and-public_2023-01-01_v<VERSION>
     mat: "../mat-trees/2023-01-01-gisaid-and-public/gisaidAndPublic.2023-01-01.masked.pb.gz"
     metadata: "../mat-trees/2023-01-01-gisaid-and-public/gisaidAndPublic.2023-01-01.metadata.tsv.gz"
     max_leaf_date: "2023-01-01"
@@ -140,7 +145,17 @@ clade_founders:
   neher_json: "https://raw.githubusercontent.com/neherlab/SC2_variant_rates/7e738194a8c6592082f1caa9a6ca70cb68289790/data/clade_gts.json"
   roemer_json: "https://raw.githubusercontent.com/corneliusroemer/pango-sequences/main/data/pango-consensus-sequences_summary.json"
 
-# Mapping from Nextstrain clades to Pango lineages (for Roemer founders)
+# Mapping from Nextstrain clades to Pango lineages (for Roemer founders).
+#
+# Every config carries its own copy of this map, so a new clade must be added to
+# each config whose tree contains it (grep roemer_nextstrain_to_pango config/).
+# A clade missing from both this map and the Neher JSON is now a hard failure in
+# clade_founder_fasta.py rather than a silent fallback to the Wuhan reference
+# (#129) -- so a missing entry fails the run instead of corrupting it.
+#
+# The 24H-25C entries are not reachable by any tree listed above (all four cut
+# off at 2023-01-01 or earlier); they are here so this map does not diverge from
+# the other configs' copies.
 roemer_nextstrain_to_pango:
   23A: XBB.1.5
   23B: XBB.1.16
@@ -158,6 +173,11 @@ roemer_nextstrain_to_pango:
   24E: KP.3.1.1
   24F: XEC
   24G: KP.2.3
+  24H: LF.7
+  24I: MV.1
+  25A: LP.8.1
+  25B: NB.1.8.1
+  25C: XFG
 
 # =============================================================================
 # Mutation Counting Configuration (match SARS2-mut-fitness)

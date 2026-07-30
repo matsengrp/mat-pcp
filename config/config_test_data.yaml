@@ -68,7 +68,19 @@ window_min_subtree_size: 0
 # =============================================================================
 clade_column: "Nextstrain_clade"
 min_clade_size: 2
-clades_to_exclude: []
+# Exclude clades with no resolvable founder, matching config.yaml's exclusion of
+# 21A. Neither is reachable at max_clades: 3 today -- the first three adequate
+# clades are 19A/19B/20A -- but both would now be a hard failure if max_clades
+# were raised, since clade_founder_fasta.py no longer falls back to the reference
+# (#129):
+#   21A          absent from the Neher JSON (the only 19A-22F clade that is) and
+#                not a Pango key, so it resolves in none of the three sources.
+#   recombinant  a catch-all metadata label rather than a clade; it has 4 samples
+#                in the test data and passes min_clade_size. The production
+#                configs use Nextstrain_clade_usher, which has no such value.
+clades_to_exclude:
+  - 21A
+  - recombinant
 max_clades: 3  # Set to limit number of clades processed (useful for testing)
 
 # Reference clade for motif/codon annotation (using 19A to match production behavior)
@@ -101,11 +113,21 @@ clade_founders:
   neher_json: "https://raw.githubusercontent.com/neherlab/SC2_variant_rates/7e738194a8c6592082f1caa9a6ca70cb68289790/data/clade_gts.json"
   roemer_json: "https://raw.githubusercontent.com/corneliusroemer/pango-sequences/main/data/pango-consensus-sequences_summary.json"
 
-# Mapping from Nextstrain clades to Pango lineages (for Roemer founders)
+# Mapping from Nextstrain clades to Pango lineages (for Roemer founders).
+#
+# Every config carries its own copy of this map, so a new clade must be added to
+# each config whose tree contains it (grep roemer_nextstrain_to_pango config/).
+# A clade missing from both this map and the Neher JSON is now a hard failure in
+# clade_founder_fasta.py rather than a silent fallback to the Wuhan reference
+# (#129) -- so a missing entry fails the run instead of corrupting it.
+#
+# Short on purpose: the test data cuts off well before the 24H-25C clades that
+# the production configs need, and every clade it does contain resolves via the
+# Neher JSON. The guard above is what makes that safe to rely on rather than a
+# standing invitation to fall behind.
 roemer_nextstrain_to_pango:
   23A: XBB.1.5
   23B: XBB.1.16
-  # Add more mappings as needed
 
 # =============================================================================
 # Mutation Counting Configuration
