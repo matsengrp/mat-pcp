@@ -858,6 +858,79 @@ def validate_glm_synonymous_training(output_dir):
     )
 
 
+def validate_founder_codon_background(output_dir):
+    """Check ``counts_all.csv`` holds exactly one row per (clade, nt_mutation).
+
+    The grid enumerates every possible mutation from each clade founder, so this
+    is a hard structural invariant, not a statistical one. It broke because the
+    join carried no ``codon_change``: observations of the same nucleotide
+    substitution on an already-mutated codon were relabelled onto the founder
+    codon and kept as extra rows, corrupting both fitness estimators in opposite
+    directions (#130). Nothing else could see it -- the phantom rows are
+    byte-identical to the real ones in every emitted column.
+
+    ``tests/test_founder_codon_background.py`` pins the filter itself on
+    synthetic fixtures. This is the dataset-level counterpart, and it is the
+    only one of the two that can speak about a *real* run.
+
+    Note the test dataset has no off-founder-background observations at all, so
+    a pass here confirms the invariant holds but does not exercise the filter;
+    the reported summary says which case actually occurred.
+    """
+    import csv
+
+    differences = []
+    counts_path = Path(output_dir) / 'counts_all.csv'
+    if not counts_path.exists():
+        return differences, None
+
+    seen = set()
+    duplicates = []
+    n_rows = 0
+    with open(counts_path, newline='') as f:
+        reader = csv.DictReader(f)
+        missing = [c for c in ('clade', 'nt_mutation') if c not in (reader.fieldnames or [])]
+        if missing:
+            differences.append(
+                f"{counts_path.name} has no {missing} column(s), so the "
+                "one-row-per-mutation invariant cannot be checked (#130)"
+            )
+            return differences, None
+        for row in reader:
+            n_rows += 1
+            key = (row['clade'], row['nt_mutation'])
+            if key in seen:
+                if len(duplicates) < 5:
+                    duplicates.append(key)
+            else:
+                seen.add(key)
+
+    if duplicates:
+        differences.append(
+            f"{counts_path.name} has duplicated (clade, nt_mutation) rows -- "
+            f"{n_rows} rows for {len(seen)} distinct mutations. Each mutation "
+            "must appear exactly once per clade; extra rows mean observations "
+            "from non-founder codon backgrounds were counted (#130). First "
+            f"{len(duplicates)}: {duplicates}"
+        )
+        return differences, None
+
+    # How many observations the filter actually removed, so a pass is not read
+    # as "the filter was exercised" when the dataset had nothing to remove.
+    log_path = Path(output_dir) / 'log' / 'build_count_table.log'
+    dropped = 'log not found'
+    if log_path.exists():
+        match = re.search(
+            r'dropped (\d+) rows mutated codon background', log_path.read_text()
+        )
+        dropped = f"{match.group(1)} dropped" if match else "none dropped"
+
+    return differences, (
+        f"Count table: {n_rows} rows, one per (clade, nt_mutation); "
+        f"off-founder-background observations: {dropped}"
+    )
+
+
 def default_output_dir():
     """Best-guess test output dir when none is given.
 
@@ -925,9 +998,10 @@ def main():
     spike_mask_diffs, spike_mask_summary = validate_spike_mask_all_clades(output_dir)
     orf1ab_diffs, orf1ab_summary = validate_orf1ab_founder(output_dir)
     glm_syn_diffs, glm_syn_summary = validate_glm_synonymous_training(output_dir)
+    codon_bg_diffs, codon_bg_summary = validate_founder_codon_background(output_dir)
     differences += (
         site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
-        + orf1ab_diffs + glm_syn_diffs
+        + orf1ab_diffs + glm_syn_diffs + codon_bg_diffs
     )
 
     if differences:
@@ -962,6 +1036,8 @@ def main():
             print(f"  - {orf1ab_summary}")
         if glm_syn_summary:
             print(f"  - {glm_syn_summary}")
+        if codon_bg_summary:
+            print(f"  - {codon_bg_summary}")
         sys.exit(0)
 
 

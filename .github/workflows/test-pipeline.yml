@@ -122,6 +122,14 @@ jobs:
       run: |
         pixi run python tests/test_clade_founder_guards.py
 
+    # Same pattern again: runs build_count_table.py against a stub snakemake
+    # object on synthetic fixtures. The test dataset has no off-founder codon
+    # backgrounds at all, so the pipeline run below cannot cover this -- these
+    # fixtures are the only coverage the founder-background filter has (#130).
+    - name: Verify only founder-codon-background observations are counted
+      run: |
+        pixi run python tests/test_founder_codon_background.py
+
     - name: Validate Snakefile syntax
       run: |
         # Note: --lint returns non-zero for style suggestions (e.g., "Mixed rules and functions")

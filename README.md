@@ -609,6 +609,11 @@ pixi run python tests/test_glm_reference_equivalence.py
 # silently falling back to the Wuhan reference (no pipeline run needed)
 pixi run python tests/test_clade_founder_guards.py
 
+# Unit test: only observations on the clade-founder codon background are
+# counted, one row per (clade, nt_mutation). The test dataset has no
+# off-founder backgrounds, so these fixtures are the only coverage.
+pixi run python tests/test_founder_codon_background.py
+
 # Run pipeline on test data (uses max_clades=3, subset_frac=0.1)
 pixi run snakemake -j 4 --use-conda --configfile config/config_test_data.yaml
 

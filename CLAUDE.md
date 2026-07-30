@@ -93,10 +93,11 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 
 ### Testing
 ```bash
-# Unit tests over frozen fixtures (no pipeline run needed; CI runs both
-# before the pipeline steps)
+# Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
+# all three before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 pixi run python tests/test_clade_founder_guards.py
+pixi run python tests/test_founder_codon_background.py
 
 # Run on test data (fast, uses max_clades=3)
 pixi run snakemake -j 2 --use-conda \
@@ -203,6 +204,34 @@ mat-pcp/
    an allowlist growing with every clade/gene pair — the same shape as the bug it
    guards. Guarded by `tests/test_clade_founder_guards.py`. See
    [#129](https://github.com/matsengrp/mat-pcp/issues/129).
+
+7. **A clade's counts include only mutations off its founder's *codon*, not just
+   its founder's nucleotide.** matUtils reports each branch's mutations relative
+   to its parent, so the same nucleotide substitution also appears on codons that
+   had already mutated — a different amino-acid change sharing one nucleotide
+   event. `build_count_table.py` joined observed counts onto the founder grid on
+   `(clade, nt_mutation)` alone, dropping `codon_change` (the only column that
+   distinguishes the two) and using an unvalidated `how="left"` merge. Off-founder
+   observations were therefore relabelled onto the founder codon and kept as
+   *extra rows for the same mutation*: 6,415 duplicated keys / 13,146 rows in v8,
+   every clade affected, concentrated in the highest-count mutations. Both
+   estimators were corrupted by *different* mechanisms — `delta_fitness_bayesian`
+   inverse-variance-averages the phantom row in, `delta_fitness_ratio` sums its
+   expected count — so they never diverged enough to trip a cross-check, and the
+   reported amino-acid uncertainty got *smaller*.
+   The filter and the one-row-per-mutation invariant are ports of upstream's
+   `merge_expected_and_actual_counts.py.ipynb`, lost when three rules were fused.
+   Codon strings are `;`-joined across genes at overlap sites and compared
+   whole, which requires the same gene order on both sides — true, and verified
+   against the out-of-frame N/ORF9b overlap. A *structural* disagreement (one
+   side coding, or a different component count) raises rather than reading as
+   off-founder, because that would silently zero a legitimate count and the
+   row-count invariant cannot see it. `aamutfit.aa_fitness` also rejects a
+   repeated `nt_mutation` within one amino-acid group as independent defence.
+   Guarded by `tests/test_founder_codon_background.py` (unit; the test dataset
+   has no off-founder backgrounds, so it is the *only* coverage) and
+   `validate_test.py::validate_founder_codon_background` (dataset invariant).
+   See [#130](https://github.com/matsengrp/mat-pcp/issues/130).
 
 ### Configuration Sections
 

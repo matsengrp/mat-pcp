@@ -257,6 +257,32 @@ def aa_fitness(df, explode_cols):
     groupby_cols = ["cluster"] + list(explode_cols)
     groupby_cols = [c for c in groupby_cols if c in df.columns]
 
+    # The inverse-variance average is only meaningful over genuinely *distinct*
+    # nucleotide paths to the same amino-acid change. A repeated nt_mutation
+    # within a group means the count table fanned out upstream, and the average
+    # then gives a phantom row real weight -- with a *smaller* reported
+    # uncertainty, so it cannot be filtered out afterwards. This is independent
+    # defence for #130, which the count-table filter should already prevent.
+    if "nt_mutation" in df.columns:
+        dup = df.duplicated(subset=groupby_cols + ["nt_mutation"], keep=False)
+        if dup.any():
+            example_cols = groupby_cols + [
+                c
+                for c in ("nt_mutation", "actual_count", "f_mean")
+                if c in df.columns
+            ]
+            examples = (
+                df.loc[dup, example_cols]
+                .sort_values(groupby_cols + ["nt_mutation"])
+                .head(10)
+            )
+            raise ValueError(
+                f"{int(dup.sum())} rows repeat an nt_mutation within a single "
+                "amino-acid group, so one nucleotide mutation would enter the "
+                "inverse-variance average more than once (#130). First "
+                f"{len(examples)}:\n{examples.to_string(index=False)}"
+            )
+
     grouped_sums = df.groupby(groupby_cols).agg({"weight": "sum", "weighted_value": "sum"})
 
     grouped_sums["delta_fitness_bayesian"] = grouped_sums["weighted_value"] / grouped_sums["weight"]
