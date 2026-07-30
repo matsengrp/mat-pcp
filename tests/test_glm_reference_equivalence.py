@@ -280,10 +280,15 @@ def check_guard_is_sensitive(load_module, rates_module):
     ``load_curated_muts``, once via a bare ``pd.read_csv`` (the #126 scenario) --
     and require that most conditions actually differ.
 
-    Note this asserts *divergence*, not that the pooled fit looks broken: on
-    this sparse fixture the pooled rates are not uniformly lower and have fewer
-    negative values than the correct ones, because the
-    ``n_rows / total_mutations`` rescaling changes along with the training set.
+    Note this asserts *divergence*, not that the pooled fit looks broken. On
+    this fixture the pooled rates are not uniformly lower or higher -- 234 of 512
+    conditions move down and 277 up, and the median pooled/correct ratio is
+    negative -- because the ``n_rows / total_mutations`` rescaling changes along
+    with the training set. Nor is the pooled fit conspicuously worse: it has more
+    negative conditions than the correct fit (329 vs 282) but the same number
+    beyond -1e-6 (34), and a similar minimum (-20.1 vs -19.1). A dropped filter
+    would look like a plausible rate table that happens to be wrong, which is
+    why a pinned comparison is needed rather than a sanity check on the rates.
     Direction is not the signal; disagreement is.
     """
     failures = []
