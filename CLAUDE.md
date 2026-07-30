@@ -93,6 +93,10 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 
 ### Testing
 ```bash
+# GLM reference-equivalence unit test (no pipeline run needed; CI runs it
+# before the pipeline steps)
+pixi run python tests/test_glm_reference_equivalence.py
+
 # Run on test data (fast, uses max_clades=3)
 pixi run snakemake -j 2 --use-conda \
   --configfile config/config_test_data.yaml
@@ -161,6 +165,23 @@ mat-pcp/
 3. **max_clades parameter**: Set `max_clades` in config to limit the number of clades processed. Useful for testing (CI uses `max_clades=3` for ~4 minute runs).
 
 4. **Validation stage**: Cross-validates two independent mutation counting approaches (PCP-derived vs matUtils-derived) to ensure pipeline consistency.
+
+5. **The GLM's synonymous-only filter lives in the loader, not in curation.**
+   `glm/curated_counts.csv` deliberately holds *all* mutation classes (~22%
+   synonymous on the v7/v8 test tree; the share is tree-specific) because
+   downstream rules need the full grid.
+   The neutral-rate restriction is applied when that file is *read*:
+   `master_table.py` and `expected_counts_by_clade.py` both go through
+   `modules/load.py::load_curated_muts`, an alias for `load_synonymous_muts`
+   (`synonymous == True`), mirroring `SARS2-mut-fitness-v2`'s
+   `master_tables.py.ipynb`. Inspecting `curated_counts.csv` therefore makes it
+   *look* as though the GLM is fit on everything; check
+   `log/master_table.log`'s "Loaded N curated mutations for training" instead.
+   Replacing either loader call with a bare `pd.read_csv` would silently train
+   the neutral model on mutations under purifying selection. Guarded by
+   `tests/test_glm_reference_equivalence.py` (unit, frozen fixtures) and
+   `validate_test.py::validate_glm_synonymous_training` (end-to-end). See
+   [#126](https://github.com/matsengrp/mat-pcp/issues/126).
 
 ### Configuration Sections
 

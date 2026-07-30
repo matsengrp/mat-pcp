@@ -601,6 +601,10 @@ See `archives/README.md` for detailed archiving guidelines.
 ## Testing
 
 ```bash
+# Unit test: GLM neutral model is synonymous-only and matches
+# SARS2-mut-fitness-v2 (frozen fixtures; no pipeline run needed)
+pixi run python tests/test_glm_reference_equivalence.py
+
 # Run pipeline on test data (uses max_clades=3, subset_frac=0.1)
 pixi run snakemake -j 4 --use-conda --configfile config/config_test_data.yaml
 
@@ -619,15 +623,23 @@ The validation checks:
   with an auto-discovered witness that must be masked in one clade but not another: a whole-site
   mask (founder-independent), and a directional reversion mask chosen to be a genuine
   founder-relative grid row in both clades (a real, countable mutation excluded in one clade only).
+- **Founder->reference reversions**, **spike codon mask across all clades**, and the **ORF1ab
+  founder** being in-frame with no internal stop.
+- **GLM synonymous-only training**: reconciles the training count logged by `master_table`
+  against the number of `synonymous == True` rows in `glm/curated_counts.csv`, so the neutral
+  rate model cannot silently be fit on mutations under selection (see
+  [#126](https://github.com/matsengrp/mat-pcp/issues/126)).
 
 ## CI/CD
 
 The pipeline includes automated testing via GitHub Actions that runs on every push and pull request:
 1. Validates configuration schema
 2. Verifies required data files
-3. Runs the full pipeline on test data
-4. Validates outputs against expected results
-5. Checks PCP vs mutation count validation
+3. Runs the GLM reference-equivalence unit test (ahead of the pipeline, since it needs no pipeline output)
+4. Runs the full pipeline on test data
+5. Validates outputs against expected results
+6. Checks PCP vs mutation count validation
+7. Validates the sliding-window outputs
 
 ## License
 

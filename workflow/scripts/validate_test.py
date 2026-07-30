@@ -772,6 +772,92 @@ def validate_orf1ab_founder(output_dir):
     return differences, summary
 
 
+def validate_glm_synonymous_training(output_dir):
+    """Check the GLM neutral model was trained on synonymous mutations only.
+
+    ``glm/curated_counts.csv`` deliberately carries every mutation class -- the
+    synonymous restriction is applied by ``modules/load.py::load_curated_muts``
+    when ``master_table.py`` reads that file, not by ``curate_counts.py``. So
+    the file's own composition proves nothing; what matters is how many rows the
+    GLM actually consumed, which ``master_table.py`` logs.
+
+    Non-synonymous and nonsense mutations are under purifying selection, so
+    training on them biases the "neutral" rates downward and makes any
+    actual-vs-expected fitness a comparison against average selection rather
+    than against neutrality (#126).
+
+    ``tests/test_glm_reference_equivalence.py`` covers the same contract as a
+    unit test on a frozen fixture; this is the end-to-end counterpart that
+    confirms the real pipeline run behaved.
+    """
+    import csv
+
+    differences = []
+    counts_path = Path(output_dir) / 'glm' / 'curated_counts.csv'
+    log_path = Path(output_dir) / 'log' / 'master_table.log'
+
+    # Skip only when the GLM stage never ran at all (partial pipeline target).
+    # If the curated table exists, master_table must have run too, and a missing
+    # log is a real problem: without it there is nothing to reconcile against,
+    # so silently passing would make this check unenforceable.
+    if not counts_path.exists():
+        return differences, None
+    if not log_path.exists():
+        differences.append(
+            f"{counts_path} exists but {log_path} does not, so the GLM's "
+            "synonymous-only training cannot be verified (#126)"
+        )
+        return differences, None
+
+    n_total = 0
+    n_synonymous = 0
+    with open(counts_path, newline='') as f:
+        reader = csv.DictReader(f)
+        if 'synonymous' not in (reader.fieldnames or []):
+            differences.append(
+                f"{counts_path} has no 'synonymous' column, so the GLM's "
+                "synonymous-only filter cannot be verified (#126)"
+            )
+            return differences, None
+        for row in reader:
+            n_total += 1
+            if row['synonymous'].strip().lower() == 'true':
+                n_synonymous += 1
+
+    with open(log_path) as f:
+        log_text = f.read()
+    match = re.search(r'Loaded (\d+) curated mutations for training', log_text)
+    if not match:
+        differences.append(
+            f"{log_path} does not report how many mutations the GLM trained on; "
+            "cannot verify the synonymous-only filter (#126)"
+        )
+        return differences, None
+    n_trained = int(match.group(1))
+
+    if n_trained != n_synonymous:
+        differences.append(
+            f"GLM trained on {n_trained} mutations but {counts_path.name} has "
+            f"{n_synonymous} synonymous rows (of {n_total}). The neutral rate "
+            "model must be trained on synonymous mutations only (#126)."
+        )
+
+    # If the curated table were somehow synonymous-only, the check above would
+    # pass even with the filter removed. Flag that rather than pass vacuously.
+    if n_synonymous == n_total:
+        differences.append(
+            f"{counts_path.name} is entirely synonymous ({n_total} rows), so it "
+            "cannot distinguish a synonymous-only fit from a pooled one; the "
+            "upstream curation or counting step has changed (#126)"
+        )
+
+    if differences:
+        return differences, None
+    return differences, (
+        f"GLM trained on {n_trained}/{n_total} curated mutations, all synonymous"
+    )
+
+
 def default_output_dir():
     """Best-guess test output dir when none is given.
 
@@ -838,8 +924,10 @@ def main():
     reversion_diffs, reversion_summary = validate_reversion_masking(output_dir)
     spike_mask_diffs, spike_mask_summary = validate_spike_mask_all_clades(output_dir)
     orf1ab_diffs, orf1ab_summary = validate_orf1ab_founder(output_dir)
+    glm_syn_diffs, glm_syn_summary = validate_glm_synonymous_training(output_dir)
     differences += (
-        site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs + orf1ab_diffs
+        site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
+        + orf1ab_diffs + glm_syn_diffs
     )
 
     if differences:
@@ -872,6 +960,8 @@ def main():
             print(f"  - Spike codon mask (all-clades): {spike_mask_summary}")
         if orf1ab_summary:
             print(f"  - {orf1ab_summary}")
+        if glm_syn_summary:
+            print(f"  - {glm_syn_summary}")
         sys.exit(0)
 
 

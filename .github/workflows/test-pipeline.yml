@@ -106,6 +106,14 @@ jobs:
         print('Core packages importable!')
         "
 
+    # Runs before the pipeline: this is a unit test over frozen fixtures in
+    # tests/data, so it needs no pipeline output and should fail fast. It pins
+    # the GLM neutral model to synonymous-only training and to the
+    # SARS2-mut-fitness-v2 reference numerics (#126).
+    - name: Verify GLM matches SARS2-mut-fitness-v2 reference
+      run: |
+        pixi run python tests/test_glm_reference_equivalence.py
+
     - name: Validate Snakefile syntax
       run: |
         # Note: --lint returns non-zero for style suggestions (e.g., "Mixed rules and functions")
