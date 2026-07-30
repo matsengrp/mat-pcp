@@ -86,7 +86,7 @@ Amino acid-level fitness estimates aggregated across all clades. Fitness is comp
 | `aa_mutation` | string | Mutation string in standard format (e.g., "D614G"). |
 | `subset_of_ORF1ab` | boolean | True if this entry is for an NSP (ORF1ab subset); False otherwise. |
 | `expected_count` | float | GLM-predicted neutral count (sequence context + RNA structure + position); the baseline for both `delta_fitness_ratio` and `delta_fitness_bayesian`. |
-| `actual_count` | float | Observed mutation count in the data. |
+| `actual_count` | float | Observed mutation count, summed over the nucleotide mutations giving this amino-acid change. Counts observations on the clade founder's codon background only (v9, #130). |
 | `delta_fitness_ratio` | float | Pseudocount log-ratio fitness: `log((actual + 0.5) / (expected + 0.5))`. The primary per-mutation signal rendered by the dasm2 dashboard (renamed from `naive_delta_fitness` in v6). |
 | `delta_fitness_bayesian` | float | Inverse-variance-weighted Bayesian fitness estimate accounting for uncertainty (renamed from `delta_fitness` in v6). |
 | `uncertainty` | float | Standard error of the `delta_fitness_bayesian` estimate. |
@@ -123,7 +123,7 @@ Nucleotide-level fitness estimates. Similar structure to amino acid fitness but 
 | `gene` | string | Gene containing this site (semicolon-separated if multiple). |
 | `aa_mutation` | string | Amino acid mutation if nonsynonymous (semicolon-separated if multiple). |
 | `synonymous` | boolean | True if mutation is synonymous. |
-| `actual_count` | float | Observed mutation count. |
+| `actual_count` | float | Observed mutation count, on the clade founder's codon background only (v9, #130). |
 | `expected_count` | float | GLM-predicted neutral count (sequence context + RNA structure + position). |
 | `tau_squared` | float | Variance component from GLM. |
 | `f_max` | float | Maximum a posteriori (MAP) fitness estimate. |
@@ -177,7 +177,7 @@ masking flags computed once via `workflow/modules/masking.py`.
 | `mut_type` | string | Two-letter substitution type (e.g., "CT"). |
 | `exclude` | boolean | True if the mutation is masked for any reason: config `sites_to_exclude`, the ProblematicSites VCF, the UShER yaml (per-clade site or mutation masks), a founder→reference reversion (destination base equals the reference base), or out of `site_include_range`. |
 | `masked_in_usher` | boolean | True if excluded specifically by an artifactual-site mask (UShER yaml or the ProblematicSites VCF). Founder→reference reversions set `exclude` but not this flag. |
-| `actual_count` | integer | Observed mutation count (0 if unobserved). |
+| `actual_count` | integer | Observed mutation count (0 if unobserved), counting **only** observations made on the clade founder's codon background. The same nucleotide substitution observed on an already-mutated codon is a different amino-acid change and is excluded (v9; see the note below). |
 | `synonymous` | boolean | True if the mutation is synonymous. |
 | `noncoding` | boolean | True if the site is non-coding. |
 
@@ -188,6 +188,13 @@ masking flags computed once via `workflow/modules/masking.py`.
   are present for internal pipeline use.
 - Replaces the former `expected_vs_actual_mut_counts.csv`; there is no `expected_count` here —
   the neutral expectation is estimated downstream by the GLM.
+- **Exactly one row per `(clade, nt_mutation)`** — the table is the full enumeration of possible
+  mutations per clade, so this is a structural invariant, checked at write time and by
+  `validate_test.py`. Through v8 it did not hold: observations on non-founder codon backgrounds
+  were relabelled onto the founder codon and kept as extra rows, so a mutation could appear
+  2-5 times, with the copies byte-identical in every column except the counts. Consumers that
+  grouped or joined on `(clade, nt_mutation)` silently double-counted those mutations, and both
+  fitness estimators were affected (#130).
 
 ## Clade Founder Sequences
 

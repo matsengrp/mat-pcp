@@ -91,12 +91,13 @@ def _ensure_biopython():
     return "stub"
 
 
-# A founder with four sites, chosen to exercise every path through the filter:
+# A founder with five sites, chosen to exercise every path through the filter:
 #
 #   site 10  codon GCT at S:67 pos 2   -- the A67V case from #130
 #   site 20  noncoding                 -- no codon to compare
 #   site 30  N;ORF9b overlap, codons AAA;AAC in different frames
 #   site 40  codon TCG at S:221 pos 2  -- the 4-row S221L case
+#   site 50  ORF1a;ORF1ab overlap, same frame so the codons are identical
 #
 # Sites are spaced so the reference sequence below can be short.
 FOUNDER_NTS = [
@@ -105,9 +106,10 @@ FOUNDER_NTS = [
     ("21J", 20, "A", "noncoding", "noncoding", "noncoding", "noncoding", False),
     ("21J", 30, "A", "N;ORF9b", "AAA;AAC", "2;1", "38;35", False),
     ("21J", 40, "C", "S", "TCG", 2, 221, False),
+    ("21J", 50, "C", "ORF1a;ORF1ab", "GCT;GCT", "2;2", "76;76", False),
 ]
 
-REF_SEQ = "ACGT" * 15  # 60 nt; only the four sites above are ever looked up.
+REF_SEQ = "ACGT" * 15  # 60 nt; only the five sites above are ever looked up.
 
 
 def _write_founder_nts(path, rows=None):
@@ -299,11 +301,19 @@ def check_noncoding_and_overlap_survive(tmpdir):
             # same gene order on both sides.
             _actual_row("21J", "A30T", "AAA>ATA;AAC>TAC", 5,
                         protein="N;ORF9b", aa_mutation="K38I;N35Y"),
+            # ORF1a/ORF1ab: the same frame, so the ;-joined codons are
+            # identical. This is the weaker of the two overlap cases -- it
+            # would pass even with a broken comparison -- but it is the
+            # overlap that actually carries most of the genome, so the
+            # ;-join path is pinned for it too.
+            _actual_row("21J", "C50T", "GCT>GTT;GCT>GTT", 9,
+                        protein="ORF1a;ORF1ab", aa_mutation="A76V;A76V"),
         ],
     )
     for nt_mutation, expected, label in (
         ("A20G", 7, "noncoding"),
         ("A30T", 5, "out-of-frame overlap"),
+        ("C50T", 9, "same-frame overlap"),
     ):
         matched = _find(rows, "21J", nt_mutation)
         if len(matched) != 1:
@@ -327,12 +337,12 @@ def check_unobserved_rows_stay_zero(tmpdir):
     rows, _ = _run_script(
         tmpdir, [_actual_row("21J", "C10T", "GCT>GTT", 3, aa_mutation="A67V")]
     )
-    # 4 founder sites x 3 alternative bases each.
-    if len(rows) != 12:
+    expected_rows = len(FOUNDER_NTS) * 3  # 3 alternative bases per site
+    if len(rows) != expected_rows:
         failures.append(
-            f"grid invariant: wrote {len(rows)} rows, expected 12 (4 sites x 3 "
-            "alternative bases). The grid is the authoritative enumeration and "
-            "must survive the join unchanged."
+            f"grid invariant: wrote {len(rows)} rows, expected {expected_rows} "
+            f"({len(FOUNDER_NTS)} sites x 3 alternative bases). The grid is the "
+            "authoritative enumeration and must survive the join unchanged."
         )
     observed = [r for r in rows if int(r["actual_count"]) > 0]
     if len(observed) != 1:
