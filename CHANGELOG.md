@@ -18,6 +18,118 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### v9
+
+**Three of these fix outputs that were silently wrong in v8, so v9 is not an optional
+upgrade for anyone consuming v8 fitness or count data.** All five clade founders affected by
+[#129](https://github.com/matsengrp/mat-pcp/issues/129) and every clade affected by
+[#130](https://github.com/matsengrp/mat-pcp/issues/130) produced plausible-looking output
+with no error, and the two estimators were corrupted by different mechanisms, so no internal
+cross-check disagreed.
+
+**Changes**:
+
+- **An unresolvable clade founder is now a hard failure, not the Wuhan reference
+  ([#129](https://github.com/matsengrp/mat-pcp/issues/129)).**
+  `clade_founder_fasta.py` builds each clade's founder by applying its defining mutations to
+  the reference. When a clade resolved in none of its three sources it applied *zero*
+  mutations and wrote the unmodified reference — exit 0, logged as ordinary output. Nothing
+  downstream caught it because the wrong founder propagated consistently. It surfaced only
+  when an outside consumer noticed implausible cross-clade correlations (24H/24I/25A/25B/25C
+  in v8). Two guards now cover the two routes to that output: a missing source, and a
+  resolved source yielding no effective mutations. Both raise. `allow_reference_identical_founders`
+  is a new (normally empty) config key for clades whose founder legitimately equals the
+  reference; the `reference_clade` is exempt automatically.
+- **Every config now covers clades 24H–25C
+  ([#129](https://github.com/matsengrp/mat-pcp/issues/129), absorbing
+  [PR #124](https://github.com/matsengrp/mat-pcp/pull/124)).** `roemer_nextstrain_to_pango`
+  gained entries for `24H`–`25C`, and the BA.2/JN.1/XFG tree configs landed. Each config
+  carries its own copy of that map, which is *how* #129 happened: adding a clade to one
+  config does not add it to the others.
+- **Counts include only mutations off the clade founder's *codon*
+  ([#130](https://github.com/matsengrp/mat-pcp/issues/130)).** matUtils reports each branch's
+  mutations relative to its parent, so the same nucleotide substitution also appears on codons
+  that had already mutated — a different amino-acid change sharing one nucleotide event.
+  `build_count_table.py` joined observed counts onto the founder grid on
+  `(clade, nt_mutation)` alone, dropping `codon_change` (the only column distinguishing the
+  two), so off-founder observations were relabelled onto the founder codon and kept as extra
+  rows for the same mutation: **6,415 duplicated keys / 13,146 rows in v8, every clade
+  affected, concentrated in the highest-count mutations.** `delta_fitness_bayesian`
+  inverse-variance-averaged the phantom row in while `delta_fitness_ratio` summed its expected
+  count, so reported amino-acid uncertainty got *smaller*. The `from_founder_codon` filter and
+  a one-row-per-mutation invariant are restored; a structural mismatch raises rather than
+  reading as off-founder.
+  **`actual_count` semantics therefore change for affected mutations.**
+- **The light-switch boundary site is served the rate it was fitted with
+  ([#125](https://github.com/matsengrp/mat-pcp/issues/125)).** `modules/glm.py` trains with
+  `global_context = (nt_site > boundary)`, so `site == boundary` is fitted into the
+  before-regime, but both label producers used `site < boundary` — and `not (site < b)` is
+  `site >= b`, not `site > b`. The boundary site was fitted into one bucket and served the
+  other's rate. The convention now has one definition,
+  `modules/lightswitch.py::before_boundary` (`site <= boundary`), used by both the clade path
+  and the windowed trajectory path. Affects one site per bounded mutation type (A→T at 21562:
+  51 rows / 82 counts in v8). mat-pcp deliberately diverges from `SARS2-mut-fitness-v2` at
+  site 21562, which carries the same inconsistency between its two codepaths.
+- **PCP outputs are gzipped ([#134](https://github.com/matsengrp/mat-pcp/issues/134)).** The
+  four PCP families — `{clade}_pcps`, `all_pcps`, `{clade}_pcps_dasm_ready`,
+  `all_pcps_dasm_ready` — are now `.csv.gz`. **Every PCP path gained a `.csv.gz` suffix;
+  contents and column schemas are unchanged.** `pandas.read_csv` and
+  `dasm2.data.registry.load_dataframe` both handle it transparently, the latter by extension.
+  Motivation: on `gisaid-and-public_2026-04-22_v8`, `pcps/` was 503.6 GB apparent, ~97% of the
+  whole output tree; measured gzip level 9 gives ~125× on ORF1a and ~110× on S, bringing it to
+  ~4 GB. `mtime=0` is pinned so re-runs are byte-identical, which matters because
+  `data-central` manifests pin `md5`/`xxh3` per file.
+  `{clade}_filtered_branches.csv` and `filtered_branch_ids.csv` stay plain.
+- **ORF1b PCPs, and a validation that was passing vacuously
+  ([#133](https://github.com/matsengrp/mat-pcp/issues/133)).** New optional config
+  `pcp_gene_cds_blocks` gives explicit CDS blocks for PCP genes the reference GTF does not
+  carry, adding `ORF1b` (nsp12–nsp16) as `[[13442, 13468], [13468, 21552]]` — 8112 nt / 2704
+  codons, spanning the −1 ribosomal frameshift rather than starting after it, since nsp12's
+  first 9 residues are translated in ORF1a's frame. **New additive outputs:** `pcps/ORF1b/`,
+  `clade_founders/ORF1b/`, `ORF1b_codon_sites_to_mask.txt`, `validation/ORF1b/`. Fitness
+  outputs are untouched — the override is deliberately not fed to `edit_ref_gtf` /
+  `ref_coding_sites`.
+  Separately, `validate_pcp_vs_aamut.py` filtered `aamut_fitness` on `gene == {gene}`, but
+  `aamutfit.get_coding` drops ORF1a, so **through v8 the ORF1a validation compared against
+  zero rows and reported no discrepancies because it had nothing to compare.** New
+  `pcp_gene_to_fitness_gene` names the fitness gene and codon offset; the correspondence is
+  derived from genomic positions (so ORF1a's four post-frameshift codons, 4402–4405, are
+  excluded rather than mis-mapped onto ORF1b's frame) and an empty fitness slice is now fatal.
+  **`validation/{gene}/pcp_vs_counts_report.txt` contents change**: the report names the
+  fitness gene compared against, and for remapped genes the codon offset and corresponding-codon
+  count.
+- Guarded the GLM's synonymous-only training set and its equivalence to
+  `SARS2-mut-fitness-v2`'s reference rate table
+  ([#127](https://github.com/matsengrp/mat-pcp/issues/127)). Tests and assertions only; no
+  output change. The neutral-rate restriction lives in `modules/load.py`, not in curation, so
+  `glm/curated_counts.csv` deliberately holds every mutation class.
+- `validate_test.py` no longer silently validates the previous version's outputs when the
+  current `VERSION` directory does not yet exist
+  ([#88](https://github.com/matsengrp/mat-pcp/issues/88)). It warns loudly and always prints
+  which directory it validated. This triggers exactly at a version bump, which is when it
+  matters.
+
+**Not in v9**: `window_expected_counts`'s optimization
+([#123](https://github.com/matsengrp/mat-pcp/issues/123)) shipped inside the v8 tag and its
+entry stays under v8; v9 carries only its deferred cleanups (a helper extraction and a rename,
+with the trajectory output bit-identical).
+
+**Corrections to the released `### v8` entry for
+[#123](https://github.com/matsengrp/mat-pcp/issues/123).** Recorded here rather than by
+editing a tagged version's section, which stays as published:
+
+- It says the rule was cut "from ~20 h to tens of minutes on the 2026-04-22 tree." The
+  measured figure is **1:32:14** (5,534.6 s, 99.4% mean CPU, 9.5 GB max RSS, 1,495,938
+  founder-windows). The ~20 h was a *projection*, never a measured baseline, so the speedup is
+  ~13× against a projection.
+- It calls the output "bit-for-bit identical to the old output" while citing a ~1e-16 max
+  difference, which cannot both be true. Delta accumulation reorders floating-point sums, so
+  the correct claim is *numerically identical to float precision* (`assert_frame_equal` at
+  `rtol=1e-6`, `atol=1e-9`). v9's own cleanup of that code **is** bit-identical, having moved
+  statements without reordering arithmetic — hence the care to distinguish the two.
+- It names the fast path `ExpectedCounts._founder_rec`; v9 renames it to
+  `_recompute_founder_touched_rows`.
+
 ### v8
 
 **Always run metadata QC; remove `skip_qc_filtering` (issue
@@ -59,14 +171,11 @@ outputs — changes.
   founder-window (~1.5M on a full tree → ~20 h). It now (a) accumulates each window's
   per-ID rate as a *delta* on a once-computed reference base (`N·base − touched-site
   reference rows + founder recomputed rows`), and (b) recomputes each founder's touched
-  codons via O(#touched-sites) dict lookups (`ExpectedCounts._recompute_founder_touched_rows`,
-  named `_founder_rec` when this shipped) instead of per-founder pandas. On the test data
-  this is numerically identical to the old output to float precision — **not** bit-identical,
-  since delta accumulation reorders floating-point sums: max abs diff ~1e-16 in
-  `expected_count` / `delta_fitness_ratio`, `assert_frame_equal` passing at `rtol=1e-6,
-  atol=1e-9`. The per-founder rate-table build drops ~50× (≈19 ms → ≈0.38 ms), cutting the
-  rule on the 2026-04-22 tree from the ~20 h *projection* to **1:32:14 measured** (5,534.6 s,
-  9.5 GB max RSS, 1,495,938 founder-windows). Output schema is unchanged. (#123)
+  codons via O(#touched-sites) dict lookups (`ExpectedCounts._founder_rec`) instead of
+  per-founder pandas. On the test data this is bit-for-bit identical to the old output
+  (max abs diff ~1e-16 in `expected_count` / `delta_fitness_ratio`), and the per-founder
+  rate-table build drops ~50× (≈19 ms → ≈0.38 ms), cutting the rule from ~20 h to tens of
+  minutes on the 2026-04-22 tree. Output schema is unchanged. (#123)
 
 ### v7
 

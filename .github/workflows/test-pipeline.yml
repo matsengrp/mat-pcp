@@ -205,9 +205,18 @@ jobs:
 
     - name: Set output directory variable
       run: |
-        # Determine the actual output directory created by the pipeline
-        # (includes version suffix added by versioning system)
-        OUTPUT_DIR=$(ls -d results/test_data* | head -1)
+        # Derive the output directory from VERSION rather than globbing (#88).
+        # `ls -d results/test_data* | head -1` happened to be correct only because
+        # this step runs before the multi-tree smoke test, whose second tree is
+        # `test_data_early` -- which sorts BEFORE `test_data`, so reordering the
+        # steps would have silently switched which tree every assertion below
+        # checks. Failing loudly on a missing directory is the point.
+        OUTPUT_DIR="results/test_data_$(cat VERSION)"
+        if [ ! -d "$OUTPUT_DIR" ]; then
+          echo "Expected $OUTPUT_DIR (from VERSION) to exist after the pipeline run; found:"
+          ls -d results/* || true
+          exit 1
+        fi
         echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
         echo "Using output directory: $OUTPUT_DIR"
 

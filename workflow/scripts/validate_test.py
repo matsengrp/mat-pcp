@@ -1032,6 +1032,7 @@ def default_output_dir():
     any ``results/test_data*``, falling back to the unversioned name.
     """
     import glob
+    versioned = None
     try:
         with open('VERSION') as vf:
             versioned = f"results/test_data_{vf.read().strip()}"
@@ -1040,7 +1041,22 @@ def default_output_dir():
     except OSError:
         pass
     candidates = sorted(glob.glob('results/test_data*'))
-    return candidates[-1] if candidates else 'results/test_data'
+    fallback = candidates[-1] if candidates else 'results/test_data'
+    # Announce the fallback loudly (#88). Immediately after a version bump the
+    # VERSION directory does not exist yet, so this silently validated the
+    # *previous* version's outputs and reported success -- the failure #88 is
+    # about. The fallback is kept (validating an older run on purpose is
+    # legitimate) but it can no longer happen quietly. Pass an explicit path or
+    # OUTPUT_DIR to bypass this entirely.
+    if versioned and fallback != versioned:
+        print(
+            f"WARNING: {versioned} (from VERSION) does not exist; falling back to "
+            f"{fallback}. These are DIFFERENT pipeline versions -- a pass here says "
+            f"nothing about {versioned}. Re-run the pipeline, or pass an explicit "
+            f"output directory.",
+            file=sys.stderr,
+        )
+    return fallback
 
 
 def main():
@@ -1053,6 +1069,9 @@ def main():
         sys.argv[1] if len(sys.argv) > 1
         else os.environ.get('OUTPUT_DIR') or default_output_dir()
     )
+    # Always name the directory being validated: "all checks passed" is
+    # meaningless without knowing which version produced the outputs (#88).
+    print(f"Validating {output_dir}")
 
     # Generate current summary
     result = subprocess.run(

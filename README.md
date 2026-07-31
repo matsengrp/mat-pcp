@@ -13,7 +13,7 @@ This pipeline combines functionality from three previously separate projects:
 
 The pipeline uses simple integer versioning (v1, v2, v3, etc.) to enable reproducibility tracking. The version is automatically appended to output directories to clearly identify which pipeline version produced the outputs.
 
-- **Current Version**: v4 (see [CHANGELOG.md](CHANGELOG.md) for version history)
+- **Current Version**: v9 (see [CHANGELOG.md](CHANGELOG.md) for version history)
 - **Version File**: The pipeline version is stored in the `VERSION` file at the repository root
 - **Output Naming**: Outputs are automatically versioned (e.g., `results/public_2022-06-01_v1`)
 - **Git Tags**: Each version is tagged in git for easy reference (e.g., `git checkout v1`)
@@ -67,15 +67,15 @@ global `qc_filter_options.max_leaf_date`.
 
 ```yaml
 # Optional; defaults to "results". Each tree writes to
-# {output_root}/{label}_{version}, e.g. results/public_2022-06-01_v5.
+# {output_root}/{label}_{version}, e.g. results/public_2022-06-01_v9.
 output_root: "results"
 
 trees:
-  public_2022-06-01:                       # -> results/public_2022-06-01_v5
+  public_2022-06-01:                       # -> results/public_2022-06-01_v9
     mat: "path/to/2022-06-01/tree.pb.gz"
     metadata: "path/to/2022-06-01/metadata.tsv.gz"
     max_leaf_date: "2022-06-01"            # per-tree override
-  public_2023-01-01:                       # -> results/public_2023-01-01_v5
+  public_2023-01-01:                       # -> results/public_2023-01-01_v9
     mat: "path/to/2023-01-01/tree.pb.gz"
     metadata: "path/to/2023-01-01/metadata.tsv.gz"
     # max_leaf_date omitted -> inherits the global default
@@ -97,7 +97,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml
 
 # Run specific target (per-tree output path)
 pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
-  results/public_2022-06-01_v5/aamut_fitness/all_aamut_fitness.csv
+  results/public_2022-06-01_v9/aamut_fitness/all_aamut_fitness.csv
 ```
 
 ## Pipeline Stages
