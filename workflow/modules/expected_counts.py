@@ -32,11 +32,36 @@ neutral-model footing as the clade-based ``aamut_fitness``. Finally
 ``p`` (default 0.5), matching ``aamutfit.ratio_fitness``.
 """
 
+import os
 import re
+import sys
 from collections import defaultdict
+from importlib import util as importlib_util
 
 import numpy as np
 import pandas as pd
+
+
+def _load_lightswitch_module():
+    """Load the sibling ``lightswitch`` module by path.
+
+    Same pattern as ``rates.py::_load_glm_module``: ``workflow/modules`` is not on
+    ``sys.path`` in the conda envs these run under. ``lightswitch`` is a
+    dependency-free leaf module, so this adds no import weight to the envs that
+    load ``expected_counts``.
+    """
+    if "lightswitch" in sys.modules:
+        return sys.modules["lightswitch"]
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lightswitch.py")
+    spec = importlib_util.spec_from_file_location("lightswitch", path)
+    module = importlib_util.module_from_spec(spec)
+    sys.modules["lightswitch"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+lightswitch = _load_lightswitch_module()
 
 # Standard genetic code (identical to s2trajectory's CODON_TABLE).
 CODON_TABLE = {
@@ -494,7 +519,17 @@ class ExpectedCounts:
                 f"{int(missing.sum())} mutation rows lack an unpaired/boundary "
                 "annotation (site or mut_type not covered); this should be complete."
             )
-        the_df["nt_site_before_boundary"] = the_df.site < the_df.nt_site_boundary
+        # ``site <= boundary``, shared with the clade path's
+        # ``annotate_counts.py::light_switch`` via ``modules/lightswitch.py`` (#125).
+        # Fixing only one of the two would leave the clade and windowed fitness
+        # paths labelling the boundary site differently, and nothing in the test
+        # suite would notice -- #127's fixture pins stored labels, not computed
+        # ones. ``nt_site_boundary`` is 0 for mutation types with no configured
+        # boundary (``scripts/master_table.py``), and sites are 1-based, so those
+        # stay ``False`` under ``<=`` exactly as they were under ``<``.
+        the_df["nt_site_before_boundary"] = lightswitch.before_boundary(
+            the_df.site, the_df.nt_site_boundary
+        )
         return the_df
 
     def _build_rate_table(self, site_map, ref_seq):

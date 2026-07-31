@@ -94,10 +94,11 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 ### Testing
 ```bash
 # Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
-# all three before the pipeline steps)
+# all four before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 pixi run python tests/test_clade_founder_guards.py
 pixi run python tests/test_founder_codon_background.py
+pixi run python tests/test_lightswitch_boundary.py
 
 # Run on test data (fast, uses max_clades=3)
 pixi run snakemake -j 2 --use-conda \
@@ -232,6 +233,37 @@ mat-pcp/
    has no off-founder backgrounds, so it is the *only* coverage) and
    `validate_test.py::validate_founder_codon_background` (dataset invariant).
    See [#130](https://github.com/matsengrp/mat-pcp/issues/130).
+
+8. **The light-switch boundary site belongs to the *before* bucket, and that
+   convention has exactly one definition.** `modules/glm.py` trains with
+   `global_context = (nt_site > boundary)`, so `site == boundary` is fitted into
+   the before-regime, and `modules/rates.py`'s sentinel (`nt_site = 0 if
+   before_boundary else s_max`) makes `nt_site_before_boundary=True` mean exactly
+   that bucket. Through v8 both *label producers* used `site < boundary` — and
+   `not (site < b)` is `site >= b`, not `site > b` — so the boundary site was
+   fitted into one bucket and **served the other's rate**. The convention now
+   lives in `modules/lightswitch.py::before_boundary` (`site <= boundary`), called
+   by both producers: `scripts/annotate_counts.py` (clade path) and
+   `modules/expected_counts.py` (windowed trajectory path). Fixing only one would
+   leave the clade and windowed fitness paths disagreeing at the boundary site,
+   which is the comparability the `evol_time` normalization exists to preserve.
+   Two things make this class of bug invisible, which is why it needs a unit test
+   rather than a pipeline assertion: `tests/test_glm_reference_equivalence.py`'s
+   fixture is a frozen CSV carrying a *pre-computed* `nt_site_before_boundary`
+   column, so it exercises the rate lookup over stored labels and not the label
+   computation; and every shipped config sets `AT`/`CG`/`GC` to the same 21562, so
+   the separate bug where `CG` and `GC` both read the `AT` key (honored per-type
+   in training, ignored at serving) is unobservable from any config — that same
+   equivalence test's config check *pins* those values, hiding it rather than
+   catching it. mat-pcp therefore diverges from `SARS2-mut-fitness-v2` at site
+   21562 deliberately; upstream carries the same inconsistency between its
+   `modules/glm.py:59` (`>`) and `notebook/counts_by_clade.py.ipynb` (`<`). Do not
+   resolve it by re-baselining the #127 fixture. Guarded by
+   `tests/test_lightswitch_boundary.py` (unit, and the *only* coverage: the test
+   dataset has just 3 rows at a boundary site — AT @ 21562, one per clade — all
+   with `actual_count` 0, so a test-data run has nothing asserting which rate
+   they are served). See
+   [#125](https://github.com/matsengrp/mat-pcp/issues/125).
 
 ### Configuration Sections
 

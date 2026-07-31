@@ -614,6 +614,12 @@ pixi run python tests/test_clade_founder_guards.py
 # off-founder backgrounds, so these fixtures are the only coverage.
 pixi run python tests/test_founder_codon_background.py
 
+# Unit test: the GLM light-switch boundary site is labelled into the same
+# bucket it is fitted into, in both label producers (clade + windowed paths).
+# No shipped config can expose the per-mutation-type lookup, so these
+# fixtures are the only coverage.
+pixi run python tests/test_lightswitch_boundary.py
+
 # Run pipeline on test data (uses max_clades=3, subset_frac=0.1)
 pixi run snakemake -j 4 --use-conda --configfile config/config_test_data.yaml
 

@@ -130,6 +130,16 @@ jobs:
       run: |
         pixi run python tests/test_founder_codon_background.py
 
+    # Fixture-only again. The test dataset has just 3 rows at a boundary site
+    # (AT @ 21562, one per clade) and all carry actual_count 0, so the pipeline
+    # run below has nothing asserting which rate they are served; and the CG/GC
+    # per-type lookup is unobservable from any shipped config, since all of them
+    # set AT/CG/GC to the same 21562. Pins the boundary site into the same
+    # bucket it is fitted into, in both label producers (#125).
+    - name: Verify the light-switch boundary convention
+      run: |
+        pixi run python tests/test_lightswitch_boundary.py
+
     - name: Validate Snakefile syntax
       run: |
         # Note: --lint returns non-zero for style suggestions (e.g., "Mixed rules and functions")

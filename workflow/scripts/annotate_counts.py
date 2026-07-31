@@ -1,8 +1,30 @@
 #!/usr/bin/env python3
 """Annotate counts with RNA structure, sequence context, and other features."""
 
+import os
+from importlib import util as importlib_util
+
 import pandas as pd
 import numpy as np
+
+# The by-path module loader is defined once in
+# workflow/modules/workflow_loader.py. Because that loader is itself the
+# mechanism for importing shared workflow code, it cannot be imported via
+# itself -- it is wired up here by absolute path (#111).
+_loader_spec = importlib_util.spec_from_file_location(
+    "workflow_loader",
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "modules",
+        "workflow_loader.py",
+    ),
+)
+workflow_loader = importlib_util.module_from_spec(_loader_spec)
+_loader_spec.loader.exec_module(workflow_loader)
+load_workflow_module = workflow_loader.load_workflow_module
+
+
+lightswitch = load_workflow_module("lightswitch")
 
 # Get snakemake variables
 counts_csv = snakemake.input.counts
@@ -117,12 +139,32 @@ else:
 
 
 def light_switch(mut_type, site, boundaries):
-    """Determine if site is before light-switch boundary for mutation type."""
-    if mut_type in ["AT", "CG", "GC"]:
-        return site < boundaries.get("AT", 21562)
-    elif mut_type == "CT":
-        return site < boundaries.get("CT", 13467)
-    return False
+    """Determine if site is before light-switch boundary for mutation type.
+
+    Two fixes over v8, both in #125:
+
+    * ``site <= boundary``, not ``site <``. The boundary site is *fitted* into
+      the before-bucket by ``modules/glm.py``, so labelling it ``False`` served
+      it the after-bucket's rate. The convention lives in
+      ``modules/lightswitch.py``, shared with the windowed trajectory path so
+      the two cannot drift apart.
+    * Each mutation type reads *its own* configured boundary. Previously ``CG``
+      and ``GC`` both read the ``AT`` key, so a config setting them differently
+      would be honored in training (``glm.py`` looks up per ``mut_type``) and
+      silently ignored here. Masked today only because every shipped config sets
+      AT/CG/GC to 21562 -- and ``tests/test_glm_reference_equivalence.py``'s
+      config check pins them to those values, so that guard *hid* this rather
+      than catching it.
+
+    The hardcoded 21562/13467 fallbacks are gone: ``Snakefile``'s
+    ``config.get("glm_lightswitch_boundaries", {...})`` already supplies them, and
+    defaulting here meant an unbounded mutation type could be labelled ``True``
+    with no matching rate-table row (``rates.py`` builds only ``False`` rows for
+    those), which would surface as a failed rate merge rather than a bad label.
+    """
+    if mut_type not in boundaries:
+        return False
+    return lightswitch.before_boundary(site, boundaries[mut_type])
 
 
 # Apply lightswitch boundaries
