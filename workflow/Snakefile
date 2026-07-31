@@ -1449,11 +1449,21 @@ rule get_problematic_sites:
 
     Fanned over ``pcp_genes``: emits ``<gene>_codon_sites_to_mask.txt`` per
     configured protein (the gene comes from the ``{gene}`` wildcard).
+
+    Genes the reference GTF carries are matched against ``counts_all.csv``'s
+    ``gene`` column. A gene added only through ``pcp_gene_cds_blocks`` (ORF1b)
+    never appears there, so its codon sites are derived from its own CDS blocks
+    instead -- hence the ``gtf`` input and the params. Matching on the name alone
+    selected zero rows and wrote an empty mask at exit 0, leaving that gene's
+    DASM-ready PCPs unmasked (#133).
     """
     input:
-        expected_vs_actual=rules.build_count_table.output.csv
+        expected_vs_actual=rules.build_count_table.output.csv,
+        gtf=rules.edit_ref_gtf.output.gtf
     output:
         sites_to_mask=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
+    params:
+        pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
     log:
         os.path.join(OUTDIR, "log/get_problematic_sites_{gene}.log")
     conda:

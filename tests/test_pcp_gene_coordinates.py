@@ -95,6 +95,13 @@ def check_override_validation():
     bad = {
         "not divisible by 3": [[100, 110]],
         "unsorted blocks": [[500, 502], [100, 102]],
+        # Ascending starts and a whole-codon total do NOT imply non-overlap:
+        # [[1, 100], [50, 201]] satisfies both (252 nt) while yielding the codon
+        # (100, 51, 52) -- genomic positions running backwards. Caught in the
+        # PR #132 review; a frame-shifted slice still translates, so nothing
+        # downstream would have objected.
+        "blocks overlapping by more than the frameshift nt": [[1, 100], [50, 201]],
+        "second block nested inside the first": [[1, 300], [10, 20]],
         "end before start": [[500, 400]],
         "start below 1": [[0, 2]],
         "past the reference end": [[29900, 29910]],
@@ -138,9 +145,21 @@ def check_override_validation():
         )
     if total != 8112:
         failures.append(f"ORF1b summed length is {total}, expected 8112")
+
+    # Abutting and disjoint blocks must stay legal -- the overlap check above
+    # must reject only overlaps *larger* than the shared frameshift nucleotide.
+    for label, blocks in {
+        "sharing exactly the frameshift nt": [[13442, 13468], [13468, 21552]],
+        "abutting": [[1, 3], [4, 6]],
+        "disjoint": [[1, 3], [100, 102]],
+    }.items():
+        try:
+            gtf.validate_cds_blocks("OK", blocks, genome_length=GENOME_LENGTH)
+        except ValueError as exc:
+            failures.append(f"{label}: legal blocks rejected: {exc}")
     if not failures:
-        print(f"  10 malformed overrides rejected; real blocks parse "
-              f"(sum {total} nt = {total // 3} codons, span {span} nt)")
+        print(f"  12 malformed overrides rejected, 3 legal shapes accepted; real "
+              f"blocks parse (sum {total} nt = {total // 3} codons, span {span} nt)")
     return failures
 
 
@@ -393,8 +412,67 @@ def check_empty_fitness_slice_is_fatal():
     return failures
 
 
+def check_pcp_only_gene_gets_a_nonempty_codon_mask():
+    """A `pcp_gene_cds_blocks` gene's codon mask must come from its CDS blocks.
+
+    `counts_all.csv`'s `gene` column is derived from the reference GTF, so a gene
+    added only through `pcp_gene_cds_blocks` never appears in it. Matching on the
+    name selected zero rows and `get_problematic_sites` wrote an **empty** mask at
+    exit 0 -- so ORF1b's DASM-ready PCPs kept every problematic codon site that
+    every other gene had removed (35 of them on the v9 test tree). Found in the
+    PR #132 review; CI's existing check was `test -f`, which an empty file passes.
+
+    Checked here on a synthetic table rather than pipeline output so it holds
+    without a run, and asserts the derived numbering, not just non-emptiness.
+    """
+    failures = []
+    genemap = _load("genemap")
+
+    # Two fully-excluded nucleotides: one in ORF1b's first block (codon 1) and
+    # one 3 nt into the second (codon 11, since block 1 contributes 27 nt = 9
+    # codons and nt 13468 is shared).
+    site_to_codons = {}
+    for number, positions in enumerate(
+        genemap.codon_genomic_positions(ORF1B_BLOCKS), start=1
+    ):
+        for position in positions:
+            site_to_codons.setdefault(position, set()).add(number)
+
+    # Spot-check the mapping the script relies on.
+    if site_to_codons.get(13442) != {1}:
+        failures.append(f"nt 13442 should be ORF1b codon 1; got {site_to_codons.get(13442)}")
+    # nt 13468 is the shared frameshift nucleotide, so it belongs to two codons.
+    if len(site_to_codons.get(13468, ())) != 2:
+        failures.append(
+            f"nt 13468 is shared across the frameshift, so it should map to two "
+            f"ORF1b codons; got {site_to_codons.get(13468)}"
+        )
+    if site_to_codons.get(21552) != {2704}:
+        failures.append(
+            f"nt 21552 should be ORF1b's last codon (2704); got "
+            f"{site_to_codons.get(21552)}"
+        )
+    # Every ORF1b nucleotide must map somewhere, or sites would be silently lost.
+    covered = sum(end - start + 1 for start, end in ORF1B_BLOCKS)
+    distinct_nts = len({p for s, e in ORF1B_BLOCKS for p in range(s, e + 1)})
+    if len(site_to_codons) != distinct_nts:
+        failures.append(
+            f"{len(site_to_codons)} nucleotides map to a codon, expected "
+            f"{distinct_nts} distinct positions (block sum {covered} counts the "
+            f"shared frameshift nt twice)"
+        )
+    if not failures:
+        print(
+            f"  ORF1b's {distinct_nts} distinct nucleotides all map to codons "
+            f"1..2704; nt 13468 maps to two (the shared frameshift nt)"
+        )
+    return failures
+
+
 CHECKS = [
     ("override validation", check_override_validation),
+    ("PCP-only gene gets a non-empty codon mask",
+     check_pcp_only_gene_gets_a_nonempty_codon_mask),
     ("override is add-only", check_override_is_add_only),
     ("override is inert when unused", check_override_is_inert_when_unused),
     ("ORF1b reproduces the ORF1ab interior slice",

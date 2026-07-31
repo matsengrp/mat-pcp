@@ -1015,10 +1015,19 @@ jobs:
     # shifted by 4392 codons because it never appears in aamut_fitness under its
     # own name. The "Corresponding codons" line is the anti-vacuity assertion --
     # a report that compared against nothing could not print it (#133).
+    #
+    # The codon mask is asserted on *content*, not existence. `test -f` passes on
+    # an empty file, and an empty mask is exactly the failure mode here: ORF1b is
+    # absent from counts_all.csv's GTF-derived `gene` column, so the original
+    # name match selected zero rows and wrote an empty file at exit 0 -- leaving
+    # ORF1b's DASM-ready PCPs the only ones curated with nothing masked. The
+    # check compares the two independent derivations of the same set: ORF1b's
+    # (nt_site x config CDS blocks) against ORF1ab's (the GTF `codon_site`
+    # column) shifted by 4392. Only a coordinate system consistent in both can
+    # satisfy it.
     - name: Verify ORF1b PCPs came from the config coordinate override
       run: |
         test -f $OUTPUT_DIR/pcps/ORF1b/all_pcps.csv.gz
-        test -f $OUTPUT_DIR/ORF1b_codon_sites_to_mask.txt
         test -f $OUTPUT_DIR/validation/ORF1b/pcp_vs_counts_report.txt
         cat $OUTPUT_DIR/validation/ORF1b/pcp_vs_counts_report.txt
         pixi run python -c "
@@ -1037,6 +1046,25 @@ jobs:
                 sys.exit(f'ORF1b report is missing {needle!r}; the fitness-gene '
                          f'remapping did not happen, so the comparison is vacuous')
         print('ORF1b validated against ORF1ab over 2704 corresponding codons')
+
+        read_mask = lambda g: {int(l) for l in open(f'${OUTPUT_DIR}/{g}_codon_sites_to_mask.txt') if l.strip()}
+        orf1b_mask, orf1ab_mask = read_mask('ORF1b'), read_mask('ORF1ab')
+        if not orf1b_mask:
+            sys.exit('ORF1b_codon_sites_to_mask.txt is empty. ORF1b resolves its '
+                     'coordinates from pcp_gene_cds_blocks and never appears in '
+                     'counts_all.csv gene column, so a name-based match silently '
+                     'masks nothing and its DASM-ready PCPs keep every '
+                     'problematic site (#133)')
+        if max(orf1b_mask) > 2704 or min(orf1b_mask) < 1:
+            sys.exit(f'ORF1b codon sites must fall in 1..2704; got '
+                     f'{min(orf1b_mask)}..{max(orf1b_mask)} -- the mask is in the '
+                     f'wrong codon numbering')
+        shifted = {c - 4392 for c in orf1ab_mask if 4393 <= c <= 7096}
+        if orf1b_mask != shifted:
+            sys.exit(f'ORF1b mask disagrees with ORF1ab shifted by 4392: only in '
+                     f'ORF1b {sorted(orf1b_mask - shifted)}, only in shifted '
+                     f'{sorted(shifted - orf1b_mask)}')
+        print(f'ORF1b masks {len(orf1b_mask)} codon sites == ORF1ab[4393:7096] - 4392')
         "
 
     - name: Check validation results

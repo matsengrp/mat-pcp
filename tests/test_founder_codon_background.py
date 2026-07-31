@@ -79,6 +79,13 @@ def _ensure_biopython():
     def _read(path, fmt):
         assert fmt == "fasta", f"stub only handles fasta, got {fmt!r}"
         lines = Path(path).read_text().splitlines()
+        # Reject a non-header first line rather than skipping it: `lines[1:]`
+        # assumes line 0 is the header, so without this a file that opens with
+        # sequence data silently loses its first line. This check exists in
+        # tests/test_clade_founder_guards.py's copy of this stub and had drifted
+        # out of this one -- see the PR #132 review.
+        if not lines or not lines[0].startswith(">"):
+            raise ValueError(f"{path} is not a FASTA file")
         body = [ln.strip() for ln in lines[1:] if ln.strip() and not ln.startswith(">")]
         return _Record("".join(body))
 

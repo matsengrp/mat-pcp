@@ -116,6 +116,24 @@ def validate_cds_blocks(gene, blocks, genome_length=None):
             f"got {parsed!r}"
         )
 
+    # Consecutive blocks may abut, be disjoint, or share exactly the frameshift
+    # nucleotide -- but must never overlap by more than that. Ascending *starts*
+    # plus a whole-codon *total* do not imply it: [[1, 100], [50, 201]] passes
+    # both (252 nt) while producing the codon (100, 51, 52) -- genomic positions
+    # running backwards, a frame-shifted slice that still translates. That is the
+    # exact failure this function exists to prevent, so it is checked explicitly
+    # rather than left to the total.
+    for (prev_start, prev_end), (next_start, next_end) in zip(parsed, parsed[1:]):
+        if next_start < prev_end:
+            shared = prev_end - next_start + 1
+            raise ValueError(
+                f"pcp_gene_cds_blocks[{gene!r}] blocks ({prev_start}, {prev_end}) "
+                f"and ({next_start}, {next_end}) overlap by {shared} nt. Blocks may "
+                f"share at most the single -1 ribosomal frameshift nucleotide "
+                f"(next start == previous end, as ORF1ab and ORF1b do at 13468); "
+                f"a larger overlap silently reverses genomic order within a codon."
+            )
+
     # Blocks may deliberately share a nucleotide (ORF1ab's and ORF1b's -1
     # ribosomal frameshift reads nt 13468 twice), so the total length is the
     # sum over blocks and NOT the span -- that shared nucleotide is exactly why
