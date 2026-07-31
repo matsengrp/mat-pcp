@@ -199,7 +199,7 @@ wildcard_constraints:
 
 
 # Disambiguate the aggregate rules from their per-clade counterparts. The
-# aggregate outputs (``aggregated.csv``, ``all_pcps.csv``, ``all_*_dasm_*``,
+# aggregate outputs (``aggregated.csv``, ``all_pcps.csv.gz``, ``all_*_dasm_*``,
 # ``all_aamut_fitness.csv``) live in the same directory as a ``{clade}`` output
 # and their filenames are valid ``{clade}`` matches (``clade=aggregated`` /
 # ``clade=all``). Before the multi-tree refactor these aggregate paths were
@@ -293,7 +293,7 @@ rule all:
             f=results_files,
         ),
         # Per-gene PCP targets (tree x gene). The curation report pulls in each
-        # gene's ``pcps/{gene}/all_pcps.csv`` (and thus the per-clade PCPs and
+        # gene's ``pcps/{gene}/all_pcps.csv.gz`` (and thus the per-clade PCPs and
         # gene-sliced founders).
         expand(
             os.path.join(OUTDIR, "pcps/{gene}/pcp_curation_report.txt"),
@@ -315,7 +315,7 @@ rule all:
         ),
         # Per-gene DASM-ready PCPs (tree x gene): aggregate file + per-clade sentinel.
         expand(
-            os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv"),
+            os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv.gz"),
             tree=TREE_LABELS,
             gene=PCP_GENES,
         ),
@@ -766,7 +766,7 @@ def per_clade_inputs(path_template, wildcards, extra_clades=()):
     """Expand ``path_template`` over this tree's adequate-count clades.
 
     ``path_template`` carries both the ``{tree}`` and ``{clade}`` wildcards
-    (e.g. ``os.path.join(OUTDIR, "pcps/{clade}_pcps.csv")`` or
+    (e.g. ``os.path.join(OUTDIR, "pcps/{clade}_pcps.csv.gz")`` or
     ``CLADE_FOUNDER_FASTA``). Used in ``input:`` lambdas of the aggregate
     rules so every per-clade fan-out resolves the checkpoint the same way.
     ``extra_clades`` appends non-checkpoint clades such as ``"all"``.
@@ -856,7 +856,7 @@ rule extract_pcps_by_clade:
         clade_founder_fasta=CLADE_FOUNDER_FASTA,
         coding_sites=rules.ref_coding_sites.output.csv
     output:
-        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv"),
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv.gz"),
         filtered_branches=os.path.join(OUTDIR, "pcps/{gene}/{clade}_filtered_branches.csv")
     params:
         max_nt_mutations=config["max_nt_mutations"],
@@ -880,10 +880,10 @@ rule aggregate_clade_pcps:
     """Aggregate a gene's clade-specific PCPs into a single file."""
     input:
         pcps=lambda wc: per_clade_inputs(
-            os.path.join(OUTDIR, "pcps", wc.gene, "{clade}_pcps.csv"), wc
+            os.path.join(OUTDIR, "pcps", wc.gene, "{clade}_pcps.csv.gz"), wc
         )
     output:
-        all_pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv")
+        all_pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv.gz")
     log:
         os.path.join(OUTDIR, "log/aggregate_clade_pcps_{gene}.log")
     conda:
@@ -913,8 +913,8 @@ rule aggregate_filtered_branches:
 # =============================================================================
 # DASM-ready PCP curation
 # =============================================================================
-# These rules emit ``*_pcps_dasm_ready.csv`` siblings of the existing
-# ``*_pcps.csv`` files. The filter set + train/val split mirrors
+# These rules emit ``*_pcps_dasm_ready.csv.gz`` siblings of the existing
+# ``*_pcps.csv.gz`` files. The filter set + train/val split mirrors
 # ``dasm2 preprocess`` exactly (reimplemented in plain NumPy here so the
 # rule can stay in ``envs/default.yml`` without pulling in torch/dasm2).
 #
@@ -934,10 +934,10 @@ rule curate_pcps_for_dasm:
     against that protein's own codon mask (``{gene}_codon_sites_to_mask.txt``).
     """
     input:
-        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv"),
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv.gz"),
         mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
     output:
-        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps_dasm_ready.csv"),
+        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps_dasm_ready.csv.gz"),
         report=os.path.join(OUTDIR, "pcps/{gene}/{clade}_dasm_filter_report.txt"),
         stats=os.path.join(OUTDIR, "pcps/{gene}/{clade}_dasm_filter_stats.json")
     params:
@@ -958,10 +958,10 @@ rule curate_all_pcps_for_dasm:
     convention; this matches ``filter_viral_pcps.sh``'s guardrail.
     """
     input:
-        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv"),
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv.gz"),
         mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
     output:
-        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv"),
+        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv.gz"),
         report=os.path.join(OUTDIR, "pcps/{gene}/all_dasm_filter_report.txt"),
         stats=os.path.join(OUTDIR, "pcps/{gene}/all_dasm_filter_stats.json")
     params:
@@ -978,7 +978,7 @@ rule curate_all_pcps_for_dasm:
 def _dasm_ready_per_clade_outputs(wildcards):
     """One gene's per-clade dasm-ready outputs - fans over clades_w_adequate_counts."""
     return expand(
-        os.path.join(OUTDIR, "pcps", wildcards.gene, "{clade}_pcps_dasm_ready.csv"),
+        os.path.join(OUTDIR, "pcps", wildcards.gene, "{clade}_pcps_dasm_ready.csv.gz"),
         tree=wildcards.tree,
         clade=clades_w_adequate_counts(wildcards),
     )
@@ -987,7 +987,7 @@ def _dasm_ready_per_clade_outputs(wildcards):
 rule dasm_ready_pcps_all_clades:
     """Collector target for one gene's per-clade DASM-ready outputs.
 
-    Aggregates a gene's per-clade ``*_pcps_dasm_ready.csv`` files into a single
+    Aggregates a gene's per-clade ``*_pcps_dasm_ready.csv.gz`` files into a single
     "everything is built" signal so ``rule all`` can depend on one path per gene.
     """
     input:
@@ -1552,10 +1552,10 @@ rule extract_mutations_from_pcps:
     """Extract AA mutation counts from one protein's PCPs by translating.
 
     Fanned over ``pcp_genes``: translates each protein's gene-sliced PCP
-    sequences (``pcps/{gene}/all_pcps.csv``) into per-codon AA mutations.
+    sequences (``pcps/{gene}/all_pcps.csv.gz``) into per-codon AA mutations.
     """
     input:
-        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv")
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv.gz")
     output:
         aa_counts=os.path.join(OUTDIR, "validation/{gene}/pcp_aa_counts.csv")
     log:

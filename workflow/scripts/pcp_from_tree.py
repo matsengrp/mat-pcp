@@ -42,6 +42,7 @@ load_workflow_module = workflow_loader.load_workflow_module
 
 sequences = load_workflow_module("sequences")
 gtf_utils = load_workflow_module("gtf")
+pcpio = load_workflow_module("pcpio")
 
 # Get inputs from snakemake
 tree_path = snakemake.input.tree
@@ -293,7 +294,12 @@ class PCPHelper:
         log(f"  identical: {n_identical}")
         log(f"Final PCPs: {len(pcp_df)} (dropped {n_identical} identical)")
 
-        pcp_df.to_csv(output_path, index=False)
+        # gzipped: one of the four PCP families (#134). filtered_branches stays
+        # plain -- it is a single ID column, kilobytes to a few hundred MB, and
+        # staying readable with plain shell tools is worth more than the space.
+        pcp_df.to_csv(
+            output_path, index=False, compression=pcpio.PCP_CSV_COMPRESSION
+        )
         log(f"Wrote PCPs to {output_path}")
         filtered_df.to_csv(filtered_branches_path, index=False)
         log(f"Wrote {len(filtered_df)} filtered branch IDs to {filtered_branches_path}")

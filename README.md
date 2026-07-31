@@ -106,7 +106,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 |-------|-------------|-------------|
 | 1. Input & Reference | Filter metadata, link inputs, fetch reference genome and annotations | `filtered_metadata.tsv.gz`, `ref.fa`, `coding_sites.csv` |
 | 1b. Node Dating & Sliding Windows | Date every node with chronumental (QC-gated), then bucket branch mutations into sliding time windows over the full dated tree and compute per-window expected counts + `delta_fitness_ratio` (EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115)) | `mat/node_dates.tsv`, `windows/subtree_counts.csv`, `windows/fitness_trajectory.csv` |
-| 2. Clade Processing & PCPs | Identify clades, extract clade subtrees, and emit curated PCPs in one pass (identical-slice branches are dropped during extraction), fanned over each protein in `pcp_genes`. DASM-training-ready siblings are emitted alongside. | `clade_counts.csv`, `clades/{clade}_tree.pb`, `pcps/{gene}/{clade}_pcps.csv`, `pcps/{gene}/all_pcps.csv`, `pcps/{gene}/{clade}_pcps_dasm_ready.csv`, `pcps/{gene}/all_pcps_dasm_ready.csv`, `pcps/{gene}/pcp_curation_report.txt` |
+| 2. Clade Processing & PCPs | Identify clades, extract clade subtrees, and emit curated PCPs in one pass (identical-slice branches are dropped during extraction), fanned over each protein in `pcp_genes`. DASM-training-ready siblings are emitted alongside. | `clade_counts.csv`, `clades/{clade}_tree.pb`, `pcps/{gene}/{clade}_pcps.csv.gz`, `pcps/{gene}/all_pcps.csv.gz`, `pcps/{gene}/{clade}_pcps_dasm_ready.csv.gz`, `pcps/{gene}/all_pcps_dasm_ready.csv.gz`, `pcps/{gene}/pcp_curation_report.txt` |
 | 3a. Clade Founders | Download and process clade founder sequences (whole-genome + one gene-sliced founder per protein in `pcp_genes`) | `clade_founders/{clade}.fa`, `clade_founders/{gene}/{clade}.fa`, `clade_founder_nts.csv` |
 | 3b. Mutation Counting | Translate mutations, count per-clade mutations (harmonized with PCP filtering) | `mutations/{clade}_mutations.tsv`, `mutation_counts/aggregated.csv` |
 | 4. Unified Count Table | Enumerate all possible mutations, join actual counts, compute masking flags once | `counts_all.csv` |
@@ -122,10 +122,10 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 
 | Output | Description |
 |--------|-------------|
-| `pcps/{gene}/all_pcps.csv` | All curated parent-child pairs with clade annotations, per protein in `pcp_genes` |
-| `pcps/{gene}/all_pcps_dasm_ready.csv` | DASM-training-ready PCPs (filters + 90/10 `in_train` split applied); per-clade siblings at `pcps/{gene}/{clade}_pcps_dasm_ready.csv` |
+| `pcps/{gene}/all_pcps.csv.gz` | All curated parent-child pairs with clade annotations, per protein in `pcp_genes`. Gzipped since v9 (#134); `pandas` and `dasm2`'s loader read it transparently |
+| `pcps/{gene}/all_pcps_dasm_ready.csv.gz` | DASM-training-ready PCPs (filters + 90/10 `in_train` split applied); per-clade siblings at `pcps/{gene}/{clade}_pcps_dasm_ready.csv.gz` |
 | `pcps/{gene}/pcp_curation_report.txt` | Report showing PCP filtering statistics |
-| `pcps/{gene}/filtered_branch_ids.csv` | Branch IDs excluded from mutation counting |
+| `pcps/{gene}/filtered_branch_ids.csv` | Branch IDs dropped during PCP curation, aggregated across clades. Retained for inspection only — nothing in the pipeline reads it; harmonization with mutation counting comes from the shared `max_nt_mutations` / `max_reversions_*` config keys. Not gzipped |
 | `mat/clade_counts.csv` | Sample counts per clade |
 | `clade_founder_nts.csv` | Nucleotide at each coding site for all clade founders |
 | `mutation_counts/aggregated.csv` | Aggregated mutation counts across all clades |
@@ -399,7 +399,7 @@ During initial PCP extraction (`extract_pcps_by_clade`), branches are filtered b
 
 `extract_pcps_by_clade` removes parent/child pairs whose sliced sequences are identical in the same pass that builds them:
 
-1. **Identical sequences**: Parent and child sequences that are identical (in the gene region) are dropped before the per-clade `pcps/{clade}_pcps.csv` is written.
+1. **Identical sequences**: Parent and child sequences that are identical (in the gene region) are dropped before the per-clade `pcps/{gene}/{clade}_pcps.csv.gz` is written.
 
 The IDs of dropped branches are written to `pcps/{gene}/{clade}_filtered_branches.csv` and consumed downstream by mutation counting (see "Harmonized Mutation Counting" below).
 
@@ -502,13 +502,13 @@ results/
 │   └── fitness_trajectory.csv     # Per-window expected counts + delta_fitness_ratio
 ├── pcps/                          # One subdir per protein in pcp_genes (S, ORF1ab, E, ...)
 │   └── {gene}/
-│       ├── {clade}_pcps.csv           # Curated parent-child pairs per clade
-│       ├── {clade}_pcps_dasm_ready.csv    # DASM-training-ready PCPs per clade (v2+)
+│       ├── {clade}_pcps.csv.gz        # Curated parent-child pairs per clade (gzipped, v9+)
+│       ├── {clade}_pcps_dasm_ready.csv.gz # DASM-training-ready PCPs per clade (v2+)
 │       ├── {clade}_dasm_filter_report.txt # Per-filter drop counts (v2+)
 │       ├── {clade}_dasm_filter_stats.json # Machine-readable filter stats (v2+)
 │       ├── {clade}_filtered_branches.csv  # Branch IDs filtered during curation
-│       ├── all_pcps.csv               # Aggregated curated PCPs across all clades
-│       ├── all_pcps_dasm_ready.csv    # DASM-training-ready aggregate (v2+)
+│       ├── all_pcps.csv.gz            # Aggregated curated PCPs across all clades
+│       ├── all_pcps_dasm_ready.csv.gz # DASM-training-ready aggregate (v2+)
 │       ├── pcp_curation_report.txt    # PCP curation statistics
 │       └── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
 ├── ref/
@@ -619,6 +619,11 @@ pixi run python tests/test_founder_codon_background.py
 # No shipped config can expose the per-mutation-type lookup, so these
 # fixtures are the only coverage.
 pixi run python tests/test_lightswitch_boundary.py
+
+# Unit test: PCP outputs are gzipped reproducibly (mtime=0) and the
+# cross-implementation DASM md5 is taken on the decompressed stream, so it
+# still compares payload to payload rather than container to container.
+pixi run python tests/test_pcp_compression.py
 
 # Run pipeline on test data (uses max_clades=3, subset_frac=0.1)
 pixi run snakemake -j 4 --use-conda --configfile config/config_test_data.yaml

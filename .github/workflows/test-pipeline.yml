@@ -140,6 +140,17 @@ jobs:
       run: |
         pixi run python tests/test_lightswitch_boundary.py
 
+    # Fixture-only. The pipeline run below does cover the gzipped outputs
+    # end-to-end, but not the two properties that fail silently: that the
+    # DASM-ready md5 is taken on the *decompressed* stream (so the
+    # cross-implementation sentinel still compares payload to payload), and that
+    # writes are byte-reproducible across runs (mtime=0). Also pins the clade
+    # derivation, which a bare replace("_pcps.csv", "") would turn into
+    # "19A.gz" (#134).
+    - name: Verify PCP compression is reproducible and payload-hashed
+      run: |
+        pixi run python tests/test_pcp_compression.py
+
     - name: Validate Snakefile syntax
       run: |
         # Note: --lint returns non-zero for style suggestions (e.g., "Mixed rules and functions")
@@ -399,7 +410,7 @@ jobs:
         print(f'Checking {len(adequate)} clade PCP files...')
 
         for clade in adequate:
-            pcp_file = f'${OUTPUT_DIR}/pcps/S/{clade}_pcps.csv'
+            pcp_file = f'${OUTPUT_DIR}/pcps/S/{clade}_pcps.csv.gz'
             if os.path.exists(pcp_file):
                 pcp_df = pd.read_csv(pcp_file)
                 print(f'  {clade}: {len(pcp_df)} PCPs')
@@ -414,11 +425,11 @@ jobs:
 
     - name: Verify aggregated PCP file
       run: |
-        test -f $OUTPUT_DIR/pcps/S/all_pcps.csv
+        test -f $OUTPUT_DIR/pcps/S/all_pcps.csv.gz
         pixi run python -c "
         import pandas as pd
 
-        df = pd.read_csv('${OUTPUT_DIR}/pcps/S/all_pcps.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/pcps/S/all_pcps.csv.gz')
         print(f'Total aggregated PCPs: {len(df)}')
         print(f'Clades: {sorted(df.clade.unique())}')
         print(f'PCPs per clade:')
@@ -440,7 +451,7 @@ jobs:
         pixi run python -c "
         import pandas as pd
 
-        df = pd.read_csv('${OUTPUT_DIR}/pcps/S/all_pcps.csv')
+        df = pd.read_csv('${OUTPUT_DIR}/pcps/S/all_pcps.csv.gz')
 
         # Check sequence lengths are consistent
         parent_lens = df['parent'].str.len()

@@ -196,7 +196,11 @@ def main():
     summaries = []
     for clade in args.clades:
         tree_pb = results_dir / "mat" / "clades" / f"{clade}_tree.pb"
-        matpcp_csv = results_dir / "pcps" / f"{clade}_pcps.csv"
+        # NOTE: this path is stale independently of the extension -- since #92
+        # PCPs live under a per-gene subdirectory (``pcps/{gene}/``), so this
+        # helper does not currently resolve against a real run. Extension
+        # updated for #134; the missing gene component is pre-existing.
+        matpcp_csv = results_dir / "pcps" / f"{clade}_pcps.csv.gz"
         phyz_tsv = phyz_out_dir / f"{clade}_phyz_pcps.tsv"
 
         if not tree_pb.exists():

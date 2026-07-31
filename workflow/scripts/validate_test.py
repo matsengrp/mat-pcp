@@ -22,6 +22,15 @@ SPIKE_19A_SENTINEL_MD5 = "b948f2a1f20edbce64cfff1dc540c119"
 # the test pipeline's ``all_pcps.csv`` + ``S_codon_sites_to_mask.txt``
 # with the canonical seeds. A mismatch here means either the filter logic
 # drifted from dasm2 or the train/val RNG call sequence changed.
+#
+# Since #134 our side is gzipped while the reference writes plain CSV, so
+# ``test_summary.py`` takes these md5s over the **decompressed** stream
+# (``_decompressed_md5``). The sentinel value is therefore *unchanged* by
+# compression -- which is the point: it still compares payload to payload. Do
+# not re-baseline it to a compressed-file md5. That would silently retire the
+# cross-implementation check, and it would not even be stable, since pandas
+# embeds the output filename in the gzip header (FNAME) and, unless
+# ``mtime=0`` is passed, the write time as well.
 DASM_READY_ALL_SENTINEL_MD5 = "5e538bd088e676b485a11a04745221e9"
 
 
@@ -223,7 +232,8 @@ def compare_summaries(actual, expected):
 
             # Hard-coded cross-implementation sentinel: the aggregate md5
             # must equal the dasm2 reference output (proves byte-equivalence
-            # to filter_viral_pcps.sh).
+            # to filter_viral_pcps.sh). Taken on the decompressed stream since
+            # #134, so the expected value is unchanged by compression.
             if act_agg.get('checksum') and act_agg.get('checksum') != DASM_READY_ALL_SENTINEL_MD5:
                 differences.append(
                     f"dasm_ready aggregate sentinel md5 mismatch: expected "

@@ -94,11 +94,12 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 ### Testing
 ```bash
 # Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
-# all four before the pipeline steps)
+# all five before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 pixi run python tests/test_clade_founder_guards.py
 pixi run python tests/test_founder_codon_background.py
 pixi run python tests/test_lightswitch_boundary.py
+pixi run python tests/test_pcp_compression.py
 
 # Run on test data (fast, uses max_clades=3)
 pixi run snakemake -j 2 --use-conda \
@@ -264,6 +265,33 @@ mat-pcp/
    with `actual_count` 0, so a test-data run has nothing asserting which rate
    they are served). See
    [#125](https://github.com/matsengrp/mat-pcp/issues/125).
+
+9. **PCP outputs are gzipped, and the DASM md5 is a *payload* hash.** The four
+   PCP families (`{clade}_pcps`, `all_pcps`, `{clade}_pcps_dasm_ready`,
+   `all_pcps_dasm_ready`) are `.csv.gz` as of v9; `{clade}_filtered_branches.csv`
+   and `filtered_branch_ids.csv` deliberately stay plain. On the v8 production
+   tree `pcps/` was **503.6 GB apparent, ~97% of the whole output tree**, and
+   measured gzip level 9 gives ~125× on ORF1a / ~110× on S. The policy lives in
+   `modules/pcpio.py::PCP_CSV_COMPRESSION` rather than at each `to_csv`, because a
+   writer that omitted `mtime=0` would break reproducibility for that one file
+   with nothing to attribute it. Level 9 is *not* pinned explicitly: it is
+   pandas' default, and it measured both smaller and faster than level 6 (~125×
+   at ~97 MiB/s vs ~17× at 29 MiB/s — at level 9 gzip's full match search finds
+   the long parent/child and adjacent-row repeats, so it emits far less).
+   Three consequences fail silently and so are unit-tested rather than left to
+   the pipeline run: (a) `validate_test.py`'s `DASM_READY_ALL_SENTINEL_MD5` is a
+   *cross-implementation* check against `dasm2 preprocess`, which writes plain
+   CSV, so `test_summary.py` hashes the **decompressed** stream and the sentinel
+   value is unchanged by compression — re-baselining it to a compressed-file md5
+   would silently retire the check; (b) pandas' gzip output embeds `mtime=now`
+   *and* the output filename (the FNAME flag), so `mtime=0` is required for a
+   re-run to be byte-identical, which matters because `data-central` manifests pin
+   `md5`/`xxh3` per file; (c) `aggregate_clade_pcps.py` derives the `clade` column
+   from each input's filename, and its old `replace("_pcps.csv", "")` would have
+   yielded `"19A.gz"` — every row of every aggregate mislabelled identically, with
+   the row count unchanged and no cross-check able to see it. Guarded by
+   `tests/test_pcp_compression.py`. See
+   [#134](https://github.com/matsengrp/mat-pcp/issues/134).
 
 ### Configuration Sections
 

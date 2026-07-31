@@ -2,7 +2,7 @@
   "_comment": "Expected results with config_test_data.yaml (max_clades=3, subset_frac=0.1). Regenerated for v3 (issue #101): single unified count table (counts_all.csv), GLM as the sole neutral expectation with column predicted_count renamed expected_count, and masking computed once. The fitness table no longer has a predicted_count column; expected_count_sum now holds the GLM value (formerly predicted_count_sum). Delta-fitness columns renamed (#89): delta_fitness->delta_fitness_bayesian, naive_delta_fitness->delta_fitness_ratio (pure rename, values unchanged). Paths are written unversioned; validate_test.py normalizes the version prefix.",
   "results_directory": "results/test_data",
   "files": {
-    "results/test_data/pcps/S/all_pcps.csv": {
+    "results/test_data/pcps/S/all_pcps.csv.gz": {
       "exists": true,
       "size": 61494,
       "lines": 9,
@@ -125,9 +125,9 @@
       "checksum": "5e538bd088e676b485a11a04745221e9"
     },
     "per_clade_files": [
-      "19A_pcps_dasm_ready.csv",
-      "19B_pcps_dasm_ready.csv",
-      "20A_pcps_dasm_ready.csv"
+      "19A_pcps_dasm_ready.csv.gz",
+      "19B_pcps_dasm_ready.csv.gz",
+      "20A_pcps_dasm_ready.csv.gz"
     ],
     "per_clade_checksums": {
       "19A_pcps_dasm_ready": "28d909850eeea0e7c831355f5e9d2bd2",
