@@ -59,11 +59,14 @@ outputs — changes.
   founder-window (~1.5M on a full tree → ~20 h). It now (a) accumulates each window's
   per-ID rate as a *delta* on a once-computed reference base (`N·base − touched-site
   reference rows + founder recomputed rows`), and (b) recomputes each founder's touched
-  codons via O(#touched-sites) dict lookups (`ExpectedCounts._founder_rec`) instead of
-  per-founder pandas. On the test data this is bit-for-bit identical to the old output
-  (max abs diff ~1e-16 in `expected_count` / `delta_fitness_ratio`), and the per-founder
-  rate-table build drops ~50× (≈19 ms → ≈0.38 ms), cutting the rule from ~20 h to tens of
-  minutes on the 2026-04-22 tree. Output schema is unchanged. (#123)
+  codons via O(#touched-sites) dict lookups (`ExpectedCounts._recompute_founder_touched_rows`,
+  named `_founder_rec` when this shipped) instead of per-founder pandas. On the test data
+  this is numerically identical to the old output to float precision — **not** bit-identical,
+  since delta accumulation reorders floating-point sums: max abs diff ~1e-16 in
+  `expected_count` / `delta_fitness_ratio`, `assert_frame_equal` passing at `rtol=1e-6,
+  atol=1e-9`. The per-founder rate-table build drops ~50× (≈19 ms → ≈0.38 ms), cutting the
+  rule on the 2026-04-22 tree from the ~20 h *projection* to **1:32:14 measured** (5,534.6 s,
+  9.5 GB max RSS, 1,495,938 founder-windows). Output schema is unchanged. (#123)
 
 ### v7
 
