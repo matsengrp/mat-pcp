@@ -106,6 +106,34 @@ reference_clade: "19A"
 pcp_genes:
   - S
   - ORF1a
+  # ORF1b (nsp12-nsp16), M and N added for v9 (#133, EPIC #131 decision 6).
+  # Only ORF1b needs explicit coordinates; M and N are single-block, codon-aligned
+  # GTF features (666 nt / 222 codons and 1257 nt / 419 codons).
+  - ORF1b
+  - M
+  - N
+
+# Explicit CDS blocks for PCP extraction only, for genes the shared reference
+# GTF does not carry. 1-based inclusive; the two blocks share nt 13468, which is
+# how the -1 ribosomal frameshift stays in frame.
+#
+# ORF1b here is nsp12-nsp16, NOT the post-slippage frameshift product. nsp12
+# (RdRp) begins at ORF1ab codon 4393 but the frameshift is at codon 4402, so
+# nsp12's first 9 residues are translated in ORF1a's frame. Defining ORF1b as
+# the post-slippage block alone would silently clip 9 residues off the
+# N-terminus of the protein this is chiefly for (#133).
+pcp_gene_cds_blocks:
+  ORF1b: [[13442, 13468], [13468, 21552]]   # nsp12-nsp16; 8112 nt = 2704 codons
+
+# PCP gene -> the aamut_fitness gene it is validated against, plus the codon
+# offset. ORF1a is absent from aamut_fitness (aamutfit.get_coding drops it), so
+# through v8 its validation compared against zero rows and reported success
+# having compared nothing; ORF1b is a PCP-only slice of ORF1ab. Both offsets are
+# re-derived from the CDS blocks and cross-checked against these values (#133).
+# S, M and N need no entry -- each appears in aamut_fitness as itself.
+pcp_gene_to_fitness_gene:
+  ORF1a: {gene: ORF1ab, codon_offset: 0}      # ORF1a codon N == ORF1ab codon N
+  ORF1b: {gene: ORF1ab, codon_offset: 4392}   # ORF1b codon 1 == ORF1ab codon 4393
 
 # PCP branch QC reuses the shared Mutation-Counting keys (max_nt_mutations /
 # max_reversions_to_ref / max_reversions_to_clade_founder), so PCP extraction

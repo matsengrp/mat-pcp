@@ -4,17 +4,51 @@
 Compares amino acid mutations (e.g., D614G) between:
 1. PCP-derived counts: Mutations from translating parent-child pairs
 2. aamut_fitness actual_count: Aggregated from mutation counting pipeline
+
+A PCP gene need not appear in ``aamut_fitness`` under its own name or codon
+numbering, so the two sides are aligned through ``pcp_gene_to_fitness_gene``
+before merging (#133). Filtering the fitness table on ``gene == {gene}``
+unconditionally, as this script used to, made the ORF1a comparison **vacuous**:
+``aamutfit.get_coding`` drops ORF1a (``aamutfit.py:80``), so the filter matched
+zero rows and the report announced no discrepancies because it had nothing to
+compare. An empty fitness slice for a gene that has PCP counts is now a hard
+failure -- that guard alone would have caught the gap.
 """
 
+import os
+from importlib import util as importlib_util
+
 import pandas as pd
+
+# The by-path module loader is defined once in
+# workflow/modules/workflow_loader.py. Because that loader is itself the
+# mechanism for importing shared workflow code, it cannot be imported via
+# itself -- it is wired up here by absolute path (#111).
+_loader_spec = importlib_util.spec_from_file_location(
+    "workflow_loader",
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "modules",
+        "workflow_loader.py",
+    ),
+)
+workflow_loader = importlib_util.module_from_spec(_loader_spec)
+_loader_spec.loader.exec_module(workflow_loader)
+load_workflow_module = workflow_loader.load_workflow_module
+
+genemap = load_workflow_module("genemap")
+gtf_utils = load_workflow_module("gtf")
 
 # Get snakemake variables
 pcp_counts_csv = snakemake.input.pcp_counts
 aamut_fitness_files = snakemake.input.aamut_fitness_files
 all_aamut_fitness_csv = snakemake.input.all_aamut_fitness
+gtf_path = snakemake.input.gtf
 output_report = snakemake.output.report
 output_discrepancies = snakemake.output.discrepancies
 pcp_gene_name = snakemake.wildcards.gene
+pcp_gene_cds_blocks = snakemake.params.pcp_gene_cds_blocks
+pcp_gene_to_fitness_gene = snakemake.params.pcp_gene_to_fitness_gene
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -53,19 +87,89 @@ log(f"Per-clade aamut_fitness: {len(aamut_clade_df)} entries")
 aamut_all = pd.read_csv(all_aamut_fitness_csv)
 log(f"Aggregate aamut_fitness: {len(aamut_all)} entries")
 
-# Filter to gene of interest
-if pcp_gene_name and len(aamut_clade_df) > 0:
-    aamut_clade_df = aamut_clade_df[aamut_clade_df["gene"] == pcp_gene_name]
-    log(f"Filtered per-clade to {pcp_gene_name}: {len(aamut_clade_df)} entries")
+# -----------------------------------------------------------------------------
+# Align the PCP gene with the fitness-table gene it is validated against.
+#
+# Genes present in aamut_fitness under their own name (S, M, N, E, ORF1ab) need
+# no mapping and take the identity path. ORF1a and ORF1b do: see the module
+# docstring and workflow/modules/genemap.py.
+# -----------------------------------------------------------------------------
+fitness_gene = pcp_gene_name
+codon_map = None
+unmapped_codons = []
+mapping = (pcp_gene_to_fitness_gene or {}).get(pcp_gene_name)
 
-if pcp_gene_name and len(aamut_all) > 0:
-    aamut_all = aamut_all[aamut_all["gene"] == pcp_gene_name]
-    log(f"Filtered aggregate to {pcp_gene_name}: {len(aamut_all)} entries")
+if mapping:
+    fitness_gene = mapping["gene"]
+    declared_offset = mapping["codon_offset"]
+    pcp_blocks = gtf_utils.resolve_cds_blocks(
+        gtf_path, pcp_gene_name, pcp_gene_cds_blocks
+    )
+    fitness_blocks = gtf_utils.resolve_cds_blocks(
+        gtf_path, fitness_gene, pcp_gene_cds_blocks
+    )
+    codon_map, unmapped_codons = genemap.align_to_fitness_gene(
+        pcp_gene_name, fitness_gene, pcp_blocks, fitness_blocks, declared_offset
+    )
+    log(
+        f"{pcp_gene_name} -> {fitness_gene}: {len(codon_map)} codons correspond "
+        f"(offset {declared_offset}), {len(unmapped_codons)} have no counterpart"
+    )
 
-# Also filter PCP counts to the gene
+
+def to_pcp_codon_frame(df, label):
+    """Restrict a fitness table to ``fitness_gene``, renumbered into PCP codons.
+
+    Renumbering rebuilds ``aa_mutation`` as well as ``aa_site``, because the
+    merge keys downstream are the ``aa_mutation`` strings and the site number is
+    embedded in them.
+    """
+    if len(df) == 0:
+        return df
+    sub = df[df["gene"] == fitness_gene].copy()
+    log(f"Filtered {label} to {fitness_gene}: {len(sub)} entries")
+    if codon_map is None:
+        return sub
+    fitness_to_pcp = {fitness: pcp for pcp, fitness in codon_map.items()}
+    sub = sub[sub["aa_site"].isin(fitness_to_pcp)].copy()
+    sub["aa_site"] = sub["aa_site"].map(fitness_to_pcp)
+    sub["gene"] = pcp_gene_name
+    sub["aa_mutation"] = (
+        sub["clade_founder_aa"] + sub["aa_site"].astype(str) + sub["mutant_aa"]
+    )
+    log(f"  renumbered into {pcp_gene_name} codons: {len(sub)} entries")
+    return sub
+
+
+aamut_clade_df = to_pcp_codon_frame(aamut_clade_df, "per-clade")
+aamut_all = to_pcp_codon_frame(aamut_all, "aggregate")
+
+# Filter PCP counts to the gene, then set aside codons with no counterpart in
+# the fitness gene's frame. ORF1a's codons 4402-4405 are the real case: they run
+# past the -1 ribosomal frameshift in ORF1a's own frame, so ORF1ab has no codon
+# on those nucleotides. Left in the merge they would be reported as ordinary
+# discrepancies, which is exactly the "explained, not generic" requirement.
+pcp_counts_no_counterpart = pd.DataFrame()
 if pcp_gene_name and len(pcp_counts) > 0 and "gene" in pcp_counts.columns:
     pcp_counts = pcp_counts[pcp_counts["gene"] == pcp_gene_name]
     log(f"Filtered PCP counts to {pcp_gene_name}: {len(pcp_counts)} entries")
+
+if codon_map is not None and len(pcp_counts) > 0:
+    in_map = pcp_counts["aa_site"].isin(codon_map)
+    pcp_counts_no_counterpart = pcp_counts[~in_map].copy()
+    pcp_counts = pcp_counts[in_map].copy()
+    log(
+        f"PCP counts on codons with a {fitness_gene} counterpart: "
+        f"{len(pcp_counts)}; without: {len(pcp_counts_no_counterpart)}"
+    )
+
+genemap.require_nonempty_fitness_slice(
+    pcp_gene_name,
+    fitness_gene,
+    len(pcp_counts),
+    len(aamut_all),
+    all_aamut_fitness_csv,
+)
 
 
 def compare_counts(pcp_df, aamut_df, clade_col="clade", is_aggregate=False):
@@ -180,11 +284,42 @@ with open(output_report, "w") as f:
     f.write("SUMMARY\n")
     f.write("-" * 40 + "\n")
     f.write(f"Gene: {pcp_gene_name}\n")
+    if codon_map is not None:
+        f.write(
+            f"Compared against aamut_fitness gene: {fitness_gene} "
+            f"(codon offset {declared_offset}; {pcp_gene_name} codon 1 == "
+            f"{fitness_gene} codon {declared_offset + 1})\n"
+        )
+        f.write(f"Corresponding codons: {len(codon_map)}\n")
+    else:
+        f.write(f"Compared against aamut_fitness gene: {fitness_gene}\n")
     f.write(f"Per-clade exact matches: {clade_matches}\n")
     f.write(f"Per-clade discrepancies: {clade_disc_count}\n")
     f.write(f"Aggregate exact matches: {agg_matches}\n")
     f.write(f"Aggregate discrepancies: {agg_disc_count}\n")
     f.write(f"Total discrepancies: {total_discrepancies}\n\n")
+
+    # Reported as its own category, never folded into the discrepancy counts:
+    # these codons have no counterpart to disagree with. ORF1a's 4402-4405 run
+    # past the -1 ribosomal frameshift in ORF1a's own frame.
+    if unmapped_codons:
+        f.write("CODONS WITH NO COUNTERPART IN THE FITNESS GENE\n")
+        f.write("-" * 40 + "\n")
+        shown = unmapped_codons if len(unmapped_codons) <= 20 else unmapped_codons[:20]
+        f.write(
+            f"{len(unmapped_codons)} of {len(codon_map) + len(unmapped_codons)} "
+            f"{pcp_gene_name} codons occupy reference nucleotides that no "
+            f"{fitness_gene} codon covers, so they are excluded from the\n"
+            f"comparison rather than counted as discrepancies. This is expected "
+            f"where a gene extends past the -1 ribosomal frameshift in its own "
+            f"reading frame.\n"
+        )
+        f.write(f"Codons: {shown}")
+        f.write(" (truncated)\n" if len(unmapped_codons) > len(shown) else "\n")
+        f.write(
+            f"PCP-derived count rows on those codons: "
+            f"{len(pcp_counts_no_counterpart)}\n\n"
+        )
 
     if total_discrepancies == 0:
         f.write("SUCCESS: All amino acid mutation counts match exactly!\n\n")

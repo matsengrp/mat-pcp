@@ -100,6 +100,25 @@ pcp_genes:
   - S
   - ORF1ab
   - E
+  # ORF1b is here so CI exercises the pcp_gene_cds_blocks override and the
+  # pcp_gene_to_fitness_gene codon remapping end-to-end. Without it the override
+  # path would be unit-tested only, and a green pipeline run would prove nothing
+  # about it -- the same "invisible on test data" shape as #130 and #125.
+  - ORF1b
+
+# Explicit CDS blocks for PCP-only genes the reference GTF does not carry.
+# 1-based inclusive; the two blocks share nt 13468, which is how the -1
+# ribosomal frameshift stays in frame (see gtf.resolve_cds_blocks).
+pcp_gene_cds_blocks:
+  ORF1b: [[13442, 13468], [13468, 21552]]   # nsp12-nsp16; 8112 nt = 2704 codons
+
+# ORF1b is a PCP-only gene: it is an interior slice of ORF1ab and never appears
+# in aamut_fitness under its own name, so validation compares it against ORF1ab
+# shifted by this offset. The offset is re-derived from the CDS blocks and
+# cross-checked against this value, so a stale number fails loudly (#133).
+# ORF1ab, S and E need no entry -- each appears in aamut_fitness as itself.
+pcp_gene_to_fitness_gene:
+  ORF1b: {gene: ORF1ab, codon_offset: 4392}   # ORF1b codon 1 == ORF1ab codon 4393
 
 # PCP branch QC reuses the shared Mutation-Counting keys (max_nt_mutations /
 # max_reversions_to_ref / max_reversions_to_clade_founder), applied to CODING

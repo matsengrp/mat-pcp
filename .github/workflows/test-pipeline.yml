@@ -151,6 +151,18 @@ jobs:
       run: |
         pixi run python tests/test_pcp_compression.py
 
+    # The test config now extracts ORF1b, so the pipeline run below does exercise
+    # the pcp_gene_cds_blocks override and the ORF1b -> ORF1ab codon remapping
+    # end-to-end, and validate_test.py pins the founder slice identity. These
+    # fixture-only checks cover what a green run cannot: that malformed overrides
+    # are rejected, that the override is add-only, that a stale codon_offset is
+    # caught, and that an empty fitness slice is fatal. The last is the one that
+    # would have caught the vacuous ORF1a validation on its own -- and ORF1a is
+    # not in the test config, so nothing in the pipeline run asserts it (#133).
+    - name: Verify PCP gene coordinate override and fitness-gene alignment
+      run: |
+        pixi run python tests/test_pcp_gene_coordinates.py
+
     - name: Validate Snakefile syntax
       run: |
         # Note: --lint returns non-zero for style suggestions (e.g., "Mixed rules and functions")
@@ -988,6 +1000,35 @@ jobs:
         test -f $OUTPUT_DIR/validation/S/pcp_vs_counts_report.txt
         test -f $OUTPUT_DIR/validation/S/pcp_vs_counts_discrepancies.csv
         cat $OUTPUT_DIR/validation/S/pcp_vs_counts_report.txt
+
+    # ORF1b is the pcp_gene_cds_blocks override path, end-to-end: its coordinates
+    # come from config rather than the GTF, and it is validated against ORF1ab
+    # shifted by 4392 codons because it never appears in aamut_fitness under its
+    # own name. The "Corresponding codons" line is the anti-vacuity assertion --
+    # a report that compared against nothing could not print it (#133).
+    - name: Verify ORF1b PCPs came from the config coordinate override
+      run: |
+        test -f $OUTPUT_DIR/pcps/ORF1b/all_pcps.csv.gz
+        test -f $OUTPUT_DIR/ORF1b_codon_sites_to_mask.txt
+        test -f $OUTPUT_DIR/validation/ORF1b/pcp_vs_counts_report.txt
+        cat $OUTPUT_DIR/validation/ORF1b/pcp_vs_counts_report.txt
+        pixi run python -c "
+        import pandas as pd, sys
+
+        df = pd.read_csv('${OUTPUT_DIR}/pcps/ORF1b/all_pcps.csv.gz')
+        lengths = set(df['parent'].str.len()) | set(df['child'].str.len())
+        print(f'ORF1b PCPs: {len(df)} rows, sequence lengths {sorted(lengths)}')
+        if lengths != {8112}:
+            sys.exit(f'ORF1b PCP sequences must all be 8112 nt; got {sorted(lengths)}')
+
+        report = open('${OUTPUT_DIR}/validation/ORF1b/pcp_vs_counts_report.txt').read()
+        for needle in ['Compared against aamut_fitness gene: ORF1ab',
+                       'Corresponding codons: 2704']:
+            if needle not in report:
+                sys.exit(f'ORF1b report is missing {needle!r}; the fitness-gene '
+                         f'remapping did not happen, so the comparison is vacuous')
+        print('ORF1b validated against ORF1ab over 2704 corresponding codons')
+        "
 
     - name: Check validation results
       run: |

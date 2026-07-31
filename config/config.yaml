@@ -134,6 +134,34 @@ reference_clade: "19A"
 pcp_genes:
   - S
 
+# Optional explicit CDS blocks for PCP extraction only. Genes absent here are
+# resolved from the reference GTF as before, so this key is inert when unused.
+# Deliberately NOT fed to edit_ref_gtf / ref_coding_sites: adding a gene to the
+# GTF would make every site it covers multi-gene and change every fitness
+# output, and without a matching gene_overlaps.retain entry would silently drop
+# the overlapped span from aamut_fitness entirely (#133).
+#
+# Every gene named here must also appear in pcp_genes, or the run fails -- an
+# override for a gene that is never extracted is a typo, not a configuration.
+# That is why the ORF1b example below is commented out: this config extracts
+# spike only. Blocks are 1-based inclusive and may share a nucleotide, which is
+# how the -1 ribosomal frameshift stays in frame.
+#
+# pcp_gene_cds_blocks:
+#   ORF1b: [[13442, 13468], [13468, 21552]]   # nsp12-nsp16; 13468 shared
+#
+# PCP gene -> the aamut_fitness gene it is validated against, plus the codon
+# offset between them. Needed only where a PCP gene is absent from
+# aamut_fitness under its own name and numbering. ORF1a is the case that
+# matters: aamutfit.get_coding drops it, so validating on the name alone
+# compared against zero rows and reported success having compared nothing. The
+# offset is re-derived from the CDS blocks and cross-checked against the value
+# given here, so a stale number fails loudly (#133).
+#
+# pcp_gene_to_fitness_gene:
+#   ORF1a: {gene: ORF1ab, codon_offset: 0}      # ORF1a codon N == ORF1ab codon N
+#   ORF1b: {gene: ORF1ab, codon_offset: 4392}   # ORF1b codon 1 == ORF1ab codon 4393
+
 # PCP branch QC reuses the shared Mutation-Counting keys (max_nt_mutations /
 # max_reversions_to_ref / max_reversions_to_clade_founder), so PCP extraction
 # and clade/window mutation counting filter branches identically.

@@ -53,15 +53,18 @@ output_path = snakemake.output.pcps
 filtered_branches_path = snakemake.output.filtered_branches
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
-# The gene to slice to comes from the ``{gene}`` wildcard; its CDS blocks are
-# derived from the reference GTF (ORF1ab -> two frameshift blocks, everything
-# else a single block).
+# The gene to slice to comes from the ``{gene}`` wildcard. Its CDS blocks come
+# from ``pcp_gene_cds_blocks`` if that config names the gene, otherwise from the
+# reference GTF (ORF1ab -> two frameshift blocks, everything else a single
+# block). ORF1b is the only configured override: it is a PCP-only gene the
+# shared GTF deliberately does not carry (#133).
 gene = snakemake.wildcards.gene
 
 # Get params
 max_nt_mutations = snakemake.params.get("max_nt_mutations", 4)
 max_reversions = snakemake.params.get("max_reversions_to_ref", 1)
 max_reversions_to_founder = snakemake.params.get("max_reversions_to_clade_founder", 1)
+pcp_gene_cds_blocks = snakemake.params.get("pcp_gene_cds_blocks", {})
 
 # Clade founder sequence (optional, for filtering reversions to clade founder)
 clade_founder_fasta = snakemake.input.get("clade_founder_fasta", None)
@@ -311,8 +314,19 @@ def main():
     log("PCP Extraction")
     log("=" * 60)
 
-    # Derive the CDS blocks for this gene from the reference GTF.
-    cds_blocks = gtf_utils.cds_blocks_for_gene(gtf_path, gene)
+    # Resolve this gene's CDS blocks: the pcp_gene_cds_blocks override if it
+    # names the gene, otherwise the reference GTF.
+    #
+    # This re-reads the 30 kB reference that PCPHelper loads again below, on
+    # purpose: resolving (and validating) the blocks here means a malformed
+    # override fails in seconds, rather than after loading a multi-GB MAT. Do
+    # not "optimize" it by moving the resolution after the helper.
+    cds_blocks = gtf_utils.resolve_cds_blocks(
+        gtf_path,
+        gene,
+        pcp_gene_cds_blocks,
+        genome_length=len(load_reference_from_fasta(fasta_path)),
+    )
     log(f"Gene {gene}: CDS blocks {cds_blocks}")
 
     log(f"Max mutations: {max_nt_mutations}")

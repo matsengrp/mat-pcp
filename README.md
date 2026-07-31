@@ -138,7 +138,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `fitness/expected_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
 | `aamut_fitness/all_aamut_fitness.csv` | Amino acid-level fitness estimates |
-| `validation/<gene>/pcp_vs_counts_report.txt` | PCP vs counts validation report (one per protein) |
+| `validation/<gene>/pcp_vs_counts_report.txt` | PCP vs counts validation report (one per protein). Names the `aamut_fitness` gene compared against and, where the two differ, the codon offset and the count of corresponding codons; codons with no counterpart in that gene's reading frame are reported as their own category rather than as discrepancies (v9, #133) |
 | `mat/node_dates.tsv` | chronumental-inferred date for every tip and internal node (+ `node_dates_qc.tsv` / `node_dates_residuals.csv` QC artifacts) |
 | `windows/subtree_counts.csv` | Per-window, per-mutation actual counts over the full dated tree (coding only); `windows/founder_muts.csv` holds the per-window subtree founders |
 | `windows/fitness_trajectory.csv` | Mutation × time-window fitness trajectory: per-window `expected_count` and `delta_fitness_ratio` (comparable to `aamut_fitness`) |
@@ -331,7 +331,9 @@ Windows tile the full dated tree, anchored at the end date and stepping backward
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `pcp_genes` | List of protein symbols to extract PCPs and gene-sliced founders for. PCP extraction is fanned over this list; each protein's coordinates come from the reference GTF (`cds_blocks_for_gene`), so outputs land under `pcps/{gene}/` and `clade_founders/{gene}/`. ORF1ab is reconstructed as one frameshifted CDS. Must be non-empty. Production `config.yaml` ships `[S]` (Spike-only, byte-identical to v5); the test configs use `[S, ORF1ab, E]`. | `[S]` |
+| `pcp_genes` | List of protein symbols to extract PCPs and gene-sliced founders for. PCP extraction is fanned over this list; each protein's coordinates come from `pcp_gene_cds_blocks` if it names the gene, otherwise from the reference GTF (`gtf.resolve_cds_blocks`), so outputs land under `pcps/{gene}/` and `clade_founders/{gene}/`. ORF1ab is reconstructed as one frameshifted CDS. Must be non-empty. Production `config.yaml` ships `[S]` (Spike-only, byte-identical to v5); the v9 production config uses `[S, ORF1a, ORF1b, M, N]` and `config_test_data.yaml` uses `[S, ORF1ab, E, ORF1b]`. | `[S]` |
+| `pcp_gene_cds_blocks` | Optional map of gene → explicit CDS blocks (`[[start, end], ...]`, 1-based inclusive), for PCP genes the reference GTF does not carry. Currently `ORF1b: [[13442, 13468], [13468, 21552]]` (nsp12–nsp16; the two blocks share nt 13468, the −1 ribosomal frameshift, so the summed length 8112 nt = 2704 codons is in frame even though the span is 8111). Blocks are validated (ascending, in range, whole codons) because a mis-specified block still translates. **Add-only**: overriding a gene the GTF already defines raises, and every key must also appear in `pcp_genes`. Deliberately not fed to `edit_ref_gtf` / `ref_coding_sites`, so fitness outputs are untouched. | `{}` |
+| `pcp_gene_to_fitness_gene` | Optional map of PCP gene → `{gene, codon_offset}`, naming the `aamut_fitness` gene that gene is validated against and the codon shift between them. Needed only where a PCP gene is absent from `aamut_fitness` under its own name and numbering: `ORF1a: {gene: ORF1ab, codon_offset: 0}` (ORF1a is dropped by `aamutfit.get_coding`) and `ORF1b: {gene: ORF1ab, codon_offset: 4392}`. The offset is re-derived from both genes' CDS blocks and cross-checked against the configured value, so a stale number fails loudly rather than shifting the comparison. | `{}` |
 
 PCP branch QC reuses the shared Mutation-Counting keys (`max_nt_mutations`, `max_reversions_to_ref`, `max_reversions_to_clade_founder`; see the Mutation Counting section) — there are no separate `pcp_max_*` parameters, so PCP extraction and clade/window mutation counting filter branches identically.
 
@@ -500,7 +502,7 @@ results/
 │   ├── subtree_counts.csv         # Per-window per-mutation actual counts (coding)
 │   ├── founder_muts.csv           # Per-window subtree founders + haplotypes
 │   └── fitness_trajectory.csv     # Per-window expected counts + delta_fitness_ratio
-├── pcps/                          # One subdir per protein in pcp_genes (S, ORF1ab, E, ...)
+├── pcps/                          # One subdir per protein in pcp_genes (S, ORF1ab, E, ORF1b, ...)
 │   └── {gene}/
 │       ├── {clade}_pcps.csv.gz        # Curated parent-child pairs per clade (gzipped, v9+)
 │       ├── {clade}_pcps_dasm_ready.csv.gz # DASM-training-ready PCPs per clade (v2+)
@@ -624,6 +626,7 @@ pixi run python tests/test_lightswitch_boundary.py
 # cross-implementation DASM md5 is taken on the decompressed stream, so it
 # still compares payload to payload rather than container to container.
 pixi run python tests/test_pcp_compression.py
+pixi run python tests/test_pcp_gene_coordinates.py
 
 # Run pipeline on test data (uses max_clades=3, subset_frac=0.1)
 pixi run snakemake -j 4 --use-conda --configfile config/config_test_data.yaml

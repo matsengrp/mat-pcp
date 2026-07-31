@@ -94,12 +94,13 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 ### Testing
 ```bash
 # Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
-# all five before the pipeline steps)
+# all six before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 pixi run python tests/test_clade_founder_guards.py
 pixi run python tests/test_founder_codon_background.py
 pixi run python tests/test_lightswitch_boundary.py
 pixi run python tests/test_pcp_compression.py
+pixi run python tests/test_pcp_gene_coordinates.py
 
 # Run on test data (fast, uses max_clades=3)
 pixi run snakemake -j 2 --use-conda \
@@ -293,6 +294,50 @@ mat-pcp/
    `tests/test_pcp_compression.py`. See
    [#134](https://github.com/matsengrp/mat-pcp/issues/134).
 
+10. **nsp12 begins *before* the ribosomal frameshift, and a PCP gene is not
+    necessarily an `aamut_fitness` gene.** Two facts, each of which makes an
+    incorrect implementation look right.
+
+    *ORF1b is nsp12–nsp16, not the post-slippage product.* `orf1ab_to_nsps` puts
+    nsp12 (RdRp) at ORF1ab codons 4393–5324, but the −1 frameshift is at codon
+    4402 — so **nsp12's first 9 residues are translated in ORF1a's frame**.
+    Defining ORF1b as the post-slippage block alone (`(13468, 21552)`, one block,
+    2695 codons) is the obvious reading and silently clips 9 residues off the
+    N-terminus of the protein the work is chiefly for. ORF1b is therefore
+    `[[13442, 13468], [13468, 21552]]` — 8112 nt / 2704 codons, sharing nt 13468
+    exactly as ORF1ab does. Note the summed length (8112) is a whole number of
+    codons while the *span* (8111) is not; that shared nucleotide is why
+    `validate_cds_blocks` sums blocks rather than measuring the span. It is added
+    via `pcp_gene_cds_blocks` rather than the GTF because `edit_ref_gtf` feeds
+    `ref_coding_sites` → `counts_all.csv` → GLM → fitness: a GTF entry would make
+    every site in an 8 kb stretch multi-gene, and absent a matching
+    `gene_overlaps.retain` entry, `aamutfit.get_coding`'s `exclude_overlap`
+    default would silently drop all of nsp12–nsp16 from `aamut_fitness` — the
+    #129/#130 silent-drop shape again.
+
+    *The codon correspondence is derived, not declared.* `aamutfit.get_coding`
+    drops ORF1a (`aamutfit.py:80`), so `validate_pcp_vs_aamut.py`'s
+    `gene == {gene}` filter matched **zero rows** for ORF1a: through v8 that
+    validation reported no discrepancies because it had nothing to compare.
+    `modules/genemap.py` now maps codons by **genomic position** — two codons
+    correspond iff they occupy the same three reference nucleotides — which
+    matters because ORF1a's GTF block ends at 13480 while ORF1ab's first block
+    ends at 13468, so **ORF1a codons 4402–4405 have no ORF1ab counterpart at
+    all.** Under a bare `codon_offset: 0` those four would map onto ORF1ab codons
+    4402–4405, which are *ORF1b's* codons 10–13, and surface as four spurious
+    discrepancies indistinguishable from real ones. The configured
+    `codon_offset` is kept as a cross-check and disagreement raises.
+    `require_nonempty_fitness_slice` makes an empty slice fatal; that guard alone
+    would have caught the ORF1a gap.
+
+    Guarded by `tests/test_pcp_gene_coordinates.py` (unit; all five failure modes
+    mutation-tested) and `validate_test.py::validate_orf1b_founder_slice`, which
+    checks every clade's ORF1b founder byte-equals `ORF1ab[13176:21288]` — two
+    coordinate sets, one slicer, so a frame error moves one and not the other.
+    The test config carries ORF1b so the override runs end-to-end in CI; **ORF1a
+    is not in it**, so no pipeline run asserts the vacuity fix itself.
+    See [#133](https://github.com/matsengrp/mat-pcp/issues/133).
+
 ### Configuration Sections
 
 The configuration (`config/config.yaml`) is organized into:
@@ -331,7 +376,22 @@ The configuration (`config/config.yaml`) is organized into:
    expected synonymous == total observed synonymous per window by construction, and
    windowed fitness is directly comparable to the clade-based `aamut_fitness`.
 5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
-6. **PCP Extraction**: `pcp_genes` (PCP branch QC reuses the shared Mutation-Counting keys `max_nt_mutations` / `max_reversions_to_ref` / `max_reversions_to_clade_founder`)
+6. **PCP Extraction**: `pcp_genes` (PCP branch QC reuses the shared
+   Mutation-Counting keys `max_nt_mutations` / `max_reversions_to_ref` /
+   `max_reversions_to_clade_founder`), plus two optional maps that exist only
+   because a PCP gene need not be a GTF feature *or* an `aamut_fitness` gene
+   (#133):
+   - `pcp_gene_cds_blocks` — explicit 1-based-inclusive CDS blocks for genes the
+     reference GTF does not carry (currently `ORF1b` only). Consulted by
+     `gtf.resolve_cds_blocks` ahead of the GTF and deliberately **not** fed to
+     `edit_ref_gtf` / `ref_coding_sites`, so fitness outputs are untouched.
+     Add-only: overriding a gene the GTF defines raises. Every key must also be
+     in `pcp_genes`.
+   - `pcp_gene_to_fitness_gene` — PCP gene → `{gene, codon_offset}` naming the
+     `aamut_fitness` gene it is validated against. Needed for `ORF1a` (absent
+     from `aamut_fitness`) and `ORF1b` (a slice of `ORF1ab`). The offset is
+     re-derived from the CDS blocks and cross-checked against the configured
+     value, so a stale number fails loudly.
 7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources),
    `roemer_nextstrain_to_pango` (Nextstrain clade → Pango lineage, for clades not
    in the Neher JSON), `allow_reference_identical_founders` (optional; clades

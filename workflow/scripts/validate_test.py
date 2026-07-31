@@ -782,6 +782,88 @@ def validate_orf1ab_founder(output_dir):
     return differences, summary
 
 
+def validate_orf1b_founder_slice(output_dir):
+    """Every ORF1b founder must be exactly its clade's ORF1ab codons 4393-7096.
+
+    ORF1b (nsp12-nsp16) is a PCP-only gene whose coordinates come from
+    ``pcp_gene_cds_blocks`` rather than the reference GTF (#133). Its blocks,
+    ``[[13442, 13468], [13468, 21552]]``, share nt 13468 exactly as ORF1ab's do,
+    so a correct slice is byte-identical to the interior of the ORF1ab founder
+    the pipeline builds independently. That makes this the cheapest available
+    cross-check on the frameshift handling: the two founders are produced by the
+    same code from different coordinates, and any frame error moves one and not
+    the other.
+
+    Checked for **every** clade, not just 19A, because a coordinate error would
+    be identical across clades while a founder-construction error need not be.
+
+    Skips when ORF1b is not among ``pcp_genes``. If ORF1b is present but ORF1ab
+    is not, the identity cannot be checked; the frame checks still run and the
+    summary says so rather than implying the comparison happened.
+    """
+    orf1b_dir = os.path.join(output_dir, "clade_founders", "ORF1b")
+    if not os.path.isdir(orf1b_dir):
+        return [], None
+    orf1ab_dir = os.path.join(output_dir, "clade_founders", "ORF1ab")
+
+    def read_seq(path):
+        with open(path) as f:
+            return "".join(
+                line.strip() for line in f if not line.startswith(">")
+            ).upper()
+
+    differences = []
+    fastas = sorted(f for f in os.listdir(orf1b_dir) if f.endswith(".fa"))
+    if not fastas:
+        return [f"clade_founders/ORF1b/ exists but holds no .fa files"], None
+
+    n_compared = 0
+    for name in fastas:
+        clade = name[: -len(".fa")]
+        seq = read_seq(os.path.join(orf1b_dir, name))
+        if len(seq) != 8112:
+            differences.append(
+                f"ORF1b founder {clade} is {len(seq)} nt, expected 8112 "
+                f"(2704 codons)"
+            )
+        stops = [
+            (i // 3) + 1
+            for i in range(0, len(seq) - len(seq) % 3, 3)
+            if seq[i : i + 3] in _STOP_CODONS
+        ]
+        if stops:
+            differences.append(
+                f"ORF1b founder {clade} has internal stop codon(s) at "
+                f"codon {stops[:5]}"
+            )
+        orf1ab_path = os.path.join(orf1ab_dir, name)
+        if os.path.exists(orf1ab_path):
+            orf1ab_seq = read_seq(orf1ab_path)
+            expected = orf1ab_seq[13176:21288]
+            if seq != expected:
+                differences.append(
+                    f"ORF1b founder {clade} != ORF1ab[13176:21288] "
+                    f"({len(seq)} nt vs {len(expected)} nt); the frameshift "
+                    f"reconstruction disagrees between the two coordinate sets"
+                )
+            else:
+                n_compared += 1
+
+    if differences:
+        return differences, None
+    if n_compared:
+        summary = (
+            f"ORF1b founders: {len(fastas)} clades, 8112 nt = 2704 codons, no "
+            f"internal stop; {n_compared} byte-equal ORF1ab[13176:21288]"
+        )
+    else:
+        summary = (
+            f"ORF1b founders: {len(fastas)} clades in frame at 8112 nt, but "
+            f"ORF1ab is not in pcp_genes so the slice identity was not checked"
+        )
+    return differences, summary
+
+
 def validate_glm_synonymous_training(output_dir):
     """Check the GLM neutral model was trained on synonymous mutations only.
 
@@ -1007,11 +1089,12 @@ def main():
     reversion_diffs, reversion_summary = validate_reversion_masking(output_dir)
     spike_mask_diffs, spike_mask_summary = validate_spike_mask_all_clades(output_dir)
     orf1ab_diffs, orf1ab_summary = validate_orf1ab_founder(output_dir)
+    orf1b_diffs, orf1b_summary = validate_orf1b_founder_slice(output_dir)
     glm_syn_diffs, glm_syn_summary = validate_glm_synonymous_training(output_dir)
     codon_bg_diffs, codon_bg_summary = validate_founder_codon_background(output_dir)
     differences += (
         site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
-        + orf1ab_diffs + glm_syn_diffs + codon_bg_diffs
+        + orf1ab_diffs + orf1b_diffs + glm_syn_diffs + codon_bg_diffs
     )
 
     if differences:
@@ -1044,6 +1127,8 @@ def main():
             print(f"  - Spike codon mask (all-clades): {spike_mask_summary}")
         if orf1ab_summary:
             print(f"  - {orf1ab_summary}")
+        if orf1b_summary:
+            print(f"  - {orf1b_summary}")
         if glm_syn_summary:
             print(f"  - {glm_syn_summary}")
         if codon_bg_summary:
