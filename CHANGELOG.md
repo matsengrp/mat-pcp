@@ -60,6 +60,15 @@ cross-check disagreed.
   a one-row-per-mutation invariant are restored; a structural mismatch raises rather than
   reading as off-founder.
   **`actual_count` semantics therefore change for affected mutations.**
+  **The v8 blast radius is wider than the duplicated keys.** `genome_composition` counts grid
+  rows, so v8's 6,731 extra rows (4,581,890 − 4,575,159 = 13,146 − 6,415) inflated the
+  denominator of every clade's `evol_time` normalization. Measured v8→v9 on the
+  `2026-04-22` tree, per-clade `T` moves from **+5.91% (21J)** down to **−1.26% (21M)**, so
+  **every expected count in an affected clade was scaled wrong, not just the 6,415 duplicated
+  mutations.** For 21J S:A67V the fitted rate moved only +0.49% while `T` moved +5.91%,
+  giving the +6.43% change in `expected_count` (105.629 → 112.416) — i.e. the normalization,
+  not the rate table, is the dominant term. Treat v8 fitness values as unusable clade-wide
+  rather than mutation-wise.
 - **The light-switch boundary site is served the rate it was fitted with
   ([#125](https://github.com/matsengrp/mat-pcp/issues/125)).** `modules/glm.py` trains with
   `global_context = (nt_site > boundary)`, so `site == boundary` is fitted into the

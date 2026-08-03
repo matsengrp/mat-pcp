@@ -264,7 +264,16 @@ mat-pcp/
    `tests/test_lightswitch_boundary.py` (unit, and the *only* coverage: the test
    dataset has just 3 rows at a boundary site — AT @ 21562, one per clade — all
    with `actual_count` 0, so a test-data run has nothing asserting which rate
-   they are served). See
+   they are served).
+   **Both producers must be executed, not just named.** That test's
+   two-producer check originally called `lightswitch.before_boundary` directly
+   for the windowed side, so it compared `annotate_counts.py` against the shared
+   module and never ran `expected_counts.py` at all — reverting that call site to
+   `site < boundary` left the whole suite green. It now drives the real
+   `ExpectedCounts._add_context_features` (built with `object.__new__` and the two
+   attributes the method reads, since `__init__` demands a coding-sites table
+   irrelevant to the label). A test named for two producers that exercises one is
+   the same vacuity as pattern 10's `gene == {gene}` filter. See
    [#125](https://github.com/matsengrp/mat-pcp/issues/125).
 
 9. **PCP outputs are gzipped, and the DASM md5 is a *payload* hash.** The four
@@ -329,11 +338,41 @@ mat-pcp/
     4402–4405, which are *ORF1b's* codons 10–13, and surface as four spurious
     discrepancies indistinguishable from real ones. The configured
     `codon_offset` is kept as a cross-check and disagreement raises.
-    `require_nonempty_fitness_slice` makes an empty slice fatal; that guard alone
-    would have caught the ORF1a gap.
+    `require_nonempty_fitness_slice` makes an empty slice fatal — applied to the
+    *per-clade* table as well as the aggregate, since the aggregate being
+    non-empty does not imply the per-clade slice is and per-clade carries almost
+    all the rows. When both sides are empty nothing raises, so the report says
+    **VACUOUS** rather than "SUCCESS: All amino acid mutation counts match
+    exactly!", which is true of an empty comparison and is the wording that
+    concealed the v8 gap. Every report now also prints the compared row counts on
+    both sides, so "agreed" is distinguishable from "never compared".
 
-    Guarded by `tests/test_pcp_gene_coordinates.py` (unit; all five failure modes
-    mutation-tested) and `validate_test.py::validate_orf1b_founder_slice`, which
+    *A PCP gene's codon mask has its own two coordinate systems.* A gene reaching
+    `pcp_genes` only through `pcp_gene_cds_blocks` never appears in
+    `counts_all.csv`'s GTF-derived `gene` column, so `get_problematic_sites.py`
+    matched zero rows and wrote an **empty** mask at exit 0 — ORF1b's DASM-ready
+    PCPs kept every problematic codon site that every other gene had removed. Its
+    codons are now derived from `nt_site` via its own CDS blocks, and which
+    derivation applies is read from the *config* (does the gene have an override),
+    never from whether the count table happens to mention the gene: branching on
+    the data lets a gene defined in both places silently ignore its override and
+    bypass `resolve_cds_blocks`' add-only guard.
+    Two further traps here. `gene` and `codon_site` are **positionally paired**
+    `;`-joined cells (`"N;ORF9b"` with `"4;1"`), so they must be zipped and
+    filtered, never flattened — flattening files ORF9b's codon 1 as a codon of N,
+    and since ORF9b's numbers (1–98) are all valid N numbers no range check can
+    see it. And `validate_cds_blocks` must check that a shared nucleotide falls on
+    a **codon boundary**: `[[1, 11], [11, 20]]` shares exactly one nt and totals
+    21, so it passes the overlap and divisibility checks while reading nt 11 twice
+    *inside one codon*. At most one shared junction is allowed, since
+    `[[1, 3], [3, 5], [5, 7]]` is in frame at both and translates cleanly.
+
+    Guarded by `tests/test_pcp_gene_coordinates.py` (unit; every failure mode
+    mutation-tested, and it **execs the real `get_problematic_sites.py`** against a
+    stub `snakemake` — an earlier version re-implemented the script's
+    nt_site→codon inversion and asserted against its own copy, so three separate
+    breaks of the shipped script left it green) and
+    `validate_test.py::validate_orf1b_founder_slice`, which
     checks every clade's ORF1b founder byte-equals `ORF1ab[13176:21288]` — two
     coordinate sets, one slicer, so a frame error moves one and not the other.
     The test config carries ORF1b so the override runs end-to-end in CI; **ORF1a
