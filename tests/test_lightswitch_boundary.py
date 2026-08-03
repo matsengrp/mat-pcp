@@ -206,22 +206,70 @@ def check_boundary_site_is_before():
     return failures
 
 
-def check_both_label_producers_agree():
-    """The clade path and the windowed path must compute the same label."""
-    failures = []
+def _windowed_labels_from_module(mut_type, boundary, sites):
+    """Run ``expected_counts.py``'s *own* label computation over ``sites``.
+
+    The windowed producer is ``ExpectedCounts._add_context_features``, which
+    merges a per-mut_type ``nt_site_boundary`` column and then calls
+    ``lightswitch.before_boundary``. Calling ``before_boundary`` directly instead
+    -- which this check did originally -- compares ``annotate_counts.py`` against
+    the *shared module* and never executes ``expected_counts.py`` at all: a
+    two-producer test wearing a one-producer implementation. Reverting the call
+    site to ``the_df.site < the_df.nt_site_boundary`` (the v8 bug, in the path
+    CLAUDE.md pattern 8 says is uncovered) left all five test files green.
+
+    The instance is built with ``object.__new__`` and given only the two
+    attributes the method reads, because ``__init__`` demands a full coding-sites
+    table and reference genome that have nothing to do with the label. The method
+    under test is the real one, unpatched.
+    """
     import pandas as pd
 
-    lightswitch = _load_lightswitch()
+    expected_counts = _load_module(
+        "expected_counts", WORKFLOW_DIR / "modules" / "expected_counts.py"
+    )
+    engine = object.__new__(expected_counts.ExpectedCounts)
+    engine.basepair_df = pd.DataFrame({"site": sites, "unpaired": [0] * len(sites)})
+    boundary_series = pd.Series(
+        {mut_type: boundary}, name="nt_site_boundary", dtype="int64"
+    )
+    boundary_series.index.name = "mut_type"
+    engine.boundary_df = boundary_series
+
+    the_df = pd.DataFrame({
+        "site": sites,
+        "wt_nt": [mut_type[0]] * len(sites),
+        "mut_nt": [mut_type[1]] * len(sites),
+    })
+    # Long enough for the motif slice at site 29903; the motif is not asserted.
+    annotated = engine._add_context_features(the_df, "A" * 29910)
+    return annotated["nt_site_before_boundary"].tolist()
+
+
+def check_both_label_producers_agree():
+    """The clade path and the windowed path must compute the same label.
+
+    Both sides are extracted from the shipped files -- ``annotate_counts.py`` for
+    the clade path, ``expected_counts.py`` for the windowed one -- so that fixing
+    the convention in one and not the other fails here. That asymmetry is the
+    whole point of #125: the two paths must label the boundary site identically or
+    the ``evol_time`` normalization stops making clade and windowed fitness
+    comparable.
+    """
+    failures = []
     light_switch = _light_switch_from_script()
 
     for boundaries in (SHIPPED_BOUNDARIES, DISTINCT_BOUNDARIES):
         for mut_type, boundary in boundaries.items():
             sites = [1, boundary - 1, boundary, boundary + 1, 29903]
-            # Windowed path: expected_counts.py merges a per-mut_type
-            # ``nt_site_boundary`` column, then calls before_boundary vectorized.
-            windowed = lightswitch.before_boundary(
-                pd.Series(sites), pd.Series([boundary] * len(sites))
-            )
+            windowed = _windowed_labels_from_module(mut_type, boundary, sites)
+            if len(windowed) != len(sites):
+                failures.append(
+                    f"{mut_type}: windowed producer returned {len(windowed)} "
+                    f"labels for {len(sites)} sites, so the comparison below "
+                    f"would silently skip rows"
+                )
+                continue
             for site, window_label in zip(sites, windowed):
                 clade_label = light_switch(mut_type, site, boundaries)
                 if bool(clade_label) != bool(window_label):
@@ -230,7 +278,8 @@ def check_both_label_producers_agree():
                         f"says {clade_label}, windowed path says {window_label}"
                     )
     if not failures:
-        print("  clade and windowed label producers agree at every site tested")
+        print("  annotate_counts.py and expected_counts.py agree at every site "
+              "tested, including the boundary site itself")
     return failures
 
 

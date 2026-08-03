@@ -123,6 +123,17 @@ def validate_cds_blocks(gene, blocks, genome_length=None):
     # running backwards, a frame-shifted slice that still translates. That is the
     # exact failure this function exists to prevent, so it is checked explicitly
     # rather than left to the total.
+    # A shared nucleotide is only in frame when the junction falls on a codon
+    # boundary. Both real cases satisfy that (ORF1b's leading block is 27 nt,
+    # ORF1ab's is 13203, both multiples of 3), and neither the overlap check nor
+    # the whole-codon *total* below implies it: [[1, 11], [11, 20]] passes both
+    # (21 nt) while reading nt 11 twice *within one codon* -- (10, 11, 11). So the
+    # junction frame is checked at each shared nucleotide, and a second shared
+    # junction is rejected outright, because "the single -1 ribosomal frameshift
+    # nucleotide" is exactly one for every coronavirus ORF this supports and
+    # [[1, 4], [4, 7], [7, 10]] otherwise passes at 12 nt.
+    cumulative = 0
+    shared_junctions = 0
     for (prev_start, prev_end), (next_start, next_end) in zip(parsed, parsed[1:]):
         if next_start < prev_end:
             shared = prev_end - next_start + 1
@@ -132,6 +143,27 @@ def validate_cds_blocks(gene, blocks, genome_length=None):
                 f"share at most the single -1 ribosomal frameshift nucleotide "
                 f"(next start == previous end, as ORF1ab and ORF1b do at 13468); "
                 f"a larger overlap silently reverses genomic order within a codon."
+            )
+        cumulative += prev_end - prev_start + 1
+        if next_start != prev_end:
+            continue
+        shared_junctions += 1
+        if cumulative % 3 != 0:
+            raise ValueError(
+                f"pcp_gene_cds_blocks[{gene!r}] blocks ({prev_start}, {prev_end}) "
+                f"and ({next_start}, {next_end}) share nucleotide {prev_end}, but "
+                f"{cumulative} nt precede the junction -- not a whole number of "
+                f"codons, so that nucleotide is read twice *inside one codon* "
+                f"rather than at a frameshift. A -1 frameshift share is only in "
+                f"frame on a codon boundary."
+            )
+        if shared_junctions > 1:
+            raise ValueError(
+                f"pcp_gene_cds_blocks[{gene!r}] has {shared_junctions} junctions "
+                f"sharing a nucleotide (blocks {parsed!r}). At most one is "
+                f"supported: the single -1 ribosomal frameshift. Two shared "
+                f"junctions still sum to whole codons and still translate, so "
+                f"nothing downstream would catch it."
             )
 
     # Blocks may deliberately share a nucleotide (ORF1ab's and ORF1b's -1
