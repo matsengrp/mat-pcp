@@ -106,12 +106,23 @@ reference_clade: "19A"
 pcp_genes:
   - S
   - ORF1a
-  # ORF1b (nsp12-nsp16), M and N added for v9 (#133, EPIC #131 decision 6).
-  # Only ORF1b needs explicit coordinates; M and N are single-block, codon-aligned
-  # GTF features (666 nt / 222 codons and 1257 nt / 419 codons).
+  # ORF1b (nsp12-nsp16), M, N and E added for v9 (#133, EPIC #131 decision 6).
+  # Only ORF1b needs explicit coordinates; M, N and E are single-block,
+  # codon-aligned GTF features (666 nt / 222 codons, 1257 nt / 419 codons, and
+  # 225 nt / 75 codons).
+  #
+  # With E this covers every non-accessory protein: the four structural proteins
+  # (S, E, M, N) plus the replicase polyproteins (ORF1a, ORF1b). The accessory
+  # ORFs (3a, 6, 7a, 7b, 8, 9b, 10) are deliberately out of scope. E is the
+  # cheapest of the six by an order of magnitude -- 75 codons -- and needs no
+  # pcp_gene_cds_blocks (the GTF carries it at 26245-26469), no
+  # pcp_gene_to_fitness_gene (it reaches aamut_fitness under its own name), and
+  # no gene_overlaps entry (ORF3a ends at 26217, M starts at 26523, so E abuts
+  # neither).
   - ORF1b
   - M
   - N
+  - E
 
 # Explicit CDS blocks for PCP extraction only, for genes the shared reference
 # GTF does not carry. 1-based inclusive; the two blocks share nt 13468, which is

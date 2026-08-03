@@ -107,7 +107,17 @@ cross-check disagreed.
   excluded rather than mis-mapped onto ORF1b's frame) and an empty fitness slice is now fatal.
   **`validation/{gene}/pcp_vs_counts_report.txt` contents change**: the report names the
   fitness gene compared against, and for remapped genes the codon offset and corresponding-codon
-  count.
+  count; it also prints the compared row counts on both sides, and reports `VACUOUS` rather
+  than `SUCCESS` when zero discrepancies coincide with zero matches.
+- **The production config extracts every non-accessory protein.**
+  `pcp_genes` for the `2026-04-22` tree is `[S, ORF1a, ORF1b, M, N, E]`: the four structural
+  proteins plus the two replicase polyproteins. The accessory ORFs (3a, 6, 7a, 7b, 8, 9b, 10)
+  are deliberately out of scope. `M`, `N` and `E` are single-block, codon-aligned GTF features
+  (666 / 1257 / 225 nt), so only `ORF1b` needs `pcp_gene_cds_blocks`, and none of the three
+  needs a `pcp_gene_to_fitness_gene` entry or a `gene_overlaps` entry.
+  **Additive only** — each new protein adds `pcps/{gene}/`, `clade_founders/{gene}/`,
+  `{gene}_codon_sites_to_mask.txt` and `validation/{gene}/`, reading no existing schema and
+  changing no existing file.
 - Guarded the GLM's synonymous-only training set and its equivalence to
   `SARS2-mut-fitness-v2`'s reference rate table
   ([#127](https://github.com/matsengrp/mat-pcp/issues/127)). Tests and assertions only; no
