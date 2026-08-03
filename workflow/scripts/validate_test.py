@@ -803,7 +803,11 @@ def validate_orf1b_founder_slice(output_dir):
     """
     orf1b_dir = os.path.join(output_dir, "clade_founders", "ORF1b")
     if not os.path.isdir(orf1b_dir):
-        return [], None
+        # A visible SKIPPED, not a silent None: returning no summary makes a skip
+        # indistinguishable from a pass in the "All validation checks passed"
+        # block, which is how a check stops covering anything without anyone
+        # noticing.
+        return [], f"SKIPPED: no {orf1b_dir} (ORF1b not among pcp_genes)"
     orf1ab_dir = os.path.join(output_dir, "clade_founders", "ORF1ab")
 
     def read_seq(path):
@@ -974,7 +978,9 @@ def validate_founder_codon_background(output_dir):
     differences = []
     counts_path = Path(output_dir) / 'counts_all.csv'
     if not counts_path.exists():
-        return differences, None
+        # Visible SKIPPED rather than a silent None -- see
+        # validate_orf1b_founder_slice for why.
+        return differences, f"SKIPPED: no {counts_path}"
 
     seen = set()
     duplicates = []

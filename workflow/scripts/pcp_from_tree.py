@@ -64,7 +64,10 @@ gene = snakemake.wildcards.gene
 max_nt_mutations = snakemake.params.get("max_nt_mutations", 4)
 max_reversions = snakemake.params.get("max_reversions_to_ref", 1)
 max_reversions_to_founder = snakemake.params.get("max_reversions_to_clade_founder", 1)
-pcp_gene_cds_blocks = snakemake.params.get("pcp_gene_cds_blocks", {})
+# Attribute access, not .get: the Snakefile always declares this param (coerced
+# to {}), so a default here would mask a dropped declaration as "no overrides
+# configured" and silently fall back to the GTF for a PCP-only gene.
+pcp_gene_cds_blocks = snakemake.params.pcp_gene_cds_blocks
 
 # Clade founder sequence (optional, for filtering reversions to clade founder)
 clade_founder_fasta = snakemake.input.get("clade_founder_fasta", None)

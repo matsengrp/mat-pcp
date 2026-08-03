@@ -170,6 +170,17 @@ genemap.require_nonempty_fitness_slice(
     len(aamut_all),
     all_aamut_fitness_csv,
 )
+# The aggregate slice being non-empty does not imply the per-clade one is, and
+# the per-clade comparison is the one that carries almost all the rows (ORF1a:
+# 462,957 of 488,340 matches). An empty per-clade slice with PCP counts present
+# is the same vacuity #133 fixed, one table over.
+genemap.require_nonempty_fitness_slice(
+    pcp_gene_name,
+    fitness_gene,
+    len(pcp_counts),
+    len(aamut_clade_df),
+    f"{len(aamut_fitness_files)} per-clade aamut_fitness files",
+)
 
 
 def compare_counts(pcp_df, aamut_df, clade_col="clade", is_aggregate=False):
@@ -293,6 +304,13 @@ with open(output_report, "w") as f:
         f.write(f"Corresponding codons: {len(codon_map)}\n")
     else:
         f.write(f"Compared against aamut_fitness gene: {fitness_gene}\n")
+    # Row counts on both sides, so a reader can tell "nothing disagreed" from
+    # "nothing was compared". Through v8 the ORF1a report said no discrepancies
+    # because its fitness slice was empty (#133), and the report gave no way to
+    # see that from its own contents.
+    f.write(f"PCP-derived count rows compared: {len(pcp_counts)}\n")
+    f.write(f"aamut_fitness rows compared: per-clade {len(aamut_clade_df)}, "
+            f"aggregate {len(aamut_all)}\n")
     f.write(f"Per-clade exact matches: {clade_matches}\n")
     f.write(f"Per-clade discrepancies: {clade_disc_count}\n")
     f.write(f"Aggregate exact matches: {agg_matches}\n")
@@ -321,10 +339,25 @@ with open(output_report, "w") as f:
             f"{len(pcp_counts_no_counterpart)}\n\n"
         )
 
-    if total_discrepancies == 0:
+    if total_discrepancies == 0 and clade_matches + agg_matches == 0:
+        # Zero discrepancies *and* zero matches means the two sides never met.
+        # "SUCCESS: all counts match exactly" is the exact wording that concealed
+        # the vacuous ORF1a validation through v8, and it is true of an empty
+        # comparison, so it must not be reachable from one.
+        f.write("VACUOUS: no amino acid mutation was compared at all.\n\n")
+        f.write(
+            f"Zero discrepancies here means the two sides shared no rows, not "
+            f"that they agree: {len(pcp_counts)} PCP-derived rows and "
+            f"{len(aamut_clade_df)} per-clade / {len(aamut_all)} aggregate "
+            f"{fitness_gene} rows produced no comparison. Check that "
+            f"{pcp_gene_name} reaches aamut_fitness under {fitness_gene}, and "
+            f"that the codon correspondence is not empty.\n"
+        )
+    elif total_discrepancies == 0:
         f.write("SUCCESS: All amino acid mutation counts match exactly!\n\n")
         f.write(
-            "The PCP extraction and aamut_fitness pipelines are consistent.\n"
+            f"The PCP extraction and aamut_fitness pipelines are consistent "
+            f"across {clade_matches + agg_matches} compared mutations.\n"
         )
     else:
         f.write("DISCREPANCY BREAKDOWN\n")

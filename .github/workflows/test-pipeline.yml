@@ -163,6 +163,33 @@ jobs:
       run: |
         pixi run python tests/test_pcp_gene_coordinates.py
 
+    # The steps above name each test file so a failure points at a readable log.
+    # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]
+    # is empty, so a *new* tests/test_*.py runs zero times and CI stays green --
+    # the same invisibility this suite exists to fight. This sweep is the
+    # backstop; it re-runs the files above (seconds, all fixture-only) and fails
+    # on any that is not wired up individually.
+    - name: Verify every tests/test_*.py file actually runs
+      run: |
+        set -uo pipefail
+        status=0
+        found=0
+        for f in tests/test_*.py; do
+          found=$((found + 1))
+          echo "::group::$f"
+          if ! pixi run python "$f"; then
+            echo "FAILED: $f"
+            status=1
+          fi
+          echo "::endgroup::"
+        done
+        if [ "$found" -eq 0 ]; then
+          echo "No tests/test_*.py files matched -- the glob or the layout changed."
+          exit 1
+        fi
+        echo "Ran $found test files."
+        exit "$status"
+
     - name: Validate Snakefile syntax
       run: |
         # Note: --lint returns non-zero for style suggestions (e.g., "Mixed rules and functions")
@@ -1033,38 +1060,63 @@ jobs:
         pixi run python -c "
         import pandas as pd, sys
 
+        import yaml
+        # Derive every coordinate from the config rather than restating it, so a
+        # config edit cannot drift silently past this assertion.
+        cfg = yaml.safe_load(open('config/config_test_data.yaml'))
+        blocks = cfg['pcp_gene_cds_blocks']['ORF1b']
+        remap = cfg['pcp_gene_to_fitness_gene']['ORF1b']
+        offset, fitness_gene = remap['codon_offset'], remap['gene']
+        cds_nt = sum(end - start + 1 for start, end in blocks)
+        n_codons = cds_nt // 3
+        if fitness_gene not in cfg['pcp_genes']:
+            sys.exit(f'this step compares ORF1b against {fitness_gene}, which is '
+                     f'not in pcp_genes -- add it, or the mask comparison below '
+                     f'has no {fitness_gene} mask to read')
+        print(f'config: ORF1b = {blocks} = {cds_nt} nt = {n_codons} codons, '
+              f'validated against {fitness_gene} at offset {offset}')
+
         df = pd.read_csv('${OUTPUT_DIR}/pcps/ORF1b/all_pcps.csv.gz')
         lengths = set(df['parent'].str.len()) | set(df['child'].str.len())
         print(f'ORF1b PCPs: {len(df)} rows, sequence lengths {sorted(lengths)}')
-        if lengths != {8112}:
-            sys.exit(f'ORF1b PCP sequences must all be 8112 nt; got {sorted(lengths)}')
+        if lengths != {cds_nt}:
+            sys.exit(f'ORF1b PCP sequences must all be {cds_nt} nt; got {sorted(lengths)}')
 
         report = open('${OUTPUT_DIR}/validation/ORF1b/pcp_vs_counts_report.txt').read()
-        for needle in ['Compared against aamut_fitness gene: ORF1ab',
-                       'Corresponding codons: 2704']:
+        for needle in [f'Compared against aamut_fitness gene: {fitness_gene}',
+                       f'Corresponding codons: {n_codons}']:
             if needle not in report:
                 sys.exit(f'ORF1b report is missing {needle!r}; the fitness-gene '
                          f'remapping did not happen, so the comparison is vacuous')
-        print('ORF1b validated against ORF1ab over 2704 corresponding codons')
+        print(f'ORF1b validated against {fitness_gene} over {n_codons} '
+              f'corresponding codons')
 
-        read_mask = lambda g: {int(l) for l in open(f'${OUTPUT_DIR}/{g}_codon_sites_to_mask.txt') if l.strip()}
-        orf1b_mask, orf1ab_mask = read_mask('ORF1b'), read_mask('ORF1ab')
+        def read_mask(gene):
+            path = f'${OUTPUT_DIR}/{gene}_codon_sites_to_mask.txt'
+            return {int(line) for line in open(path) if line.strip()}
+
+        orf1b_mask, orf1ab_mask = read_mask('ORF1b'), read_mask(fitness_gene)
         if not orf1b_mask:
             sys.exit('ORF1b_codon_sites_to_mask.txt is empty. ORF1b resolves its '
                      'coordinates from pcp_gene_cds_blocks and never appears in '
                      'counts_all.csv gene column, so a name-based match silently '
                      'masks nothing and its DASM-ready PCPs keep every '
                      'problematic site (#133)')
-        if max(orf1b_mask) > 2704 or min(orf1b_mask) < 1:
-            sys.exit(f'ORF1b codon sites must fall in 1..2704; got '
+        if max(orf1b_mask) > n_codons or min(orf1b_mask) < 1:
+            sys.exit(f'ORF1b codon sites must fall in 1..{n_codons}; got '
                      f'{min(orf1b_mask)}..{max(orf1b_mask)} -- the mask is in the '
                      f'wrong codon numbering')
-        shifted = {c - 4392 for c in orf1ab_mask if 4393 <= c <= 7096}
+        # Two derivations of one thing: ORF1b's mask comes from nt_site via its
+        # CDS blocks, ORF1ab's from the count table's own codon_site column, so
+        # equality here means the two coordinate systems agree.
+        first, last = offset + 1, offset + n_codons
+        shifted = {c - offset for c in orf1ab_mask if first <= c <= last}
         if orf1b_mask != shifted:
-            sys.exit(f'ORF1b mask disagrees with ORF1ab shifted by 4392: only in '
-                     f'ORF1b {sorted(orf1b_mask - shifted)}, only in shifted '
-                     f'{sorted(shifted - orf1b_mask)}')
-        print(f'ORF1b masks {len(orf1b_mask)} codon sites == ORF1ab[4393:7096] - 4392')
+            sys.exit(f'ORF1b mask disagrees with {fitness_gene} shifted by '
+                     f'{offset}: only in ORF1b {sorted(orf1b_mask - shifted)}, '
+                     f'only in shifted {sorted(shifted - orf1b_mask)}')
+        print(f'ORF1b masks {len(orf1b_mask)} codon sites == '
+              f'{fitness_gene}[{first}:{last}] - {offset}')
         "
 
     - name: Check validation results

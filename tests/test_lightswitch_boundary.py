@@ -164,6 +164,12 @@ def check_complement_of_training_predicate():
                 f"configured boundary at {boundary}"
             )
             continue
+        if len(global_context) != len(sites):
+            failures.append(
+                f"{mut_type}: glm returned {len(global_context)} labels for "
+                f"{len(sites)} sites; zip would silently compare a prefix"
+            )
+            continue
         for site, gc in zip(sites, global_context):
             label = lightswitch.before_boundary(site, boundary)
             expected = gc == 0

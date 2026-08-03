@@ -21,8 +21,10 @@ pipeline run while being wrong:
    mislabelled, identically, with the row count unchanged and no cross-check able
    to see it.
 
-Checks 2 and 3 are mutation-tested -- each demonstrates that the failure it
-guards is real -- because a check that cannot fail is worse than no check.
+Check 2 is mutation-tested: it writes the same frame twice with ``mtime=1`` and
+``mtime=2`` and requires those bytes to differ, so the reproducibility assertion
+is known to be capable of failing. A check that cannot fail is worse than no
+check -- and harder to spot, since it looks like coverage.
 
 Usage:
     python tests/test_pcp_compression.py
@@ -272,16 +274,12 @@ def check_clade_derivation():
         if got != expected:
             failures.append(f"{path} -> {got!r}, expected {expected!r}")
 
-    # Mutation half: the old implementation must fail these, or the check is
-    # not actually pinning the bug.
-    import os as _os
-
-    old_style = _os.path.basename("19A_pcps.csv.gz").replace("_pcps.csv", "")
-    if old_style == "19A":
-        failures.append(
-            "the pre-fix replace() form yields '19A' here, so this check does "
-            "not pin the #134 mislabelling bug"
-        )
+    # The pinning is done by the `derive(...)` cases above, which fail if the
+    # suffix handling is narrowed. A previous version of this block also
+    # evaluated the pre-fix `replace("_pcps.csv", "")` on a literal to
+    # "demonstrate" the bug -- but that expression involves no shipped code and
+    # is always "19A.gz", so its failure branch was unreachable and it pinned
+    # `str.replace`. Removed rather than left looking like a mutation test.
 
     try:
         derive("something_else.txt")
