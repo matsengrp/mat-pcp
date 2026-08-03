@@ -13,7 +13,7 @@ This pipeline combines functionality from three previously separate projects:
 
 The pipeline uses simple integer versioning (v1, v2, v3, etc.) to enable reproducibility tracking. The version is automatically appended to output directories to clearly identify which pipeline version produced the outputs.
 
-- **Current Version**: v4 (see [CHANGELOG.md](CHANGELOG.md) for version history)
+- **Current Version**: v9 (see [CHANGELOG.md](CHANGELOG.md) for version history)
 - **Version File**: The pipeline version is stored in the `VERSION` file at the repository root
 - **Output Naming**: Outputs are automatically versioned (e.g., `results/public_2022-06-01_v1`)
 - **Git Tags**: Each version is tagged in git for easy reference (e.g., `git checkout v1`)
@@ -67,15 +67,15 @@ global `qc_filter_options.max_leaf_date`.
 
 ```yaml
 # Optional; defaults to "results". Each tree writes to
-# {output_root}/{label}_{version}, e.g. results/public_2022-06-01_v5.
+# {output_root}/{label}_{version}, e.g. results/public_2022-06-01_v9.
 output_root: "results"
 
 trees:
-  public_2022-06-01:                       # -> results/public_2022-06-01_v5
+  public_2022-06-01:                       # -> results/public_2022-06-01_v9
     mat: "path/to/2022-06-01/tree.pb.gz"
     metadata: "path/to/2022-06-01/metadata.tsv.gz"
     max_leaf_date: "2022-06-01"            # per-tree override
-  public_2023-01-01:                       # -> results/public_2023-01-01_v5
+  public_2023-01-01:                       # -> results/public_2023-01-01_v9
     mat: "path/to/2023-01-01/tree.pb.gz"
     metadata: "path/to/2023-01-01/metadata.tsv.gz"
     # max_leaf_date omitted -> inherits the global default
@@ -97,7 +97,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml
 
 # Run specific target (per-tree output path)
 pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
-  results/public_2022-06-01_v5/aamut_fitness/all_aamut_fitness.csv
+  results/public_2022-06-01_v9/aamut_fitness/all_aamut_fitness.csv
 ```
 
 ## Pipeline Stages
@@ -106,7 +106,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 |-------|-------------|-------------|
 | 1. Input & Reference | Filter metadata, link inputs, fetch reference genome and annotations | `filtered_metadata.tsv.gz`, `ref.fa`, `coding_sites.csv` |
 | 1b. Node Dating & Sliding Windows | Date every node with chronumental (QC-gated), then bucket branch mutations into sliding time windows over the full dated tree and compute per-window expected counts + `delta_fitness_ratio` (EPIC [#115](https://github.com/matsengrp/mat-pcp/issues/115)) | `mat/node_dates.tsv`, `windows/subtree_counts.csv`, `windows/fitness_trajectory.csv` |
-| 2. Clade Processing & PCPs | Identify clades, extract clade subtrees, and emit curated PCPs in one pass (identical-slice branches are dropped during extraction), fanned over each protein in `pcp_genes`. DASM-training-ready siblings are emitted alongside. | `clade_counts.csv`, `clades/{clade}_tree.pb`, `pcps/{gene}/{clade}_pcps.csv`, `pcps/{gene}/all_pcps.csv`, `pcps/{gene}/{clade}_pcps_dasm_ready.csv`, `pcps/{gene}/all_pcps_dasm_ready.csv`, `pcps/{gene}/pcp_curation_report.txt` |
+| 2. Clade Processing & PCPs | Identify clades, extract clade subtrees, and emit curated PCPs in one pass (identical-slice branches are dropped during extraction), fanned over each protein in `pcp_genes`. DASM-training-ready siblings are emitted alongside. | `clade_counts.csv`, `clades/{clade}_tree.pb`, `pcps/{gene}/{clade}_pcps.csv.gz`, `pcps/{gene}/all_pcps.csv.gz`, `pcps/{gene}/{clade}_pcps_dasm_ready.csv.gz`, `pcps/{gene}/all_pcps_dasm_ready.csv.gz`, `pcps/{gene}/pcp_curation_report.txt` |
 | 3a. Clade Founders | Download and process clade founder sequences (whole-genome + one gene-sliced founder per protein in `pcp_genes`) | `clade_founders/{clade}.fa`, `clade_founders/{gene}/{clade}.fa`, `clade_founder_nts.csv` |
 | 3b. Mutation Counting | Translate mutations, count per-clade mutations (harmonized with PCP filtering) | `mutations/{clade}_mutations.tsv`, `mutation_counts/aggregated.csv` |
 | 4. Unified Count Table | Enumerate all possible mutations, join actual counts, compute masking flags once | `counts_all.csv` |
@@ -122,10 +122,10 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 
 | Output | Description |
 |--------|-------------|
-| `pcps/{gene}/all_pcps.csv` | All curated parent-child pairs with clade annotations, per protein in `pcp_genes` |
-| `pcps/{gene}/all_pcps_dasm_ready.csv` | DASM-training-ready PCPs (filters + 90/10 `in_train` split applied); per-clade siblings at `pcps/{gene}/{clade}_pcps_dasm_ready.csv` |
+| `pcps/{gene}/all_pcps.csv.gz` | All curated parent-child pairs with clade annotations, per protein in `pcp_genes`. Gzipped since v9 (#134); `pandas` and `dasm2`'s loader read it transparently |
+| `pcps/{gene}/all_pcps_dasm_ready.csv.gz` | DASM-training-ready PCPs (filters + 90/10 `in_train` split applied); per-clade siblings at `pcps/{gene}/{clade}_pcps_dasm_ready.csv.gz` |
 | `pcps/{gene}/pcp_curation_report.txt` | Report showing PCP filtering statistics |
-| `pcps/{gene}/filtered_branch_ids.csv` | Branch IDs excluded from mutation counting |
+| `pcps/{gene}/filtered_branch_ids.csv` | Branch IDs dropped during PCP curation, aggregated across clades. Retained for inspection only — nothing in the pipeline reads it; harmonization with mutation counting comes from the shared `max_nt_mutations` / `max_reversions_*` config keys. Not gzipped |
 | `mat/clade_counts.csv` | Sample counts per clade |
 | `clade_founder_nts.csv` | Nucleotide at each coding site for all clade founders |
 | `mutation_counts/aggregated.csv` | Aggregated mutation counts across all clades |
@@ -138,7 +138,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `fitness/expected_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
 | `aamut_fitness/all_aamut_fitness.csv` | Amino acid-level fitness estimates |
-| `validation/<gene>/pcp_vs_counts_report.txt` | PCP vs counts validation report (one per protein) |
+| `validation/<gene>/pcp_vs_counts_report.txt` | PCP vs counts validation report (one per protein). Names the `aamut_fitness` gene compared against and, where the two differ, the codon offset and the count of corresponding codons; codons with no counterpart in that gene's reading frame are reported as their own category rather than as discrepancies (v9, #133) |
 | `mat/node_dates.tsv` | chronumental-inferred date for every tip and internal node (+ `node_dates_qc.tsv` / `node_dates_residuals.csv` QC artifacts) |
 | `windows/subtree_counts.csv` | Per-window, per-mutation actual counts over the full dated tree (coding only); `windows/founder_muts.csv` holds the per-window subtree founders |
 | `windows/fitness_trajectory.csv` | Mutation × time-window fitness trajectory: per-window `expected_count` and `delta_fitness_ratio` (comparable to `aamut_fitness`) |
@@ -331,7 +331,9 @@ Windows tile the full dated tree, anchored at the end date and stepping backward
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `pcp_genes` | List of protein symbols to extract PCPs and gene-sliced founders for. PCP extraction is fanned over this list; each protein's coordinates come from the reference GTF (`cds_blocks_for_gene`), so outputs land under `pcps/{gene}/` and `clade_founders/{gene}/`. ORF1ab is reconstructed as one frameshifted CDS. Must be non-empty. Production `config.yaml` ships `[S]` (Spike-only, byte-identical to v5); the test configs use `[S, ORF1ab, E]`. | `[S]` |
+| `pcp_genes` | List of protein symbols to extract PCPs and gene-sliced founders for. PCP extraction is fanned over this list; each protein's coordinates come from `pcp_gene_cds_blocks` if it names the gene, otherwise from the reference GTF (`gtf.resolve_cds_blocks`), so outputs land under `pcps/{gene}/` and `clade_founders/{gene}/`. ORF1ab is reconstructed as one frameshifted CDS. Must be non-empty. Production `config.yaml` ships `[S]` (Spike-only, byte-identical to v5); the v9 production config uses `[S, ORF1a, ORF1b, M, N, E]` — every non-accessory protein, i.e. the four structural proteins plus the two replicase polyproteins, with the accessory ORFs (3a, 6, 7a, 7b, 8, 9b, 10) deliberately out of scope — and `config_test_data.yaml` uses `[S, ORF1ab, E, ORF1b]`. | `[S]` |
+| `pcp_gene_cds_blocks` | Optional map of gene → explicit CDS blocks (`[[start, end], ...]`, 1-based inclusive), for PCP genes the reference GTF does not carry. Currently `ORF1b: [[13442, 13468], [13468, 21552]]` (nsp12–nsp16; the two blocks share nt 13468, the −1 ribosomal frameshift, so the summed length 8112 nt = 2704 codons is in frame even though the span is 8111). Blocks are validated (ascending, in range, whole codons) because a mis-specified block still translates. **Add-only**: overriding a gene the GTF already defines raises, and every key must also appear in `pcp_genes`. Deliberately not fed to `edit_ref_gtf` / `ref_coding_sites`, so fitness outputs are untouched. | `{}` |
+| `pcp_gene_to_fitness_gene` | Optional map of PCP gene → `{gene, codon_offset}`, naming the `aamut_fitness` gene that gene is validated against and the codon shift between them. Needed only where a PCP gene is absent from `aamut_fitness` under its own name and numbering: `ORF1a: {gene: ORF1ab, codon_offset: 0}` (ORF1a is dropped by `aamutfit.get_coding`) and `ORF1b: {gene: ORF1ab, codon_offset: 4392}`. The offset is re-derived from both genes' CDS blocks and cross-checked against the configured value, so a stale number fails loudly rather than shifting the comparison. | `{}` |
 
 PCP branch QC reuses the shared Mutation-Counting keys (`max_nt_mutations`, `max_reversions_to_ref`, `max_reversions_to_clade_founder`; see the Mutation Counting section) — there are no separate `pcp_max_*` parameters, so PCP extraction and clade/window mutation counting filter branches identically.
 
@@ -399,7 +401,7 @@ During initial PCP extraction (`extract_pcps_by_clade`), branches are filtered b
 
 `extract_pcps_by_clade` removes parent/child pairs whose sliced sequences are identical in the same pass that builds them:
 
-1. **Identical sequences**: Parent and child sequences that are identical (in the gene region) are dropped before the per-clade `pcps/{clade}_pcps.csv` is written.
+1. **Identical sequences**: Parent and child sequences that are identical (in the gene region) are dropped before the per-clade `pcps/{gene}/{clade}_pcps.csv.gz` is written.
 
 The IDs of dropped branches are written to `pcps/{gene}/{clade}_filtered_branches.csv` and consumed downstream by mutation counting (see "Harmonized Mutation Counting" below).
 
@@ -500,15 +502,15 @@ results/
 │   ├── subtree_counts.csv         # Per-window per-mutation actual counts (coding)
 │   ├── founder_muts.csv           # Per-window subtree founders + haplotypes
 │   └── fitness_trajectory.csv     # Per-window expected counts + delta_fitness_ratio
-├── pcps/                          # One subdir per protein in pcp_genes (S, ORF1ab, E, ...)
+├── pcps/                          # One subdir per protein in pcp_genes (S, ORF1ab, E, ORF1b, ...)
 │   └── {gene}/
-│       ├── {clade}_pcps.csv           # Curated parent-child pairs per clade
-│       ├── {clade}_pcps_dasm_ready.csv    # DASM-training-ready PCPs per clade (v2+)
+│       ├── {clade}_pcps.csv.gz        # Curated parent-child pairs per clade (gzipped, v9+)
+│       ├── {clade}_pcps_dasm_ready.csv.gz # DASM-training-ready PCPs per clade (v2+)
 │       ├── {clade}_dasm_filter_report.txt # Per-filter drop counts (v2+)
 │       ├── {clade}_dasm_filter_stats.json # Machine-readable filter stats (v2+)
 │       ├── {clade}_filtered_branches.csv  # Branch IDs filtered during curation
-│       ├── all_pcps.csv               # Aggregated curated PCPs across all clades
-│       ├── all_pcps_dasm_ready.csv    # DASM-training-ready aggregate (v2+)
+│       ├── all_pcps.csv.gz            # Aggregated curated PCPs across all clades
+│       ├── all_pcps_dasm_ready.csv.gz # DASM-training-ready aggregate (v2+)
 │       ├── pcp_curation_report.txt    # PCP curation statistics
 │       └── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
 ├── ref/
@@ -604,6 +606,27 @@ See `archives/README.md` for detailed archiving guidelines.
 # Unit test: GLM neutral model is synonymous-only and matches
 # SARS2-mut-fitness-v2 (frozen fixtures; no pipeline run needed)
 pixi run python tests/test_glm_reference_equivalence.py
+
+# Unit test: an unresolvable clade founder fails loudly instead of
+# silently falling back to the Wuhan reference (no pipeline run needed)
+pixi run python tests/test_clade_founder_guards.py
+
+# Unit test: only observations on the clade-founder codon background are
+# counted, one row per (clade, nt_mutation). The test dataset has no
+# off-founder backgrounds, so these fixtures are the only coverage.
+pixi run python tests/test_founder_codon_background.py
+
+# Unit test: the GLM light-switch boundary site is labelled into the same
+# bucket it is fitted into, in both label producers (clade + windowed paths).
+# No shipped config can expose the per-mutation-type lookup, so these
+# fixtures are the only coverage.
+pixi run python tests/test_lightswitch_boundary.py
+
+# Unit test: PCP outputs are gzipped reproducibly (mtime=0) and the
+# cross-implementation DASM md5 is taken on the decompressed stream, so it
+# still compares payload to payload rather than container to container.
+pixi run python tests/test_pcp_compression.py
+pixi run python tests/test_pcp_gene_coordinates.py
 
 # Run pipeline on test data (uses max_clades=3, subset_frac=0.1)
 pixi run snakemake -j 4 --use-conda --configfile config/config_test_data.yaml

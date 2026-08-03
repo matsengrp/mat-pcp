@@ -32,11 +32,36 @@ neutral-model footing as the clade-based ``aamut_fitness``. Finally
 ``p`` (default 0.5), matching ``aamutfit.ratio_fitness``.
 """
 
+import os
 import re
-from collections import defaultdict
+import sys
+from collections import defaultdict, namedtuple
+from importlib import util as importlib_util
 
 import numpy as np
 import pandas as pd
+
+
+def _load_lightswitch_module():
+    """Load the sibling ``lightswitch`` module by path.
+
+    Same pattern as ``rates.py::_load_glm_module``: ``workflow/modules`` is not on
+    ``sys.path`` in the conda envs these run under. ``lightswitch`` is a
+    dependency-free leaf module, so this adds no import weight to the envs that
+    load ``expected_counts``.
+    """
+    if "lightswitch" in sys.modules:
+        return sys.modules["lightswitch"]
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lightswitch.py")
+    spec = importlib_util.spec_from_file_location("lightswitch", path)
+    module = importlib_util.module_from_spec(spec)
+    sys.modules["lightswitch"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+lightswitch = _load_lightswitch_module()
 
 # Standard genetic code (identical to s2trajectory's CODON_TABLE).
 CODON_TABLE = {
@@ -59,7 +84,7 @@ CODON_TABLE = {
 }
 
 # The three alternate nucleotides for each wt base, in the order all_poss_muts
-# enumerates them. Shared by all_poss_muts and ExpectedCounts._founder_rec so the
+# enumerates them. Shared by all_poss_muts and ExpectedCounts._recompute_founder_touched_rows so the
 # two enumeration paths cannot drift (grouping is order-independent, but keeping a
 # single source of truth removes the "must match" comment-only invariant).
 ALT_NUC = [
@@ -305,7 +330,7 @@ class ExpectedCounts:
 
         Alternate-nucleotide order and every derived value match
         :func:`all_poss_muts` / :meth:`_build_rate_table`, so
-        :meth:`_founder_rec` reproduces :meth:`founder_rate_table`'s recomputed
+        :meth:`_recompute_founder_touched_rows` reproduces :meth:`founder_rate_table`'s recomputed
         rows (verified to float precision on the test data).
         """
         rt = self._reference_table
@@ -357,7 +382,7 @@ class ExpectedCounts:
             rate_lookup[(mt, mo, bool(up), bool(nb))] = float(rate)
         self._rate_lookup = rate_lookup
 
-    def _founder_rec(self, fmuts, sites):
+    def _recompute_founder_touched_rows(self, fmuts, sites):
         """O(#touched-sites) recompute of a founder's touched-codon rate rows.
 
         Returns ``(rec_rate, rec_syn, rec_obs)`` where ``rec_rate`` is
@@ -494,7 +519,17 @@ class ExpectedCounts:
                 f"{int(missing.sum())} mutation rows lack an unpaired/boundary "
                 "annotation (site or mut_type not covered); this should be complete."
             )
-        the_df["nt_site_before_boundary"] = the_df.site < the_df.nt_site_boundary
+        # ``site <= boundary``, shared with the clade path's
+        # ``annotate_counts.py::light_switch`` via ``modules/lightswitch.py`` (#125).
+        # Fixing only one of the two would leave the clade and windowed fitness
+        # paths labelling the boundary site differently, and nothing in the test
+        # suite would notice -- #127's fixture pins stored labels, not computed
+        # ones. ``nt_site_boundary`` is 0 for mutation types with no configured
+        # boundary (``scripts/master_table.py``), and sites are 1-based, so those
+        # stay ``False`` under ``<=`` exactly as they were under ``<``.
+        the_df["nt_site_before_boundary"] = lightswitch.before_boundary(
+            the_df.site, the_df.nt_site_boundary
+        )
         return the_df
 
     def _build_rate_table(self, site_map, ref_seq):
@@ -610,6 +645,111 @@ class ExpectedCounts:
 # --------------------------------------------------------------------------- #
 # Driver: windowed actual + expected -> delta_fitness_ratio trajectory
 # --------------------------------------------------------------------------- #
+class _WindowDelta:
+    """Mutable per-window accumulators for the delta-accumulation scheme (#123).
+
+    Deliberately a plain container with no arithmetic: the subtlety all lives in
+    :func:`_apply_founder_delta`, so there is exactly one place to read.
+
+    ``rate`` starts at ``N * base`` (``N`` = founders in the window) because each
+    founder's contribution is expressed as a delta on the reference enumeration,
+    which is identical for every founder. ``removed_count`` tracks
+    reference-context IDs whose codon a founder fully touches, so IDs touched by
+    *every* founder -- which cancel to ~0 and never appeared in the old
+    sum-over-founders table -- can be dropped afterwards, preserving membership.
+    """
+
+    __slots__ = ("rate", "act", "syn_ids", "removed_count", "rec_ids_seen")
+
+    def __init__(self, base_by_id, base_syn_ids, n_founders):
+        self.rate = (base_by_id * float(n_founders)).to_dict()  # N * base
+        self.act = defaultdict(float)
+        # reference syn IDs; founder-context ones are added per founder
+        self.syn_ids = set(base_syn_ids)
+        self.removed_count = defaultdict(int)  # base ID -> #founders fully removing it
+        self.rec_ids_seen = set()
+
+
+#: Observed-count bookkeeping for one founder, summed by the caller across the run.
+_FounderObs = namedtuple("_FounderObs", "observed reversion_masked unmatched")
+
+
+def _apply_founder_delta(ec, fmuts, founder_counts, acc):
+    """Fold one founder's rate delta and observed counts into ``acc``.
+
+    Extracted from :func:`compute_fitness_trajectory` (#123) because this is the
+    part of the delta scheme worth reading on its own; the statements are
+    unchanged, so the arithmetic and its floating-point ordering are identical to
+    the inline version.
+
+    Args:
+        ec: initialized :class:`ExpectedCounts`.
+        fmuts: this founder's ``{site: nt}`` mutation dict (possibly empty).
+        founder_counts: this founder's rows of ``subtree_counts``, or ``None``.
+        acc: the window's :class:`_WindowDelta`, mutated in place.
+
+    Returns a :class:`_FounderObs` of observed-row counters for the caller to sum.
+    """
+    sites = ec._touched_sites(fmuts) if fmuts else []
+    touched = set(sites)
+    # Founder->reference reversions (destination base == reference base) arise
+    # only at founder-mutated sites; masked from both the expected enumeration
+    # (inside _recompute_founder_touched_rows) and the actual counts below, to
+    # mirror the clade path's to_nt == ref_nt exclusion.
+    ref_at_mut = {s: ec.ref_seq[s - 1] for s in fmuts} if fmuts else {}
+
+    # founder-context recomputed rows for touched codons, as compact per-ID
+    # dicts (reversion mask + ORF1a drop applied inside).
+    rec_rate, rec_syn, rec_obs = ec._recompute_founder_touched_rows(fmuts, sites)
+
+    # rate delta: remove reference rows at touched sites, add recomputed rows
+    for s in touched:
+        for the_id, r in ec._ref_site_idrate.get(s, ()):
+            acc.rate[the_id] = acc.rate.get(the_id, 0.0) - r
+    for the_id, r in rec_rate.items():
+        acc.rate[the_id] = acc.rate.get(the_id, 0.0) + r
+    acc.rec_ids_seen.update(rec_rate.keys())
+    acc.syn_ids.update(rec_syn)
+
+    # membership: a reference-context ID whose codon *every* founder touches never
+    # appears in the summed-over-founders table -> track so it can be dropped
+    # (its accumulated rate cancels to ~0 from N*base - N*base).
+    if touched:
+        candidates = set()
+        for s in touched:
+            candidates |= ec._base_ids_at_site.get(s, set())
+        for the_id in candidates:
+            if ec._base_id_sites[the_id] <= touched:
+                acc.removed_count[the_id] += 1
+
+    # actual per ID: map each observed (site, mut_nt) to the founder-context ID(s)
+    # at that site (recomputed at touched sites, reference elsewhere; broadcasts to
+    # each overlap gene). Reversion-masked to match expected.
+    observed = 0
+    reversion_masked = 0
+    unmatched = 0
+    if founder_counts is not None and len(founder_counts):
+        for nt_site, nt_mutation, cnt in zip(
+            founder_counts["nt_site"].to_numpy(),
+            founder_counts["nt_mutation"].to_numpy(),
+            founder_counts["count"].to_numpy(),
+        ):
+            site = int(nt_site)
+            mut_nt = nt_mutation[-1]
+            if ref_at_mut.get(site) == mut_nt:
+                reversion_masked += 1
+                continue
+            observed += 1
+            ids = (rec_obs.get((site, mut_nt)) if site in touched
+                   else ec._base_obs_map.get((site, mut_nt)))
+            if not ids:
+                unmatched += 1
+                continue
+            for the_id in ids:
+                acc.act[the_id] += float(cnt)
+    return _FounderObs(observed, reversion_masked, unmatched)
+
+
 def compute_fitness_trajectory(
     founder_muts_df,
     subtree_counts_df,
@@ -675,7 +815,7 @@ def compute_fitness_trajectory(
     # reducing the full ~90k-row genome-wide table per founder (which made this
     # ~20 h on a full tree, #123). The result is identical -- to float precision --
     # to summing ec.founder_rate_table over founders (see the reversion mask and
-    # ORF1a drop inside ec._founder_rec). ec._ref_site_idrate / _base_ids_at_site /
+    # ORF1a drop inside ec._recompute_founder_touched_rows). ec._ref_site_idrate / _base_ids_at_site /
     # _base_id_sites / _base_obs_map are the precomputed reference structures.
     base_by_id = ec._base_by_id
     base_syn_ids = ec._base_syn_ids
@@ -697,81 +837,31 @@ def compute_fitness_trajectory(
             fid: g for fid, g in w_counts.groupby("founder_id", sort=False)
         }
         n_founders = len(w_founders)
-        rate = (base_by_id * float(n_founders)).to_dict()  # N * base
-        act = defaultdict(float)
-        syn_ids = set(base_syn_ids)   # reference syn IDs; founder-context ones added
-        removed_count = defaultdict(int)  # base ID -> #founders that fully remove it
-        rec_ids_seen = set()
+        acc = _WindowDelta(base_by_id, base_syn_ids, n_founders)
 
         for _, frow in w_founders.iterrows():
-            founder_id = frow["founder_id"]
-            fmuts = frow["founder_muts"]
-            sites = ec._touched_sites(fmuts) if fmuts else []
-            touched = set(sites)
-            # Founder->reference reversions (destination base == reference base)
-            # arise only at founder-mutated sites; masked from both the expected
-            # enumeration (inside _founder_rec) and the actual counts (below), to
-            # mirror the clade path's to_nt == ref_nt exclusion.
-            ref_at_mut = {s: ec.ref_seq[s - 1] for s in fmuts} if fmuts else {}
-
-            # founder-context recomputed rows for touched codons, as compact per-ID
-            # dicts (reversion mask + ORF1a drop applied inside).
-            rec_rate, rec_syn, rec_obs = ec._founder_rec(fmuts, sites)
-
-            # rate delta: remove reference rows at touched sites, add recomputed rows
-            for s in touched:
-                for the_id, r in ec._ref_site_idrate.get(s, ()):
-                    rate[the_id] = rate.get(the_id, 0.0) - r
-            for the_id, r in rec_rate.items():
-                rate[the_id] = rate.get(the_id, 0.0) + r
-            rec_ids_seen.update(rec_rate.keys())
-            syn_ids.update(rec_syn)
-
-            # membership: a reference-context ID whose codon *every* founder touches
-            # never appears in the summed-over-founders table -> track so it can be
-            # dropped (its accumulated rate cancels to ~0 from N*base - N*base).
-            if touched:
-                candidates = set()
-                for s in touched:
-                    candidates |= ec._base_ids_at_site.get(s, set())
-                for the_id in candidates:
-                    if ec._base_id_sites[the_id] <= touched:
-                        removed_count[the_id] += 1
-
-            # actual per ID: map each observed (site, mut_nt) to the founder-context
-            # ID(s) at that site (recomputed at touched sites, reference elsewhere;
-            # broadcasts to each overlap gene). Reversion-masked to match expected.
-            fc = counts_by_founder.get(founder_id)
-            if fc is not None and len(fc):
-                for nt_site, nt_mutation, cnt in zip(
-                    fc["nt_site"].to_numpy(), fc["nt_mutation"].to_numpy(),
-                    fc["count"].to_numpy(),
-                ):
-                    site = int(nt_site)
-                    mut_nt = nt_mutation[-1]
-                    if ref_at_mut.get(site) == mut_nt:
-                        reversion_obs += 1
-                        continue
-                    total_obs += 1
-                    ids = (rec_obs.get((site, mut_nt)) if site in touched
-                           else ec._base_obs_map.get((site, mut_nt)))
-                    if not ids:
-                        unmatched_obs += 1
-                        continue
-                    for the_id in ids:
-                        act[the_id] += float(cnt)
+            obs = _apply_founder_delta(
+                ec,
+                frow["founder_muts"],
+                counts_by_founder.get(frow["founder_id"]),
+                acc,
+            )
+            total_obs += obs.observed
+            reversion_obs += obs.reversion_masked
+            unmatched_obs += obs.unmatched
 
         # drop reference IDs fully removed by every founder (unless re-added as a
         # founder-context ID); their summed rate is ~0 from exact cancellation.
-        for the_id, c in removed_count.items():
-            if c == n_founders and the_id not in rec_ids_seen:
-                rate.pop(the_id, None)
-        if not rate:
+        for the_id, c in acc.removed_count.items():
+            if c == n_founders and the_id not in acc.rec_ids_seen:
+                acc.rate.pop(the_id, None)
+        if not acc.rate:
             continue
 
-        rate_by_id = pd.Series(rate, name="rate_by_id").sort_index()
+        syn_ids = acc.syn_ids
+        rate_by_id = pd.Series(acc.rate, name="rate_by_id").sort_index()
         rate_by_id.index.name = "ID"
-        act_by_id = pd.Series(act) if act else None
+        act_by_id = pd.Series(acc.act) if acc.act else None
 
         window_df = rate_by_id.to_frame()
         window_df["actual_count"] = (

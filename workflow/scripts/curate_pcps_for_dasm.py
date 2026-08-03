@@ -20,7 +20,11 @@ RNG (``np.random.default_rng(seed).random(N) < val_ratio``, then
 ``in_train = ~val_mask``). The call sequence matches dasm2's
 ``preprocess_command.preprocess`` exactly, so the new file is
 byte-identical to ``filter_viral_pcps.sh`` output when given the same
-inputs/seed.
+inputs/seed. Since #134 this output is gzipped, so that equivalence is on
+the **decompressed** stream -- the reference writes plain CSV, and gzip
+headers additionally embed the filename and (by default) the mtime. It is
+checked that way by ``validate_test.py``'s
+``DASM_READY_ALL_SENTINEL_MD5``; see ``modules/pcpio.py``.
 
 The script also emits a small ``*_dasm_filter_report.txt`` log alongside
 the output CSV summarizing per-filter drop counts. This is the
@@ -28,10 +32,31 @@ auditability hook from the issue body (#80).
 """
 
 import json
+import os
+from importlib import util as importlib_util
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+# The by-path module loader is defined once in
+# workflow/modules/workflow_loader.py. Because that loader is itself the
+# mechanism for importing shared workflow code, it cannot be imported via
+# itself -- it is wired up here by absolute path (#111).
+_loader_spec = importlib_util.spec_from_file_location(
+    "workflow_loader",
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "modules",
+        "workflow_loader.py",
+    ),
+)
+workflow_loader = importlib_util.module_from_spec(_loader_spec)
+_loader_spec.loader.exec_module(workflow_loader)
+load_workflow_module = workflow_loader.load_workflow_module
+
+
+pcpio = load_workflow_module("pcpio")
 
 # ---------------------------------------------------------------------------
 # Snakemake glue
@@ -144,7 +169,9 @@ if initial_count == 0:
     out_cols = list(pcp_df.columns) + ["in_train"]
     empty_df = pd.DataFrame(columns=out_cols)
     Path(output_dasm_ready).parent.mkdir(parents=True, exist_ok=True)
-    empty_df.to_csv(output_dasm_ready, index=False)
+    empty_df.to_csv(
+        output_dasm_ready, index=False, compression=pcpio.PCP_CSV_COMPRESSION
+    )
     with open(output_report, "w") as f:
         f.write("Input was empty; no PCPs to filter.\n")
     with open(output_stats, "w") as f:
@@ -208,7 +235,9 @@ log(f"Train/val split: {n_train} train, {n_val} val ({val_fraction:.0%} val targ
 
 # --- Write outputs ----------------------------------------------------------
 Path(output_dasm_ready).parent.mkdir(parents=True, exist_ok=True)
-pcp_df.to_csv(output_dasm_ready, index=False)
+pcp_df.to_csv(
+    output_dasm_ready, index=False, compression=pcpio.PCP_CSV_COMPRESSION
+)
 log(f"Wrote {len(pcp_df)} DASM-ready PCPs to {output_dasm_ready}")
 
 stats = {

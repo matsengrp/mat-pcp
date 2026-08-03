@@ -8,7 +8,9 @@ single step, and drops the synonymous-rate ``expected_count`` entirely:
 1. Enumerate the full grid of all possible mutations per clade (from the clade
    founder nucleotides), with amino-acid / codon annotations -- this is what
    supplies the ``actual_count == 0`` rows the GLM trains on.
-2. Join the aggregated actual counts onto the grid (fill 0 where unobserved).
+2. Join the aggregated actual counts onto the grid (fill 0 where unobserved),
+   keeping only observations made on the *clade founder* codon background and
+   enforcing one row per ``(clade, nt_mutation)`` (#130).
 3. Compute ``exclude`` / ``masked_in_usher`` once, via
    ``modules/masking.compute_exclusions``.
 
@@ -102,6 +104,25 @@ def compute_mutant_codon(founder_codon, codon_position, to_nt):
     codon_list = list(founder_codon)
     codon_list[pos] = to_nt
     return "".join(codon_list)
+
+
+def start_codon(codon_change):
+    """The *parent* codon(s) of an observed codon change; ``None`` if noncoding.
+
+    ``codon_change`` is ``;``-joined across genes at overlap sites, in the same
+    gene order as the grid's ``clade_founder_codon`` -- verified against the
+    out-of-frame N/ORF9b overlap, where the two codons genuinely differ
+    (``AAA;AAC`` at site 28386) -- so the joined strings compare directly, as
+    they do upstream.
+    """
+    if pd.isna(codon_change) or codon_change == "noncoding":
+        return None
+    return ";".join(part.split(">")[0] for part in str(codon_change).split(";"))
+
+
+def n_codons(codon_string):
+    """Number of ``;``-joined components in a codon string."""
+    return 0 if codon_string is None else str(codon_string).count(";") + 1
 
 
 def compute_aa_info(row):
@@ -213,21 +234,144 @@ log(f"Loaded reference sequence: {len(ref_seq)} nt")
 
 # ---------------------------------------------------------------------------
 # 2. Join aggregated actual counts (fill 0 where unobserved).
+#
+# Only mutations away from the *clade founder* belong in a clade's counts.
+# matUtils reports each branch's mutations relative to its parent, so the same
+# nucleotide substitution is also observed on codons that had already mutated --
+# a different amino-acid change that merely shares the nucleotide event. Joining
+# on ``(clade, nt_mutation)`` alone discards ``codon_change``, the only column
+# that tells the two apart, so those observations were silently relabelled onto
+# the founder codon and kept as *extra rows for the same mutation*, corrupting
+# both fitness estimators in opposite directions (#130).
+#
+# The filter and the one-row-per-mutation invariant below are ports of
+# ``notebooks/merge_expected_and_actual_counts.py.ipynb`` in
+# jbloomlab/SARS2-mut-fitness, the rule this script replaced; they were lost
+# when three rules were fused into it.
 # ---------------------------------------------------------------------------
 actual = pd.read_csv(actual_csv)
 count_col = "count" if "count" in actual.columns else "actual_count"
-actual_cols = ["clade", "nt_mutation", count_col]
+if count_col != "actual_count":
+    actual = actual.rename(columns={count_col: "actual_count"})
+
+# Losing codon_change before the join is precisely what made #130 invisible, so
+# a counts file without it is a hard error rather than a quietly skipped filter.
+if "codon_change" not in actual.columns:
+    raise ValueError(
+        f"{actual_csv} has no 'codon_change' column, so observations on an "
+        "already-mutated codon background cannot be told apart from "
+        "founder-background ones. count_mutations.py emits it; refusing to "
+        "build the count table without it (#130)."
+    )
+
+actual_cols = ["clade", "nt_mutation", "actual_count"]
 for extra in ("count_terminal", "count_non_terminal"):
     if extra in actual.columns:
         actual_cols.append(extra)
 
-grid = grid.merge(
-    actual[actual_cols].rename(
-        columns={count_col: "actual_count"} if count_col != "actual_count" else {}
-    ),
+n_grid_rows = len(grid)
+
+# Attach each observation's founder codon. validate= pins the grid as the
+# authoritative one-row-per-(clade, nt_mutation) enumeration, which is the
+# assumption the old unvalidated merge made without saying so.
+observed = actual.merge(
+    grid[["clade", "nt_mutation", "clade_founder_codon"]],
     on=["clade", "nt_mutation"],
     how="left",
+    validate="many_to_one",
+    indicator=True,
 )
+observed["start_codon"] = observed["codon_change"].map(start_codon)
+
+# An observation absent from the grid has a from-base that disagrees with the
+# clade founder: the nucleotide-level analogue of the codon-level case. The
+# left join was already dropping these silently before #130, so they are
+# reported rather than raised -- surfacing a pre-existing drop, not adding a
+# new failure mode.
+off_grid = observed["_merge"] == "left_only"
+
+obs_noncoding = observed["start_codon"].isna()
+grid_noncoding = observed["clade_founder_codon"].isna() | observed[
+    "clade_founder_codon"
+].eq("noncoding")
+
+# Disagreement about whether a site is coding, or about how many genes cover
+# it, means the two sides are not describing the same thing -- and a string
+# comparison would then read as "off-founder" and silently zero a legitimate
+# count. Raise instead. Only one site in the SARS-CoV-2 annotation can
+# plausibly trip this: 13468, the ribosomal slippage site, whose grid entry
+# names three (gene, codon) contexts (ORF1a;ORF1ab;ORF1ab / AAC;AAC;CGG)
+# because the frameshift makes it both the 3rd position of codon 4401 and the
+# 1st of 4402. If it fires there, decide deliberately whether that site's
+# observations are founder-background rather than letting a mismatch decide.
+structural = ~off_grid & (
+    (obs_noncoding != grid_noncoding)
+    | (
+        ~obs_noncoding
+        & (
+            observed["start_codon"].map(n_codons)
+            != observed["clade_founder_codon"].map(n_codons)
+        )
+    )
+)
+if structural.any():
+    examples = observed.loc[
+        structural,
+        ["clade", "nt_mutation", "codon_change", "start_codon", "clade_founder_codon"],
+    ].head(10)
+    raise ValueError(
+        f"{int(structural.sum())} observation(s) describe a different "
+        "coding/gene structure than the clade founder grid does at the same "
+        "site, so the founder-background filter cannot compare their codons. "
+        "This is not an off-founder observation -- it is an inconsistency "
+        "between count_mutations.py's codon_change and clade_founder_nts.csv "
+        f"(#130). First {len(examples)}:\n{examples.to_string(index=False)}"
+    )
+
+from_founder = ~off_grid & (
+    obs_noncoding | (observed["start_codon"] == observed["clade_founder_codon"])
+)
+off_founder = ~off_grid & ~from_founder
+
+log(
+    f"Founder-background filter: kept {int(from_founder.sum())} of "
+    f"{len(observed)} observed rows"
+)
+# Mutations recurring on already-mutated backgrounds are a real biological
+# quantity, so report what left rather than letting it vanish.
+for label, mask in (("mutated codon background", off_founder),
+                    ("absent from the founder grid", off_grid)):
+    if not mask.any():
+        continue
+    log(
+        f"  dropped {int(mask.sum())} rows {label} "
+        f"({int(observed.loc[mask, 'actual_count'].sum())} counts)"
+    )
+    for clade, sub in observed[mask].groupby("clade"):
+        log(f"    {clade}: {len(sub)} rows, {int(sub['actual_count'].sum())} counts")
+
+kept = observed.loc[from_founder, actual_cols]
+duplicated = kept.duplicated(subset=["clade", "nt_mutation"], keep=False)
+if duplicated.any():
+    examples = kept[duplicated].sort_values(["clade", "nt_mutation"]).head(10)
+    raise ValueError(
+        f"{int(duplicated.sum())} founder-background rows share a "
+        "(clade, nt_mutation) key after filtering, so a single mutation would "
+        "be counted more than once. Each key must have exactly one "
+        "founder-codon observation (#130). First "
+        f"{len(examples)}:\n{examples.to_string(index=False)}"
+    )
+
+# one_to_one, not one_to_many: after filtering, the fan-out that #130 was made
+# of is no longer possible, and pandas enforces that rather than us hoping.
+grid = grid.merge(kept, on=["clade", "nt_mutation"], how="left", validate="one_to_one")
+if len(grid) != n_grid_rows:
+    raise ValueError(
+        f"joining actual counts changed the grid from {n_grid_rows} to "
+        f"{len(grid)} rows. The grid is the authoritative enumeration of every "
+        "possible mutation per clade, so its row count must survive the join "
+        "unchanged (#130)."
+    )
 grid["actual_count"] = grid["actual_count"].fillna(0).astype(int)
 for extra in ("count_terminal", "count_non_terminal"):
     if extra in grid.columns:

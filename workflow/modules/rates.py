@@ -39,7 +39,10 @@ DEFAULT_LIGHTSWITCH_BOUNDARIES = {
     "AT": 21562,  # End of S gene
     "CG": 21562,
     "GC": 21562,
-    # TA, TG, AC, AG, GA, TC intentionally omitted - no boundary feature
+    # The other eight of the twelve mut_types -- AC, AG, CA, GA, GT, TA, TC, TG --
+    # are intentionally omitted: no boundary feature. (This comment previously
+    # listed only six, omitting CA and GT; the count is pinned by
+    # tests/test_lightswitch_boundary.py.)
 }
 
 

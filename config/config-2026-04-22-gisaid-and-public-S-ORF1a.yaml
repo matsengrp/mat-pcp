@@ -106,6 +106,45 @@ reference_clade: "19A"
 pcp_genes:
   - S
   - ORF1a
+  # ORF1b (nsp12-nsp16), M, N and E added for v9 (#133, EPIC #131 decision 6).
+  # Only ORF1b needs explicit coordinates; M, N and E are single-block,
+  # codon-aligned GTF features (666 nt / 222 codons, 1257 nt / 419 codons, and
+  # 225 nt / 75 codons).
+  #
+  # With E this covers every non-accessory protein: the four structural proteins
+  # (S, E, M, N) plus the replicase polyproteins (ORF1a, ORF1b). The accessory
+  # ORFs (3a, 6, 7a, 7b, 8, 9b, 10) are deliberately out of scope. E is the
+  # cheapest of the six by an order of magnitude -- 75 codons -- and needs no
+  # pcp_gene_cds_blocks (the GTF carries it at 26245-26469), no
+  # pcp_gene_to_fitness_gene (it reaches aamut_fitness under its own name), and
+  # no gene_overlaps entry (ORF3a ends at 26217, M starts at 26523, so E abuts
+  # neither).
+  - ORF1b
+  - M
+  - N
+  - E
+
+# Explicit CDS blocks for PCP extraction only, for genes the shared reference
+# GTF does not carry. 1-based inclusive; the two blocks share nt 13468, which is
+# how the -1 ribosomal frameshift stays in frame.
+#
+# ORF1b here is nsp12-nsp16, NOT the post-slippage frameshift product. nsp12
+# (RdRp) begins at ORF1ab codon 4393 but the frameshift is at codon 4402, so
+# nsp12's first 9 residues are translated in ORF1a's frame. Defining ORF1b as
+# the post-slippage block alone would silently clip 9 residues off the
+# N-terminus of the protein this is chiefly for (#133).
+pcp_gene_cds_blocks:
+  ORF1b: [[13442, 13468], [13468, 21552]]   # nsp12-nsp16; 8112 nt = 2704 codons
+
+# PCP gene -> the aamut_fitness gene it is validated against, plus the codon
+# offset. ORF1a is absent from aamut_fitness (aamutfit.get_coding drops it), so
+# through v8 its validation compared against zero rows and reported success
+# having compared nothing; ORF1b is a PCP-only slice of ORF1ab. Both offsets are
+# re-derived from the CDS blocks and cross-checked against these values (#133).
+# S, M and N need no entry -- each appears in aamut_fitness as itself.
+pcp_gene_to_fitness_gene:
+  ORF1a: {gene: ORF1ab, codon_offset: 0}      # ORF1a codon N == ORF1ab codon N
+  ORF1b: {gene: ORF1ab, codon_offset: 4392}   # ORF1b codon 1 == ORF1ab codon 4393
 
 # PCP branch QC reuses the shared Mutation-Counting keys (max_nt_mutations /
 # max_reversions_to_ref / max_reversions_to_clade_founder), so PCP extraction
@@ -118,7 +157,17 @@ clade_founders:
   neher_json: "https://raw.githubusercontent.com/neherlab/SC2_variant_rates/7e738194a8c6592082f1caa9a6ca70cb68289790/data/clade_gts.json"
   roemer_json: "https://raw.githubusercontent.com/corneliusroemer/pango-sequences/main/data/pango-consensus-sequences_summary.json"
 
-# Mapping from Nextstrain clades to Pango lineages (for Roemer founders)
+# Mapping from Nextstrain clades to Pango lineages (for Roemer founders).
+#
+# Every config carries its own copy of this map, so a new clade must be added to
+# each config whose tree contains it (grep roemer_nextstrain_to_pango config/).
+# A clade missing from both this map and the Neher JSON is now a hard failure in
+# clade_founder_fasta.py rather than a silent fallback to the Wuhan reference
+# (#129) -- so a missing entry fails the run instead of corrupting it.
+#
+# This tree (2026-04-22) contains 52 Nextstrain_clade_usher values, 19A through
+# 25C: 30 resolve via the Neher JSON, 21 via the entries below, and 21A is in
+# clades_to_exclude.
 roemer_nextstrain_to_pango:
   23A: XBB.1.5
   23B: XBB.1.16
@@ -136,6 +185,11 @@ roemer_nextstrain_to_pango:
   24E: KP.3.1.1
   24F: XEC
   24G: KP.2.3
+  24H: LF.7
+  24I: MV.1
+  25A: LP.8.1
+  25B: NB.1.8.1
+  25C: XFG
 
 # =============================================================================
 # Mutation Counting Configuration (match SARS2-mut-fitness)

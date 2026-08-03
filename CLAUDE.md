@@ -29,7 +29,7 @@ The pipeline uses simple integer versioning (v1, v2, v3, etc.) for reproducibili
 ### Version Management
 
 - **Version File**: `VERSION` in the repository root contains the current pipeline version
-- **Automatic Versioning**: The Snakefile derives each tree's output directory as `{output_root}/{label}_{version}` (e.g., `results/public_2022-06-01_v5`)
+- **Automatic Versioning**: The Snakefile derives each tree's output directory as `{output_root}/{label}_{version}` (e.g., `results/public_2022-06-01_v9`)
 - **Git Tags**: Each version should be tagged in git (e.g., `git tag v1`) when the branch is ready to merge
 - **Changelog**: All output schema changes must be documented in `CHANGELOG.md`
 
@@ -85,7 +85,7 @@ pixi run snakemake -n --configfile config/config.yaml
 
 # Run specific target (per-tree output path)
 pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
-  results/public_2022-06-01_v5/aamut_fitness/all_aamut_fitness.csv
+  results/public_2022-06-01_v9/aamut_fitness/all_aamut_fitness.csv
 
 # Clean all outputs
 pixi run snakemake --delete-all-output --configfile config/config.yaml
@@ -93,9 +93,14 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 
 ### Testing
 ```bash
-# GLM reference-equivalence unit test (no pipeline run needed; CI runs it
-# before the pipeline steps)
+# Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
+# all six before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
+pixi run python tests/test_clade_founder_guards.py
+pixi run python tests/test_founder_codon_background.py
+pixi run python tests/test_lightswitch_boundary.py
+pixi run python tests/test_pcp_compression.py
+pixi run python tests/test_pcp_gene_coordinates.py
 
 # Run on test data (fast, uses max_clades=3)
 pixi run snakemake -j 2 --use-conda \
@@ -183,6 +188,197 @@ mat-pcp/
    `validate_test.py::validate_glm_synonymous_training` (end-to-end). See
    [#126](https://github.com/matsengrp/mat-pcp/issues/126).
 
+6. **An unresolvable clade founder is a hard failure, not a fallback.**
+   `clade_founder_fasta.py` builds each clade's founder by applying that clade's
+   defining mutations to the Wuhan reference. If the clade resolves in none of its
+   three sources (Neher JSON → Roemer via `roemer_nextstrain_to_pango` → Roemer
+   keyed directly), it used to apply *zero* mutations and write the unmodified
+   reference — exit 0, logged as ordinary output. Nothing downstream caught it
+   because the wrong founder propagated *consistently*: every consumer compared
+   against the same wrong sequence, so no internal cross-check disagreed. It
+   surfaced only when an outside consumer noticed implausible cross-clade
+   correlations (24H/24I/25A/25B/25C in v8).
+   Two guards now cover the two routes to that output — a missing *source*, and a
+   resolved source that yields no *effective* mutations (empty substitution list,
+   or every mutation dropped by the reference-base mismatch check). Both raise.
+   The second check is deliberately **genome-wide, not per-gene**: at gene level
+   reference-identity is legitimate (19B's founder equals 19A's for S, since
+   C8782T and T28144C both fall outside spike), so a per-gene assertion would need
+   an allowlist growing with every clade/gene pair — the same shape as the bug it
+   guards. Guarded by `tests/test_clade_founder_guards.py`. See
+   [#129](https://github.com/matsengrp/mat-pcp/issues/129).
+
+7. **A clade's counts include only mutations off its founder's *codon*, not just
+   its founder's nucleotide.** matUtils reports each branch's mutations relative
+   to its parent, so the same nucleotide substitution also appears on codons that
+   had already mutated — a different amino-acid change sharing one nucleotide
+   event. `build_count_table.py` joined observed counts onto the founder grid on
+   `(clade, nt_mutation)` alone, dropping `codon_change` (the only column that
+   distinguishes the two) and using an unvalidated `how="left"` merge. Off-founder
+   observations were therefore relabelled onto the founder codon and kept as
+   *extra rows for the same mutation*: 6,415 duplicated keys / 13,146 rows in v8,
+   every clade affected, concentrated in the highest-count mutations. Both
+   estimators were corrupted by *different* mechanisms — `delta_fitness_bayesian`
+   inverse-variance-averages the phantom row in, `delta_fitness_ratio` sums its
+   expected count — so they never diverged enough to trip a cross-check, and the
+   reported amino-acid uncertainty got *smaller*.
+   The filter and the one-row-per-mutation invariant are ports of upstream's
+   `merge_expected_and_actual_counts.py.ipynb`, lost when three rules were fused.
+   Codon strings are `;`-joined across genes at overlap sites and compared
+   whole, which requires the same gene order on both sides — true, and verified
+   against the out-of-frame N/ORF9b overlap. A *structural* disagreement (one
+   side coding, or a different component count) raises rather than reading as
+   off-founder, because that would silently zero a legitimate count and the
+   row-count invariant cannot see it. `aamutfit.aa_fitness` also rejects a
+   repeated `nt_mutation` within one amino-acid group as independent defence.
+   Guarded by `tests/test_founder_codon_background.py` (unit; the test dataset
+   has no off-founder backgrounds, so it is the *only* coverage) and
+   `validate_test.py::validate_founder_codon_background` (dataset invariant).
+   See [#130](https://github.com/matsengrp/mat-pcp/issues/130).
+
+8. **The light-switch boundary site belongs to the *before* bucket, and that
+   convention has exactly one definition.** `modules/glm.py` trains with
+   `global_context = (nt_site > boundary)`, so `site == boundary` is fitted into
+   the before-regime, and `modules/rates.py`'s sentinel (`nt_site = 0 if
+   before_boundary else s_max`) makes `nt_site_before_boundary=True` mean exactly
+   that bucket. Through v8 both *label producers* used `site < boundary` — and
+   `not (site < b)` is `site >= b`, not `site > b` — so the boundary site was
+   fitted into one bucket and **served the other's rate**. The convention now
+   lives in `modules/lightswitch.py::before_boundary` (`site <= boundary`), called
+   by both producers: `scripts/annotate_counts.py` (clade path) and
+   `modules/expected_counts.py` (windowed trajectory path). Fixing only one would
+   leave the clade and windowed fitness paths disagreeing at the boundary site,
+   which is the comparability the `evol_time` normalization exists to preserve.
+   Two things make this class of bug invisible, which is why it needs a unit test
+   rather than a pipeline assertion: `tests/test_glm_reference_equivalence.py`'s
+   fixture is a frozen CSV carrying a *pre-computed* `nt_site_before_boundary`
+   column, so it exercises the rate lookup over stored labels and not the label
+   computation; and every shipped config sets `AT`/`CG`/`GC` to the same 21562, so
+   the separate bug where `CG` and `GC` both read the `AT` key (honored per-type
+   in training, ignored at serving) is unobservable from any config — that same
+   equivalence test's config check *pins* those values, hiding it rather than
+   catching it. mat-pcp therefore diverges from `SARS2-mut-fitness-v2` at site
+   21562 deliberately; upstream carries the same inconsistency between its
+   `modules/glm.py:59` (`>`) and `notebook/counts_by_clade.py.ipynb` (`<`). Do not
+   resolve it by re-baselining the #127 fixture. Guarded by
+   `tests/test_lightswitch_boundary.py` (unit, and the *only* coverage: the test
+   dataset has just 3 rows at a boundary site — AT @ 21562, one per clade — all
+   with `actual_count` 0, so a test-data run has nothing asserting which rate
+   they are served).
+   **Both producers must be executed, not just named.** That test's
+   two-producer check originally called `lightswitch.before_boundary` directly
+   for the windowed side, so it compared `annotate_counts.py` against the shared
+   module and never ran `expected_counts.py` at all — reverting that call site to
+   `site < boundary` left the whole suite green. It now drives the real
+   `ExpectedCounts._add_context_features` (built with `object.__new__` and the two
+   attributes the method reads, since `__init__` demands a coding-sites table
+   irrelevant to the label). A test named for two producers that exercises one is
+   the same vacuity as pattern 10's `gene == {gene}` filter. See
+   [#125](https://github.com/matsengrp/mat-pcp/issues/125).
+
+9. **PCP outputs are gzipped, and the DASM md5 is a *payload* hash.** The four
+   PCP families (`{clade}_pcps`, `all_pcps`, `{clade}_pcps_dasm_ready`,
+   `all_pcps_dasm_ready`) are `.csv.gz` as of v9; `{clade}_filtered_branches.csv`
+   and `filtered_branch_ids.csv` deliberately stay plain. On the v8 production
+   tree `pcps/` was **504 GB apparent (470 GiB), 93% of the whole 542 GB output
+   tree** — quote apparent or allocated consistently, never a mix (allocated is
+   403/415 GiB, i.e. 97%) — and
+   measured gzip level 9 gives ~125× on ORF1a / ~110× on S. The policy lives in
+   `modules/pcpio.py::PCP_CSV_COMPRESSION` rather than at each `to_csv`, because a
+   writer that omitted `mtime=0` would break reproducibility for that one file
+   with nothing to attribute it. Level 9 is *not* pinned explicitly: it is
+   pandas' default, and it measured both smaller and faster than level 6 (~125×
+   at ~97 MiB/s vs ~17× at 29 MiB/s — at level 9 gzip's full match search finds
+   the long parent/child and adjacent-row repeats, so it emits far less).
+   Three consequences fail silently and so are unit-tested rather than left to
+   the pipeline run: (a) `validate_test.py`'s `DASM_READY_ALL_SENTINEL_MD5` is a
+   *cross-implementation* check against `dasm2 preprocess`, which writes plain
+   CSV, so `test_summary.py` hashes the **decompressed** stream and the sentinel
+   value is unchanged by compression — re-baselining it to a compressed-file md5
+   would silently retire the check; (b) pandas' gzip output embeds `mtime=now`
+   *and* the output filename (the FNAME flag), so `mtime=0` is required for a
+   re-run to be byte-identical, which matters because `data-central` manifests pin
+   `md5`/`xxh3` per file; (c) `aggregate_clade_pcps.py` derives the `clade` column
+   from each input's filename, and its old `replace("_pcps.csv", "")` would have
+   yielded `"19A.gz"` — every row of every aggregate mislabelled identically, with
+   the row count unchanged and no cross-check able to see it. Guarded by
+   `tests/test_pcp_compression.py`. See
+   [#134](https://github.com/matsengrp/mat-pcp/issues/134).
+
+10. **nsp12 begins *before* the ribosomal frameshift, and a PCP gene is not
+    necessarily an `aamut_fitness` gene.** Two facts, each of which makes an
+    incorrect implementation look right.
+
+    *ORF1b is nsp12–nsp16, not the post-slippage product.* `orf1ab_to_nsps` puts
+    nsp12 (RdRp) at ORF1ab codons 4393–5324, but the −1 frameshift is at codon
+    4402 — so **nsp12's first 9 residues are translated in ORF1a's frame**.
+    Defining ORF1b as the post-slippage block alone (`(13468, 21552)`, one block,
+    2695 codons) is the obvious reading and silently clips 9 residues off the
+    N-terminus of the protein the work is chiefly for. ORF1b is therefore
+    `[[13442, 13468], [13468, 21552]]` — 8112 nt / 2704 codons, sharing nt 13468
+    exactly as ORF1ab does. Note the summed length (8112) is a whole number of
+    codons while the *span* (8111) is not; that shared nucleotide is why
+    `validate_cds_blocks` sums blocks rather than measuring the span. It is added
+    via `pcp_gene_cds_blocks` rather than the GTF because `edit_ref_gtf` feeds
+    `ref_coding_sites` → `counts_all.csv` → GLM → fitness: a GTF entry would make
+    every site in an 8 kb stretch multi-gene, and absent a matching
+    `gene_overlaps.retain` entry, `aamutfit.get_coding`'s `exclude_overlap`
+    default would silently drop all of nsp12–nsp16 from `aamut_fitness` — the
+    #129/#130 silent-drop shape again.
+
+    *The codon correspondence is derived, not declared.* `aamutfit.get_coding`
+    drops ORF1a (`aamutfit.py:80`), so `validate_pcp_vs_aamut.py`'s
+    `gene == {gene}` filter matched **zero rows** for ORF1a: through v8 that
+    validation reported no discrepancies because it had nothing to compare.
+    `modules/genemap.py` now maps codons by **genomic position** — two codons
+    correspond iff they occupy the same three reference nucleotides — which
+    matters because ORF1a's GTF block ends at 13480 while ORF1ab's first block
+    ends at 13468, so **ORF1a codons 4402–4405 have no ORF1ab counterpart at
+    all.** Under a bare `codon_offset: 0` those four would map onto ORF1ab codons
+    4402–4405, which are *ORF1b's* codons 10–13, and surface as four spurious
+    discrepancies indistinguishable from real ones. The configured
+    `codon_offset` is kept as a cross-check and disagreement raises.
+    `require_nonempty_fitness_slice` makes an empty slice fatal — applied to the
+    *per-clade* table as well as the aggregate, since the aggregate being
+    non-empty does not imply the per-clade slice is and per-clade carries almost
+    all the rows. When both sides are empty nothing raises, so the report says
+    **VACUOUS** rather than "SUCCESS: All amino acid mutation counts match
+    exactly!", which is true of an empty comparison and is the wording that
+    concealed the v8 gap. Every report now also prints the compared row counts on
+    both sides, so "agreed" is distinguishable from "never compared".
+
+    *A PCP gene's codon mask has its own two coordinate systems.* A gene reaching
+    `pcp_genes` only through `pcp_gene_cds_blocks` never appears in
+    `counts_all.csv`'s GTF-derived `gene` column, so `get_problematic_sites.py`
+    matched zero rows and wrote an **empty** mask at exit 0 — ORF1b's DASM-ready
+    PCPs kept every problematic codon site that every other gene had removed. Its
+    codons are now derived from `nt_site` via its own CDS blocks, and which
+    derivation applies is read from the *config* (does the gene have an override),
+    never from whether the count table happens to mention the gene: branching on
+    the data lets a gene defined in both places silently ignore its override and
+    bypass `resolve_cds_blocks`' add-only guard.
+    Two further traps here. `gene` and `codon_site` are **positionally paired**
+    `;`-joined cells (`"N;ORF9b"` with `"4;1"`), so they must be zipped and
+    filtered, never flattened — flattening files ORF9b's codon 1 as a codon of N,
+    and since ORF9b's numbers (1–98) are all valid N numbers no range check can
+    see it. And `validate_cds_blocks` must check that a shared nucleotide falls on
+    a **codon boundary**: `[[1, 11], [11, 20]]` shares exactly one nt and totals
+    21, so it passes the overlap and divisibility checks while reading nt 11 twice
+    *inside one codon*. At most one shared junction is allowed, since
+    `[[1, 3], [3, 5], [5, 7]]` is in frame at both and translates cleanly.
+
+    Guarded by `tests/test_pcp_gene_coordinates.py` (unit; every failure mode
+    mutation-tested, and it **execs the real `get_problematic_sites.py`** against a
+    stub `snakemake` — an earlier version re-implemented the script's
+    nt_site→codon inversion and asserted against its own copy, so three separate
+    breaks of the shipped script left it green) and
+    `validate_test.py::validate_orf1b_founder_slice`, which
+    checks every clade's ORF1b founder byte-equals `ORF1ab[13176:21288]` — two
+    coordinate sets, one slicer, so a frame error moves one and not the other.
+    The test config carries ORF1b so the override runs end-to-end in CI; **ORF1a
+    is not in it**, so no pipeline run asserts the vacuity fix itself.
+    See [#133](https://github.com/matsengrp/mat-pcp/issues/133).
+
 ### Configuration Sections
 
 The configuration (`config/config.yaml`) is organized into:
@@ -221,8 +417,32 @@ The configuration (`config/config.yaml`) is organized into:
    expected synonymous == total observed synonymous per window by construction, and
    windowed fitness is directly comparable to the clade-based `aamut_fitness`.
 5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
-6. **PCP Extraction**: `pcp_genes` (PCP branch QC reuses the shared Mutation-Counting keys `max_nt_mutations` / `max_reversions_to_ref` / `max_reversions_to_clade_founder`)
-7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources)
+6. **PCP Extraction**: `pcp_genes` (PCP branch QC reuses the shared
+   Mutation-Counting keys `max_nt_mutations` / `max_reversions_to_ref` /
+   `max_reversions_to_clade_founder`), plus two optional maps that exist only
+   because a PCP gene need not be a GTF feature *or* an `aamut_fitness` gene
+   (#133):
+   - `pcp_gene_cds_blocks` — explicit 1-based-inclusive CDS blocks for genes the
+     reference GTF does not carry (currently `ORF1b` only). Consulted by
+     `gtf.resolve_cds_blocks` ahead of the GTF and deliberately **not** fed to
+     `edit_ref_gtf` / `ref_coding_sites`, so fitness outputs are untouched.
+     Add-only: overriding a gene the GTF defines raises. Every key must also be
+     in `pcp_genes`.
+   - `pcp_gene_to_fitness_gene` — PCP gene → `{gene, codon_offset}` naming the
+     `aamut_fitness` gene it is validated against. Needed for `ORF1a` (absent
+     from `aamut_fitness`) and `ORF1b` (a slice of `ORF1ab`). The offset is
+     re-derived from the CDS blocks and cross-checked against the configured
+     value, so a stale number fails loudly.
+7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources),
+   `roemer_nextstrain_to_pango` (Nextstrain clade → Pango lineage, for clades not
+   in the Neher JSON), `allow_reference_identical_founders` (optional; clades
+   whose founder may legitimately equal the reference genome — the
+   `reference_clade` is exempt automatically, so this is normally empty).
+   **Every config carries its own copy of `roemer_nextstrain_to_pango`**, so
+   adding a clade to one config does not add it to the others; that is how #129
+   happened. `clade_founder_fasta.py` now raises rather than silently writing the
+   reference as an unresolvable clade's founder — see the note under "Important
+   Patterns" below.
 8. **Mutation Counting**: `max_nt_mutations`, `max_reversions_*`, `site_include_range`
 9. **GLM**: `rna_structure_data`, `glm_lightswitch_boundaries`
 11. **Fitness**: `fitness_pseudocount`, `fitness_N_f`, `fitness_N_n_exp`

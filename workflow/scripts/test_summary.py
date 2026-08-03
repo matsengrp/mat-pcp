@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate a summary of test pipeline outputs for validation."""
 
+import gzip
 import hashlib
 import json
 import os
@@ -21,23 +22,47 @@ def get_file_stats(filepath):
     if not os.path.exists(filepath):
         return None
     
+    # For ``.csv.gz`` every recorded figure is about the *payload*, not the
+    # container (#134): ``size`` is the decompressed length and ``checksum`` the
+    # decompressed md5. Two reasons. It keeps these values unchanged across the
+    # v8 -> v9 rename, so the fixture diff stays honest instead of a wholesale
+    # re-baseline that could mask real drift. And a compressed size is an
+    # implementation detail of whichever zlib build is installed -- pinning it
+    # would turn a routine zlib update into a spurious validation failure.
+    is_gzipped_csv = filepath.endswith('.csv.gz')
+    if is_gzipped_csv:
+        with gzip.open(filepath, 'rb') as f:
+            payload = f.read()
+        size = len(payload)
+    else:
+        payload = None
+        size = os.path.getsize(filepath)
+
     stats = {
         'exists': True,
-        'size': os.path.getsize(filepath),
+        'size': size,
         'lines': None,
         'checksum': None
     }
-    
-    # Get line count for text files
+
+    # Get line count for text files. ``.csv.gz`` is decompressed rather than
+    # skipped: otherwise the gzipped PCP outputs would silently lose their
+    # ``lines`` regression signal, since ``.csv.gz`` does not end in ``.csv``.
     if filepath.endswith('.csv') or filepath.endswith('.txt'):
         with open(filepath, 'r') as f:
             stats['lines'] = sum(1 for _ in f)
-    
-    # Get checksum for small files
+    elif is_gzipped_csv:
+        stats['lines'] = payload.count(b'\n')
+
+    # Get checksum for small files (by payload size, so the 1MB cutoff means the
+    # same thing compressed or not).
     if stats['size'] < 1024 * 1024:  # Less than 1MB
-        with open(filepath, 'rb') as f:
-            stats['checksum'] = hashlib.md5(f.read()).hexdigest()
-    
+        if is_gzipped_csv:
+            stats['checksum'] = hashlib.md5(payload).hexdigest()
+        else:
+            with open(filepath, 'rb') as f:
+                stats['checksum'] = hashlib.md5(f.read()).hexdigest()
+
     return stats
 
 
@@ -138,24 +163,53 @@ def summarize_spike_founders(spike_founders_dir):
     return summary
 
 
+def _decompressed_md5(path):
+    """md5 of a ``.csv.gz``'s *decompressed* bytes (#134).
+
+    The DASM-ready md5s are cross-implementation sentinels against
+    ``dasm2.preprocess_command.preprocess``, which writes plain CSV, so they
+    have to be taken on the payload rather than the container. Hashing the
+    compressed file would also be unstable for a second, independent reason:
+    pandas sets the gzip FNAME flag, so the bytes embed the output filename.
+    """
+    with gzip.open(path, "rb") as handle:
+        return hashlib.md5(handle.read()).hexdigest()
+
+
+def _strip_csv_gz(filename):
+    """``21J_pcps_dasm_ready.csv.gz`` -> ``21J_pcps_dasm_ready``.
+
+    ``os.path.splitext`` alone would leave a trailing ``.csv``, silently
+    changing the per-clade checksum *keys* and so making every clade read as
+    missing rather than mismatched.
+    """
+    for suffix in (".csv.gz", ".csv"):
+        if filename.endswith(suffix):
+            return filename[: -len(suffix)]
+    return os.path.splitext(filename)[0]
+
+
 def summarize_dasm_ready_pcps(pcps_dir):
     """Summarize the DASM-ready PCP outputs (#80).
 
     Records md5s for the aggregate and any per-clade dasm_ready files, plus
     a quick check on the ``in_train`` column. Asserts are deferred to
     ``validate_test.py``.
+
+    Since #134 these are ``.csv.gz``, and the md5s are over the decompressed
+    stream -- see ``_decompressed_md5``.
     """
     if not os.path.exists(pcps_dir):
         return None
 
-    aggregate = os.path.join(pcps_dir, "all_pcps_dasm_ready.csv")
+    aggregate = os.path.join(pcps_dir, "all_pcps_dasm_ready.csv.gz")
     if not os.path.exists(aggregate):
         return None
 
     agg_df = pd.read_csv(aggregate)
     per_clade_files = sorted(
         f for f in os.listdir(pcps_dir)
-        if f.endswith("_pcps_dasm_ready.csv") and not f.startswith("all_")
+        if f.endswith("_pcps_dasm_ready.csv.gz") and not f.startswith("all_")
     )
 
     # Compute n_train / n_val via bool-equality (not ~) so a hypothetical
@@ -173,13 +227,11 @@ def summarize_dasm_ready_pcps(pcps_dir):
             "has_in_train": has_in_train,
             "n_train": n_train,
             "n_val": n_val,
-            "checksum": hashlib.md5(Path(aggregate).read_bytes()).hexdigest(),
+            "checksum": _decompressed_md5(aggregate),
         },
         "per_clade_files": per_clade_files,
         "per_clade_checksums": {
-            os.path.splitext(f)[0]: hashlib.md5(
-                Path(pcps_dir, f).read_bytes()
-            ).hexdigest()
+            _strip_csv_gz(f): _decompressed_md5(os.path.join(pcps_dir, f))
             for f in per_clade_files
         },
     }
@@ -249,7 +301,7 @@ def main(results_dir):
 
     # Check key output files
     key_files = [
-        spike_pcps_path / "all_pcps.csv",
+        spike_pcps_path / "all_pcps.csv.gz",
         mat_path / "clade_counts.csv",
         mat_path / "filtered_metadata.tsv.gz",
         mat_path / "filtered_tree_raw.pb"
@@ -259,7 +311,7 @@ def main(results_dir):
         summary['files'][str(filepath)] = get_file_stats(str(filepath))
 
     # Get PCP summary
-    pcp_file = spike_pcps_path / "all_pcps.csv"
+    pcp_file = spike_pcps_path / "all_pcps.csv.gz"
     if pcp_file.exists():
         summary['pcp_summary'] = summarize_pcps(str(pcp_file))
 

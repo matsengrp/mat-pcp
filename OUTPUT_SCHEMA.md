@@ -6,16 +6,18 @@ For information on running the pipeline, see [README.md](README.md).
 
 ## Parent-Child Pairs (PCPs)
 
-### `pcps/{gene}/all_pcps.csv` and `pcps/{gene}/{clade}_pcps.csv`
+### `pcps/{gene}/all_pcps.csv.gz` and `pcps/{gene}/{clade}_pcps.csv.gz`
 
 Curated parent-child sequence pairs extracted from the mutation-annotated tree. These represent evolutionary transitions along tree branches and are suitable for training sequence models (e.g., DASM).
 
+> **Renamed in v9 (#134):** these were `.csv` through v8. Contents are unchanged — the column schema below is identical — but every path gained a `.csv.gz` suffix. `pandas.read_csv` and `dasm2.data.registry.load_dataframe` both handle it transparently; the latter matches on the extension, so the name must end in exactly `.csv.gz`. The motivation was size: on `gisaid-and-public_2026-04-22_v8`, `pcps/` was 504 GB apparent (470 GiB), 93% of the entire 542 GB output tree. Measured gzip level 9 gives ~125x on ORF1a and ~110x on S; on the v9 run `pcps/` is 7.7 GB apparent, across five genes where v8 had two.
+
 | Column | Type | Description |
 |--------|------|-------------|
-| `clade` | string | Nextstrain clade identifier (e.g., "19A", "20B", "21K"). Only present in `all_pcps.csv`. |
+| `clade` | string | Nextstrain clade identifier (e.g., "19A", "20B", "21K"). Only present in `all_pcps.csv.gz`. |
 | `parent_name` | string | Internal tree node identifier for the parent node. May be a sample accession (for leaf nodes) or an internal node ID. |
 | `child_name` | string | Internal tree node identifier for the child node. |
-| `parent` | string | Parent nucleotide sequence, sliced to this protein's coding sequence. PCP extraction is fanned over the `pcp_genes` config list; each protein's CDS blocks are derived from the reference GTF (`cds_blocks_for_gene`), so outputs live under a per-gene subdirectory (`pcps/{gene}/`). ORF1ab is reconstructed as one frameshifted CDS (its two blocks share nt 13468). |
+| `parent` | string | Parent nucleotide sequence, sliced to this protein's coding sequence. PCP extraction is fanned over the `pcp_genes` config list; each protein's CDS blocks come from the `pcp_gene_cds_blocks` config map if it names the gene, otherwise from the reference GTF (`gtf.resolve_cds_blocks`), so outputs live under a per-gene subdirectory (`pcps/{gene}/`). ORF1ab is reconstructed as one frameshifted CDS (its two blocks share nt 13468); `ORF1b` (v9+, nsp12–nsp16) is a config-supplied gene using the same two-block form, 8112 nt = 2704 codons. |
 | `child` | string | Child nucleotide sequence after applying branch mutations. Same length as `parent`. |
 | `branch_length` | integer | Number of nucleotide mutations on this branch (within the gene region). |
 
@@ -24,13 +26,13 @@ Curated parent-child sequence pairs extracted from the mutation-annotated tree. 
 - PCPs have been curated to remove branches with identical parent/child sequences (in the gene region). As of v2, this filter is applied during extraction in the same pass that builds the table; there is no separate `mat/clades/{clade}_pcps_raw.csv` file.
 - The filtering criteria (max mutations, max reversions) are controlled by the shared Mutation-Counting config parameters `max_nt_mutations`, `max_reversions_to_ref`, and `max_reversions_to_clade_founder` (as of v8; PCP extraction and clade/window mutation counting filter branches identically).
 
-### `pcps/{gene}/all_pcps_dasm_ready.csv` and `pcps/{gene}/{clade}_pcps_dasm_ready.csv` (v2+)
+### `pcps/{gene}/all_pcps_dasm_ready.csv.gz` and `pcps/{gene}/{clade}_pcps_dasm_ready.csv.gz` (v2+; gzipped in v9+)
 
-DASM-training-ready sibling of `*_pcps.csv`. Same row schema as the parent file plus one column (`in_train`). The filter set + train/val split are applied in the pipeline so downstream consumers (e.g. `data-central` manifests) can read these files directly without any post-processing step.
+DASM-training-ready sibling of `*_pcps.csv.gz`. Same row schema as the parent file plus one column (`in_train`). The filter set + train/val split are applied in the pipeline so downstream consumers (e.g. `data-central` manifests) can read these files directly without any post-processing step.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| (all columns from `*_pcps.csv`) | — | Preserved verbatim. |
+| (all columns from `*_pcps.csv.gz`) | — | Preserved verbatim. |
 | `in_train` | boolean | `True` for the train split, `False` for the val split. The 90/10 split is realized by `np.random.default_rng(seed).random(N) < val_fraction` (with `val_fraction=0.10`), then `in_train = ~val_mask`. |
 
 **Filters applied (in order)**:
@@ -45,9 +47,9 @@ DASM-training-ready sibling of `*_pcps.csv`. Same row schema as the parent file 
 **Seed convention**:
 
 - **Per-clade**: `seed=1729` (matches `data-central/scripts/filter_viral_pcps.sh`).
-- **Aggregate (`all_pcps_dasm_ready.csv`)**: `seed=42` (matches the explicit-seed guardrail in `filter_viral_pcps.sh`; the different seed prevents accidentally producing the aggregate with the per-clade default).
+- **Aggregate (`all_pcps_dasm_ready.csv.gz`)**: `seed=42` (matches the explicit-seed guardrail in `filter_viral_pcps.sh`; the different seed prevents accidentally producing the aggregate with the per-clade default).
 
-**Byte-equivalence to `dasm2 preprocess`**: this rule is a NumPy-only reimplementation of `dasm2.preprocess_command.preprocess` (which `filter_viral_pcps.sh` wraps). On the test pipeline, the aggregate file is byte-identical to the dasm2 reference output; md5 `5e538bd088e676b485a11a04745221e9` is asserted in `validate_test.py`.
+**Byte-equivalence to `dasm2 preprocess`**: this rule is a NumPy-only reimplementation of `dasm2.preprocess_command.preprocess` (which `filter_viral_pcps.sh` wraps). On the test pipeline, the aggregate file is byte-identical to the dasm2 reference output; md5 `5e538bd088e676b485a11a04745221e9` is asserted in `validate_test.py`. Since v9 our side is gzipped while the reference writes plain CSV, so that md5 is taken over the **decompressed** stream — the sentinel value is unchanged by compression. Writes pass `mtime=0`, so a re-run of the same file is byte-reproducible; note that gzip headers also embed the filename, so two identically-contented files under different names are not byte-comparable.
 
 **Companion files**:
 
@@ -56,7 +58,7 @@ DASM-training-ready sibling of `*_pcps.csv`. Same row schema as the parent file 
 
 ### `pcps/{gene}/{clade}_filtered_branches.csv`
 
-Branch identifiers that were excluded during PCP curation. Used internally to harmonize mutation counting with PCP extraction.
+Branch identifiers that were excluded during PCP curation. Deliberately **not** gzipped in v9 (#134): a single ID column of at most a few hundred MB, where staying readable with plain shell tools is worth more than the space.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -64,7 +66,9 @@ Branch identifiers that were excluded during PCP curation. Used internally to ha
 
 ### `pcps/{gene}/filtered_branch_ids.csv`
 
-Aggregated list of all filtered branch IDs across all clades.
+Aggregated list of all filtered branch IDs across all clades. Not gzipped, as above.
+
+> **Correction (v9):** earlier revisions of this document described the per-clade `{clade}_filtered_branches.csv` as "used internally to harmonize mutation counting with PCP extraction." That is stale. Nothing in the pipeline reads either file; harmonization comes from PCP extraction and mutation counting sharing the `max_nt_mutations` / `max_reversions_to_ref` / `max_reversions_to_clade_founder` config keys. Both files are retained for inspection only.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -86,7 +90,7 @@ Amino acid-level fitness estimates aggregated across all clades. Fitness is comp
 | `aa_mutation` | string | Mutation string in standard format (e.g., "D614G"). |
 | `subset_of_ORF1ab` | boolean | True if this entry is for an NSP (ORF1ab subset); False otherwise. |
 | `expected_count` | float | GLM-predicted neutral count (sequence context + RNA structure + position); the baseline for both `delta_fitness_ratio` and `delta_fitness_bayesian`. |
-| `actual_count` | float | Observed mutation count in the data. |
+| `actual_count` | float | Observed mutation count, summed over the nucleotide mutations giving this amino-acid change. Counts observations on the clade founder's codon background only (v9, #130). |
 | `delta_fitness_ratio` | float | Pseudocount log-ratio fitness: `log((actual + 0.5) / (expected + 0.5))`. The primary per-mutation signal rendered by the dasm2 dashboard (renamed from `naive_delta_fitness` in v6). |
 | `delta_fitness_bayesian` | float | Inverse-variance-weighted Bayesian fitness estimate accounting for uncertainty (renamed from `delta_fitness` in v6). |
 | `uncertainty` | float | Standard error of the `delta_fitness_bayesian` estimate. |
@@ -123,7 +127,7 @@ Nucleotide-level fitness estimates. Similar structure to amino acid fitness but 
 | `gene` | string | Gene containing this site (semicolon-separated if multiple). |
 | `aa_mutation` | string | Amino acid mutation if nonsynonymous (semicolon-separated if multiple). |
 | `synonymous` | boolean | True if mutation is synonymous. |
-| `actual_count` | float | Observed mutation count. |
+| `actual_count` | float | Observed mutation count, on the clade founder's codon background only (v9, #130). |
 | `expected_count` | float | GLM-predicted neutral count (sequence context + RNA structure + position). |
 | `tau_squared` | float | Variance component from GLM. |
 | `f_max` | float | Maximum a posteriori (MAP) fitness estimate. |
@@ -177,7 +181,7 @@ masking flags computed once via `workflow/modules/masking.py`.
 | `mut_type` | string | Two-letter substitution type (e.g., "CT"). |
 | `exclude` | boolean | True if the mutation is masked for any reason: config `sites_to_exclude`, the ProblematicSites VCF, the UShER yaml (per-clade site or mutation masks), a founder→reference reversion (destination base equals the reference base), or out of `site_include_range`. |
 | `masked_in_usher` | boolean | True if excluded specifically by an artifactual-site mask (UShER yaml or the ProblematicSites VCF). Founder→reference reversions set `exclude` but not this flag. |
-| `actual_count` | integer | Observed mutation count (0 if unobserved). |
+| `actual_count` | integer | Observed mutation count (0 if unobserved), counting **only** observations made on the clade founder's codon background. The same nucleotide substitution observed on an already-mutated codon is a different amino-acid change and is excluded (v9; see the note below). |
 | `synonymous` | boolean | True if the mutation is synonymous. |
 | `noncoding` | boolean | True if the site is non-coding. |
 
@@ -188,6 +192,13 @@ masking flags computed once via `workflow/modules/masking.py`.
   are present for internal pipeline use.
 - Replaces the former `expected_vs_actual_mut_counts.csv`; there is no `expected_count` here —
   the neutral expectation is estimated downstream by the GLM.
+- **Exactly one row per `(clade, nt_mutation)`** — the table is the full enumeration of possible
+  mutations per clade, so this is a structural invariant, checked at write time and by
+  `validate_test.py`. Through v8 it did not hold: observations on non-founder codon backgrounds
+  were relabelled onto the founder codon and kept as extra rows, so a mutation could appear
+  2-5 times, with the copies byte-identical in every column except the counts. Consumers that
+  grouped or joined on `(clade, nt_mutation)` silently double-counted those mutations, and both
+  fitness estimators were affected (#130).
 
 ## Clade Founder Sequences
 
@@ -197,7 +208,9 @@ Whole-genome founder sequence (FASTA) for each clade, computed by applying the c
 
 ### `clade_founders/{gene}/{clade}.fa`
 
-Gene-sliced founder sequence for each clade and each protein in the `pcp_genes` config list. Contains just that protein's coding sequence, taken from the reference GTF's CDS blocks (via `cds_blocks_for_gene`) and excluding the trailing stop codon; the subdirectory is the gene symbol verbatim (e.g. `clade_founders/S/`, `clade_founders/ORF1ab/`, `clade_founders/E/`). ORF1ab is reconstructed as one in-frame CDS across the ribosomal frameshift — its two GTF blocks share nt 13468 — giving 21288 nt = 7096 codons; Spike is positions 21563-25381 (1-based, inclusive), 3819 nt = 1273 codons. Each slice byte-aligns with the `parent`/`child` sequences in the matching `pcps/{gene}/{clade}_pcps.csv`, so it can be used directly as the wildtype for training ParentIndependent DASM models.
+Gene-sliced founder sequence for each clade and each protein in the `pcp_genes` config list. Contains just that protein's coding sequence, taken from that gene's CDS blocks (via `gtf.resolve_cds_blocks` — the `pcp_gene_cds_blocks` config map where it names the gene, otherwise the reference GTF) and excluding the trailing stop codon; the subdirectory is the gene symbol verbatim (e.g. `clade_founders/S/`, `clade_founders/ORF1ab/`, `clade_founders/E/`). ORF1ab is reconstructed as one in-frame CDS across the ribosomal frameshift — its two GTF blocks share nt 13468 — giving 21288 nt = 7096 codons; Spike is positions 21563-25381 (1-based, inclusive), 3819 nt = 1273 codons. Each slice byte-aligns with the `parent`/`child` sequences in the matching `pcps/{gene}/{clade}_pcps.csv.gz`, so it can be used directly as the wildtype for training ParentIndependent DASM models.
+
+**`ORF1b` (v9+, #133).** A PCP-only gene, added through `pcp_gene_cds_blocks` rather than the reference GTF: blocks `[[13442, 13468], [13468, 21552]]`, 8112 nt = 2704 codons, covering nsp12–nsp16. It is exactly ORF1ab codons 4393–7096, so `clade_founders/ORF1b/{clade}.fa` is byte-identical to `clade_founders/ORF1ab/{clade}.fa[13176:21288]` for every clade — an invariant `validate_test.py` enforces. Note it spans the frameshift rather than starting after it: nsp12's first 9 residues are translated in ORF1a's frame, so the post-slippage block alone would clip them. ORF1b appears in **no** fitness output by design (`counts_all.csv`, the GLM, and `aamut_fitness` are unchanged); adding it to the GTF would have made an 8 kb stretch multi-gene and altered every fitness output.
 
 **Cross-version integrity sentinel**: the 19A Spike slice (`clade_founders/S/19A.fa`, Wuhan-Hu-1 reference founder) has md5 `b948f2a1f20edbce64cfff1dc540c119` and is byte-stable across all SARS-CoV-2 cutoff dates.
 

@@ -22,6 +22,15 @@ SPIKE_19A_SENTINEL_MD5 = "b948f2a1f20edbce64cfff1dc540c119"
 # the test pipeline's ``all_pcps.csv`` + ``S_codon_sites_to_mask.txt``
 # with the canonical seeds. A mismatch here means either the filter logic
 # drifted from dasm2 or the train/val RNG call sequence changed.
+#
+# Since #134 our side is gzipped while the reference writes plain CSV, so
+# ``test_summary.py`` takes these md5s over the **decompressed** stream
+# (``_decompressed_md5``). The sentinel value is therefore *unchanged* by
+# compression -- which is the point: it still compares payload to payload. Do
+# not re-baseline it to a compressed-file md5. That would silently retire the
+# cross-implementation check, and it would not even be stable, since pandas
+# embeds the output filename in the gzip header (FNAME) and, unless
+# ``mtime=0`` is passed, the write time as well.
 DASM_READY_ALL_SENTINEL_MD5 = "5e538bd088e676b485a11a04745221e9"
 
 
@@ -223,7 +232,8 @@ def compare_summaries(actual, expected):
 
             # Hard-coded cross-implementation sentinel: the aggregate md5
             # must equal the dasm2 reference output (proves byte-equivalence
-            # to filter_viral_pcps.sh).
+            # to filter_viral_pcps.sh). Taken on the decompressed stream since
+            # #134, so the expected value is unchanged by compression.
             if act_agg.get('checksum') and act_agg.get('checksum') != DASM_READY_ALL_SENTINEL_MD5:
                 differences.append(
                     f"dasm_ready aggregate sentinel md5 mismatch: expected "
@@ -772,6 +782,110 @@ def validate_orf1ab_founder(output_dir):
     return differences, summary
 
 
+def validate_orf1b_founder_slice(output_dir):
+    """Every ORF1b founder must be exactly its clade's ORF1ab codons 4393-7096.
+
+    ORF1b (nsp12-nsp16) is a PCP-only gene whose coordinates come from
+    ``pcp_gene_cds_blocks`` rather than the reference GTF (#133). Its blocks,
+    ``[[13442, 13468], [13468, 21552]]``, share nt 13468 exactly as ORF1ab's do,
+    so a correct slice is byte-identical to the interior of the ORF1ab founder
+    the pipeline builds independently. That makes this the cheapest available
+    cross-check on the frameshift handling: the two founders are produced by the
+    same code from different coordinates, and any frame error moves one and not
+    the other.
+
+    Checked for **every** clade, not just 19A, because a coordinate error would
+    be identical across clades while a founder-construction error need not be.
+
+    Skips when ORF1b is not among ``pcp_genes``. If ORF1b is present but ORF1ab
+    is not, the identity cannot be checked; the frame checks still run and the
+    summary says so rather than implying the comparison happened.
+    """
+    orf1b_dir = os.path.join(output_dir, "clade_founders", "ORF1b")
+    if not os.path.isdir(orf1b_dir):
+        # A visible SKIPPED, not a silent None: returning no summary makes a skip
+        # indistinguishable from a pass in the "All validation checks passed"
+        # block, which is how a check stops covering anything without anyone
+        # noticing.
+        #
+        # ORF1b genuinely is optional in pcp_genes, so a skip can be correct --
+        # but the *reason* is checked rather than asserted. If sibling gene
+        # directories exist while ORF1b's does not, the run did request per-gene
+        # founders and ORF1b's are missing, which is a failure and not a skip.
+        founders_root = os.path.join(output_dir, "clade_founders")
+        siblings = sorted(
+            name for name in os.listdir(founders_root)
+            if os.path.isdir(os.path.join(founders_root, name))
+        ) if os.path.isdir(founders_root) else []
+        if siblings:
+            return [], (
+                f"SKIPPED: no {orf1b_dir}; ORF1b is not among pcp_genes "
+                f"(per-gene founders present for {', '.join(siblings)})"
+            )
+        return [], (
+            f"SKIPPED: no per-gene founder directories under {founders_root} at "
+            f"all, so ORF1b's absence is not evidence about pcp_genes"
+        )
+    orf1ab_dir = os.path.join(output_dir, "clade_founders", "ORF1ab")
+
+    def read_seq(path):
+        with open(path) as f:
+            return "".join(
+                line.strip() for line in f if not line.startswith(">")
+            ).upper()
+
+    differences = []
+    fastas = sorted(f for f in os.listdir(orf1b_dir) if f.endswith(".fa"))
+    if not fastas:
+        return [f"clade_founders/ORF1b/ exists but holds no .fa files"], None
+
+    n_compared = 0
+    for name in fastas:
+        clade = name[: -len(".fa")]
+        seq = read_seq(os.path.join(orf1b_dir, name))
+        if len(seq) != 8112:
+            differences.append(
+                f"ORF1b founder {clade} is {len(seq)} nt, expected 8112 "
+                f"(2704 codons)"
+            )
+        stops = [
+            (i // 3) + 1
+            for i in range(0, len(seq) - len(seq) % 3, 3)
+            if seq[i : i + 3] in _STOP_CODONS
+        ]
+        if stops:
+            differences.append(
+                f"ORF1b founder {clade} has internal stop codon(s) at "
+                f"codon {stops[:5]}"
+            )
+        orf1ab_path = os.path.join(orf1ab_dir, name)
+        if os.path.exists(orf1ab_path):
+            orf1ab_seq = read_seq(orf1ab_path)
+            expected = orf1ab_seq[13176:21288]
+            if seq != expected:
+                differences.append(
+                    f"ORF1b founder {clade} != ORF1ab[13176:21288] "
+                    f"({len(seq)} nt vs {len(expected)} nt); the frameshift "
+                    f"reconstruction disagrees between the two coordinate sets"
+                )
+            else:
+                n_compared += 1
+
+    if differences:
+        return differences, None
+    if n_compared:
+        summary = (
+            f"ORF1b founders: {len(fastas)} clades, 8112 nt = 2704 codons, no "
+            f"internal stop; {n_compared} byte-equal ORF1ab[13176:21288]"
+        )
+    else:
+        summary = (
+            f"ORF1b founders: {len(fastas)} clades in frame at 8112 nt, but "
+            f"ORF1ab is not in pcp_genes so the slice identity was not checked"
+        )
+    return differences, summary
+
+
 def validate_glm_synonymous_training(output_dir):
     """Check the GLM neutral model was trained on synonymous mutations only.
 
@@ -858,6 +972,87 @@ def validate_glm_synonymous_training(output_dir):
     )
 
 
+def validate_founder_codon_background(output_dir):
+    """Check ``counts_all.csv`` holds exactly one row per (clade, nt_mutation).
+
+    The grid enumerates every possible mutation from each clade founder, so this
+    is a hard structural invariant, not a statistical one. It broke because the
+    join carried no ``codon_change``: observations of the same nucleotide
+    substitution on an already-mutated codon were relabelled onto the founder
+    codon and kept as extra rows, corrupting both fitness estimators in opposite
+    directions (#130). Nothing else could see it -- the phantom rows are
+    byte-identical to the real ones in every emitted column.
+
+    ``tests/test_founder_codon_background.py`` pins the filter itself on
+    synthetic fixtures. This is the dataset-level counterpart, and it is the
+    only one of the two that can speak about a *real* run.
+
+    Note the test dataset has no off-founder-background observations at all, so
+    a pass here confirms the invariant holds but does not exercise the filter;
+    the reported summary says which case actually occurred.
+    """
+    import csv
+
+    differences = []
+    counts_path = Path(output_dir) / 'counts_all.csv'
+    if not counts_path.exists():
+        # A *difference*, not a skip: counts_all.csv is an unconditional output of
+        # build_count_table for every tree, so there is no config under which it
+        # is legitimately absent. Reporting SKIPPED here would pass the run on a
+        # missing headline output.
+        differences.append(
+            f"{counts_path} does not exist, but build_count_table writes it for "
+            f"every tree -- this is a missing output, not an inapplicable check"
+        )
+        return differences, None
+
+    seen = set()
+    duplicates = []
+    n_rows = 0
+    with open(counts_path, newline='') as f:
+        reader = csv.DictReader(f)
+        missing = [c for c in ('clade', 'nt_mutation') if c not in (reader.fieldnames or [])]
+        if missing:
+            differences.append(
+                f"{counts_path.name} has no {missing} column(s), so the "
+                "one-row-per-mutation invariant cannot be checked (#130)"
+            )
+            return differences, None
+        for row in reader:
+            n_rows += 1
+            key = (row['clade'], row['nt_mutation'])
+            if key in seen:
+                if len(duplicates) < 5:
+                    duplicates.append(key)
+            else:
+                seen.add(key)
+
+    if duplicates:
+        differences.append(
+            f"{counts_path.name} has duplicated (clade, nt_mutation) rows -- "
+            f"{n_rows} rows for {len(seen)} distinct mutations. Each mutation "
+            "must appear exactly once per clade; extra rows mean observations "
+            "from non-founder codon backgrounds were counted (#130). First "
+            f"{len(duplicates)}: {duplicates}"
+        )
+        return differences, None
+
+    # How many observations the filter actually removed, so a pass is not read
+    # as "the filter was exercised" when the dataset had nothing to remove.
+    log_path = Path(output_dir) / 'log' / 'build_count_table.log'
+    dropped = 'log not found'
+    if log_path.exists():
+        match = re.search(
+            r'dropped (\d+) rows mutated codon background', log_path.read_text()
+        )
+        dropped = f"{match.group(1)} dropped" if match else "none dropped"
+
+    return differences, (
+        f"Count table: {n_rows} rows, one per (clade, nt_mutation); "
+        f"off-founder-background observations: {dropped}"
+    )
+
+
 def default_output_dir():
     """Best-guess test output dir when none is given.
 
@@ -867,6 +1062,7 @@ def default_output_dir():
     any ``results/test_data*``, falling back to the unversioned name.
     """
     import glob
+    versioned = None
     try:
         with open('VERSION') as vf:
             versioned = f"results/test_data_{vf.read().strip()}"
@@ -875,7 +1071,22 @@ def default_output_dir():
     except OSError:
         pass
     candidates = sorted(glob.glob('results/test_data*'))
-    return candidates[-1] if candidates else 'results/test_data'
+    fallback = candidates[-1] if candidates else 'results/test_data'
+    # Announce the fallback loudly (#88). Immediately after a version bump the
+    # VERSION directory does not exist yet, so this silently validated the
+    # *previous* version's outputs and reported success -- the failure #88 is
+    # about. The fallback is kept (validating an older run on purpose is
+    # legitimate) but it can no longer happen quietly. Pass an explicit path or
+    # OUTPUT_DIR to bypass this entirely.
+    if versioned and fallback != versioned:
+        print(
+            f"WARNING: {versioned} (from VERSION) does not exist; falling back to "
+            f"{fallback}. These are DIFFERENT pipeline versions -- a pass here says "
+            f"nothing about {versioned}. Re-run the pipeline, or pass an explicit "
+            f"output directory.",
+            file=sys.stderr,
+        )
+    return fallback
 
 
 def main():
@@ -888,6 +1099,9 @@ def main():
         sys.argv[1] if len(sys.argv) > 1
         else os.environ.get('OUTPUT_DIR') or default_output_dir()
     )
+    # Always name the directory being validated: "all checks passed" is
+    # meaningless without knowing which version produced the outputs (#88).
+    print(f"Validating {output_dir}")
 
     # Generate current summary
     result = subprocess.run(
@@ -924,10 +1138,12 @@ def main():
     reversion_diffs, reversion_summary = validate_reversion_masking(output_dir)
     spike_mask_diffs, spike_mask_summary = validate_spike_mask_all_clades(output_dir)
     orf1ab_diffs, orf1ab_summary = validate_orf1ab_founder(output_dir)
+    orf1b_diffs, orf1b_summary = validate_orf1b_founder_slice(output_dir)
     glm_syn_diffs, glm_syn_summary = validate_glm_synonymous_training(output_dir)
+    codon_bg_diffs, codon_bg_summary = validate_founder_codon_background(output_dir)
     differences += (
         site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
-        + orf1ab_diffs + glm_syn_diffs
+        + orf1ab_diffs + orf1b_diffs + glm_syn_diffs + codon_bg_diffs
     )
 
     if differences:
@@ -960,8 +1176,12 @@ def main():
             print(f"  - Spike codon mask (all-clades): {spike_mask_summary}")
         if orf1ab_summary:
             print(f"  - {orf1ab_summary}")
+        if orf1b_summary:
+            print(f"  - {orf1b_summary}")
         if glm_syn_summary:
             print(f"  - {glm_syn_summary}")
+        if codon_bg_summary:
+            print(f"  - {codon_bg_summary}")
         sys.exit(0)
 
 

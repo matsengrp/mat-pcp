@@ -168,10 +168,24 @@ def compare_clade(clade, matpcp_csv, phyz_tsv, branch_muts=None,
     }
 
 
+def default_results_dir():
+    """Versioned test output dir, tracking ``VERSION`` (#88).
+
+    A literal ``results/test_data_v1`` here went eight bumps stale without
+    anything noticing, because a missing directory reads as "the pipeline has
+    not been run" rather than as a wrong path.
+    """
+    try:
+        with open("VERSION") as vf:
+            return f"results/test_data_{vf.read().strip()}"
+    except OSError:
+        return "results/test_data"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--phyz-bin", default=os.environ.get("PHYZ", "./phyz"))
-    ap.add_argument("--results-dir", default="results/test_data_v1")
+    ap.add_argument("--results-dir", default=default_results_dir())
     ap.add_argument("--clades", nargs="+", default=["19A", "19B", "20A"])
     ap.add_argument("--region", default="21563-25381")
     ap.add_argument("--max-mutations", type=int, default=4)
@@ -196,7 +210,11 @@ def main():
     summaries = []
     for clade in args.clades:
         tree_pb = results_dir / "mat" / "clades" / f"{clade}_tree.pb"
-        matpcp_csv = results_dir / "pcps" / f"{clade}_pcps.csv"
+        # NOTE: this path is stale independently of the extension -- since #92
+        # PCPs live under a per-gene subdirectory (``pcps/{gene}/``), so this
+        # helper does not currently resolve against a real run. Extension
+        # updated for #134; the missing gene component is pre-existing.
+        matpcp_csv = results_dir / "pcps" / f"{clade}_pcps.csv.gz"
         phyz_tsv = phyz_out_dir / f"{clade}_phyz_pcps.tsv"
 
         if not tree_pb.exists():
@@ -239,6 +257,20 @@ def main():
             f"{len(s['phyz_only_other']):>6}"
         )
     print("=" * len(header))
+
+    # Every clade skips when its inputs are missing, so an unresolvable
+    # --results-dir left `summaries` empty and this script still printed
+    # "SUCCESS: every mat-pcp edge is present in phyz output" and exited 0 --
+    # a guaranteed-vacuous pass, the same shape as the #133 validation. Note the
+    # NOTE at the `matpcp_csv` assignment below: that path is stale independently
+    # (missing the per-gene component since #92), so today this branch is the one
+    # that fires. Fail rather than congratulate.
+    if not summaries:
+        print("\nFAILURE: no clade produced a comparison -- every one was "
+              f"skipped for missing inputs under {results_dir}. Nothing was "
+              f"cross-validated, so this is not a pass. Check --results-dir and "
+              f"the pcps/{{gene}}/ path component (see the NOTE above).")
+        sys.exit(1)
 
     total_mp_only = sum(s["n_matpcp_only"] for s in summaries)
     total_pz_other = sum(len(s["phyz_only_other"]) for s in summaries)

@@ -3,7 +3,8 @@
 # =============================================================================
 # Trees to process (one Snakemake run builds all of them). Each tree's label
 # becomes an output dir {output_root}/{label}_{version}; output_root defaults to
-# "results", so this writes to results/test_data_v5.
+# "results", so this writes to results/test_data_$(cat VERSION). Do not spell the
+# version out here -- a literal goes stale at the next bump (#88).
 trees:
   test_data:
     mat: "data/test_data/filtered_tree_raw.pb.gz"
@@ -68,7 +69,19 @@ window_min_subtree_size: 0
 # =============================================================================
 clade_column: "Nextstrain_clade"
 min_clade_size: 2
-clades_to_exclude: []
+# Exclude clades with no resolvable founder, matching config.yaml's exclusion of
+# 21A. Neither is reachable at max_clades: 3 today -- the first three adequate
+# clades are 19A/19B/20A -- but both would now be a hard failure if max_clades
+# were raised, since clade_founder_fasta.py no longer falls back to the reference
+# (#129):
+#   21A          absent from the Neher JSON (the only 19A-22F clade that is) and
+#                not a Pango key, so it resolves in none of the three sources.
+#   recombinant  a catch-all metadata label rather than a clade; it has 4 samples
+#                in the test data and passes min_clade_size. The production
+#                configs use Nextstrain_clade_usher, which has no such value.
+clades_to_exclude:
+  - 21A
+  - recombinant
 max_clades: 3  # Set to limit number of clades processed (useful for testing)
 
 # Reference clade for motif/codon annotation (using 19A to match production behavior)
@@ -88,6 +101,25 @@ pcp_genes:
   - S
   - ORF1ab
   - E
+  # ORF1b is here so CI exercises the pcp_gene_cds_blocks override and the
+  # pcp_gene_to_fitness_gene codon remapping end-to-end. Without it the override
+  # path would be unit-tested only, and a green pipeline run would prove nothing
+  # about it -- the same "invisible on test data" shape as #130 and #125.
+  - ORF1b
+
+# Explicit CDS blocks for PCP-only genes the reference GTF does not carry.
+# 1-based inclusive; the two blocks share nt 13468, which is how the -1
+# ribosomal frameshift stays in frame (see gtf.resolve_cds_blocks).
+pcp_gene_cds_blocks:
+  ORF1b: [[13442, 13468], [13468, 21552]]   # nsp12-nsp16; 8112 nt = 2704 codons
+
+# ORF1b is a PCP-only gene: it is an interior slice of ORF1ab and never appears
+# in aamut_fitness under its own name, so validation compares it against ORF1ab
+# shifted by this offset. The offset is re-derived from the CDS blocks and
+# cross-checked against this value, so a stale number fails loudly (#133).
+# ORF1ab, S and E need no entry -- each appears in aamut_fitness as itself.
+pcp_gene_to_fitness_gene:
+  ORF1b: {gene: ORF1ab, codon_offset: 4392}   # ORF1b codon 1 == ORF1ab codon 4393
 
 # PCP branch QC reuses the shared Mutation-Counting keys (max_nt_mutations /
 # max_reversions_to_ref / max_reversions_to_clade_founder), applied to CODING
@@ -101,11 +133,21 @@ clade_founders:
   neher_json: "https://raw.githubusercontent.com/neherlab/SC2_variant_rates/7e738194a8c6592082f1caa9a6ca70cb68289790/data/clade_gts.json"
   roemer_json: "https://raw.githubusercontent.com/corneliusroemer/pango-sequences/main/data/pango-consensus-sequences_summary.json"
 
-# Mapping from Nextstrain clades to Pango lineages (for Roemer founders)
+# Mapping from Nextstrain clades to Pango lineages (for Roemer founders).
+#
+# Every config carries its own copy of this map, so a new clade must be added to
+# each config whose tree contains it (grep roemer_nextstrain_to_pango config/).
+# A clade missing from both this map and the Neher JSON is now a hard failure in
+# clade_founder_fasta.py rather than a silent fallback to the Wuhan reference
+# (#129) -- so a missing entry fails the run instead of corrupting it.
+#
+# Short on purpose: the test data cuts off well before the 24H-25C clades that
+# the production configs need, and every clade it does contain resolves via the
+# Neher JSON. The guard above is what makes that safe to rely on rather than a
+# standing invitation to fall behind.
 roemer_nextstrain_to_pango:
   23A: XBB.1.5
   23B: XBB.1.16
-  # Add more mappings as needed
 
 # =============================================================================
 # Mutation Counting Configuration

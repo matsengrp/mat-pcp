@@ -199,7 +199,7 @@ wildcard_constraints:
 
 
 # Disambiguate the aggregate rules from their per-clade counterparts. The
-# aggregate outputs (``aggregated.csv``, ``all_pcps.csv``, ``all_*_dasm_*``,
+# aggregate outputs (``aggregated.csv``, ``all_pcps.csv.gz``, ``all_*_dasm_*``,
 # ``all_aamut_fitness.csv``) live in the same directory as a ``{clade}`` output
 # and their filenames are valid ``{clade}`` matches (``clade=aggregated`` /
 # ``clade=all``). Before the multi-tree refactor these aggregate paths were
@@ -253,14 +253,52 @@ def get_final_tree():
 
 # Proteins to generate PCPs and gene-sliced founder FASTAs for. A single
 # Snakemake invocation fans PCP extraction over this list; coordinates come from
-# the reference GTF (see ``cds_blocks_for_gene``). Output paths use the gene
-# symbol verbatim (``pcps/S/``, ``clade_founders/S/``).
+# ``pcp_gene_cds_blocks`` if it names the gene, otherwise from the reference GTF
+# (see ``gtf.resolve_cds_blocks``). Output paths use the gene symbol verbatim
+# (``pcps/S/``, ``clade_founders/S/``).
 PCP_GENES = config["pcp_genes"]
 if not PCP_GENES:
     raise ValueError(
         "config 'pcp_genes' must be a non-empty list of gene symbols "
         "(e.g. [S, ORF1ab, E]); got an empty list."
     )
+
+# Explicit CDS blocks for PCP-only genes the shared reference GTF does not carry
+# (ORF1b = nsp12-nsp16; #133). Deliberately NOT fed to ``edit_ref_gtf`` /
+# ``ref_coding_sites``, so every fitness output is untouched. Validated in
+# ``gtf.resolve_cds_blocks`` at the point of use, where the reference length is
+# known; validated here only for keys, which is the check the scripts cannot do
+# because each sees a single gene.
+PCP_GENE_CDS_BLOCKS = config.get("pcp_gene_cds_blocks") or {}
+_orphan_overrides = sorted(set(PCP_GENE_CDS_BLOCKS) - set(PCP_GENES))
+if _orphan_overrides:
+    raise ValueError(
+        f"config 'pcp_gene_cds_blocks' names {_orphan_overrides}, which are not "
+        f"in 'pcp_genes' ({list(PCP_GENES)}). An override for a gene that is "
+        f"never extracted has no effect, so this is a typo rather than a "
+        f"configuration -- most likely the gene was meant to be added to "
+        f"'pcp_genes' too."
+    )
+
+# PCP gene -> the ``aamut_fitness`` gene it is validated against, plus the codon
+# offset between them. Needed only where a PCP gene does not appear in
+# ``aamut_fitness`` under its own name and numbering: ORF1a (dropped by
+# ``aamutfit.get_coding``) and ORF1b (a PCP-only slice of ORF1ab). The offset is
+# re-derived from the CDS blocks and cross-checked against this value at use
+# (#133).
+PCP_GENE_TO_FITNESS_GENE = config.get("pcp_gene_to_fitness_gene") or {}
+_orphan_fitness_map = sorted(set(PCP_GENE_TO_FITNESS_GENE) - set(PCP_GENES))
+if _orphan_fitness_map:
+    raise ValueError(
+        f"config 'pcp_gene_to_fitness_gene' names {_orphan_fitness_map}, which "
+        f"are not in 'pcp_genes' ({list(PCP_GENES)})."
+    )
+for _gene, _spec in PCP_GENE_TO_FITNESS_GENE.items():
+    if not isinstance(_spec, dict) or set(_spec) != {"gene", "codon_offset"}:
+        raise ValueError(
+            f"config 'pcp_gene_to_fitness_gene[{_gene}]' must be a mapping with "
+            f"exactly the keys 'gene' and 'codon_offset'; got {_spec!r}"
+        )
 
 # Terminal output files for the unified pipeline
 # (intermediate files are created automatically as dependencies)
@@ -293,7 +331,7 @@ rule all:
             f=results_files,
         ),
         # Per-gene PCP targets (tree x gene). The curation report pulls in each
-        # gene's ``pcps/{gene}/all_pcps.csv`` (and thus the per-clade PCPs and
+        # gene's ``pcps/{gene}/all_pcps.csv.gz`` (and thus the per-clade PCPs and
         # gene-sliced founders).
         expand(
             os.path.join(OUTDIR, "pcps/{gene}/pcp_curation_report.txt"),
@@ -315,7 +353,7 @@ rule all:
         ),
         # Per-gene DASM-ready PCPs (tree x gene): aggregate file + per-clade sentinel.
         expand(
-            os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv"),
+            os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv.gz"),
             tree=TREE_LABELS,
             gene=PCP_GENES,
         ),
@@ -766,7 +804,7 @@ def per_clade_inputs(path_template, wildcards, extra_clades=()):
     """Expand ``path_template`` over this tree's adequate-count clades.
 
     ``path_template`` carries both the ``{tree}`` and ``{clade}`` wildcards
-    (e.g. ``os.path.join(OUTDIR, "pcps/{clade}_pcps.csv")`` or
+    (e.g. ``os.path.join(OUTDIR, "pcps/{clade}_pcps.csv.gz")`` or
     ``CLADE_FOUNDER_FASTA``). Used in ``input:`` lambdas of the aggregate
     rules so every per-clade fan-out resolves the checkpoint the same way.
     ``extra_clades`` appends non-checkpoint clades such as ``"all"``.
@@ -856,12 +894,13 @@ rule extract_pcps_by_clade:
         clade_founder_fasta=CLADE_FOUNDER_FASTA,
         coding_sites=rules.ref_coding_sites.output.csv
     output:
-        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv"),
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv.gz"),
         filtered_branches=os.path.join(OUTDIR, "pcps/{gene}/{clade}_filtered_branches.csv")
     params:
         max_nt_mutations=config["max_nt_mutations"],
         max_reversions_to_ref=config["max_reversions_to_ref"],
-        max_reversions_to_clade_founder=config["max_reversions_to_clade_founder"]
+        max_reversions_to_clade_founder=config["max_reversions_to_clade_founder"],
+        pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
     threads: get_threads("extract_pcps")
     resources:
         mem_mb=8000,
@@ -880,10 +919,10 @@ rule aggregate_clade_pcps:
     """Aggregate a gene's clade-specific PCPs into a single file."""
     input:
         pcps=lambda wc: per_clade_inputs(
-            os.path.join(OUTDIR, "pcps", wc.gene, "{clade}_pcps.csv"), wc
+            os.path.join(OUTDIR, "pcps", wc.gene, "{clade}_pcps.csv.gz"), wc
         )
     output:
-        all_pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv")
+        all_pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv.gz")
     log:
         os.path.join(OUTDIR, "log/aggregate_clade_pcps_{gene}.log")
     conda:
@@ -913,8 +952,8 @@ rule aggregate_filtered_branches:
 # =============================================================================
 # DASM-ready PCP curation
 # =============================================================================
-# These rules emit ``*_pcps_dasm_ready.csv`` siblings of the existing
-# ``*_pcps.csv`` files. The filter set + train/val split mirrors
+# These rules emit ``*_pcps_dasm_ready.csv.gz`` siblings of the existing
+# ``*_pcps.csv.gz`` files. The filter set + train/val split mirrors
 # ``dasm2 preprocess`` exactly (reimplemented in plain NumPy here so the
 # rule can stay in ``envs/default.yml`` without pulling in torch/dasm2).
 #
@@ -934,10 +973,10 @@ rule curate_pcps_for_dasm:
     against that protein's own codon mask (``{gene}_codon_sites_to_mask.txt``).
     """
     input:
-        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv"),
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv.gz"),
         mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
     output:
-        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps_dasm_ready.csv"),
+        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps_dasm_ready.csv.gz"),
         report=os.path.join(OUTDIR, "pcps/{gene}/{clade}_dasm_filter_report.txt"),
         stats=os.path.join(OUTDIR, "pcps/{gene}/{clade}_dasm_filter_stats.json")
     params:
@@ -958,10 +997,10 @@ rule curate_all_pcps_for_dasm:
     convention; this matches ``filter_viral_pcps.sh``'s guardrail.
     """
     input:
-        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv"),
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv.gz"),
         mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
     output:
-        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv"),
+        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv.gz"),
         report=os.path.join(OUTDIR, "pcps/{gene}/all_dasm_filter_report.txt"),
         stats=os.path.join(OUTDIR, "pcps/{gene}/all_dasm_filter_stats.json")
     params:
@@ -978,7 +1017,7 @@ rule curate_all_pcps_for_dasm:
 def _dasm_ready_per_clade_outputs(wildcards):
     """One gene's per-clade dasm-ready outputs - fans over clades_w_adequate_counts."""
     return expand(
-        os.path.join(OUTDIR, "pcps", wildcards.gene, "{clade}_pcps_dasm_ready.csv"),
+        os.path.join(OUTDIR, "pcps", wildcards.gene, "{clade}_pcps_dasm_ready.csv.gz"),
         tree=wildcards.tree,
         clade=clades_w_adequate_counts(wildcards),
     )
@@ -987,7 +1026,7 @@ def _dasm_ready_per_clade_outputs(wildcards):
 rule dasm_ready_pcps_all_clades:
     """Collector target for one gene's per-clade DASM-ready outputs.
 
-    Aggregates a gene's per-clade ``*_pcps_dasm_ready.csv`` files into a single
+    Aggregates a gene's per-clade ``*_pcps_dasm_ready.csv.gz`` files into a single
     "everything is built" signal so ``rule all`` can depend on one path per gene.
     """
     input:
@@ -1036,7 +1075,11 @@ rule clade_founder_fasta:
     output:
         fasta=CLADE_FOUNDER_FASTA
     params:
-        roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {})
+        roemer_nextstrain_to_pango=config.get("roemer_nextstrain_to_pango", {}),
+        reference_clade=config.get("reference_clade", "19A"),
+        allow_reference_identical_founders=config.get(
+            "allow_reference_identical_founders", []
+        )
     log:
         os.path.join(OUTDIR, "log/clade_founder_{clade}.log")
     conda:
@@ -1065,6 +1108,8 @@ rule slice_founder_gene:
         gtf=rules.edit_ref_gtf.output.gtf
     output:
         gene_fasta=os.path.join(OUTDIR, "clade_founders/{gene}/{clade}.fa")
+    params:
+        pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
     log:
         os.path.join(OUTDIR, "log/slice_founder_gene_{gene}_{clade}.log")
     conda:
@@ -1404,11 +1449,21 @@ rule get_problematic_sites:
 
     Fanned over ``pcp_genes``: emits ``<gene>_codon_sites_to_mask.txt`` per
     configured protein (the gene comes from the ``{gene}`` wildcard).
+
+    Genes the reference GTF carries are matched against ``counts_all.csv``'s
+    ``gene`` column. A gene added only through ``pcp_gene_cds_blocks`` (ORF1b)
+    never appears there, so its codon sites are derived from its own CDS blocks
+    instead -- hence the ``gtf`` input and the params. Matching on the name alone
+    selected zero rows and wrote an empty mask at exit 0, leaving that gene's
+    DASM-ready PCPs unmasked (#133).
     """
     input:
-        expected_vs_actual=rules.build_count_table.output.csv
+        expected_vs_actual=rules.build_count_table.output.csv,
+        gtf=rules.edit_ref_gtf.output.gtf
     output:
         sites_to_mask=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
+    params:
+        pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
     log:
         os.path.join(OUTDIR, "log/get_problematic_sites_{gene}.log")
     conda:
@@ -1548,10 +1603,10 @@ rule extract_mutations_from_pcps:
     """Extract AA mutation counts from one protein's PCPs by translating.
 
     Fanned over ``pcp_genes``: translates each protein's gene-sliced PCP
-    sequences (``pcps/{gene}/all_pcps.csv``) into per-codon AA mutations.
+    sequences (``pcps/{gene}/all_pcps.csv.gz``) into per-codon AA mutations.
     """
     input:
-        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv")
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv.gz")
     output:
         aa_counts=os.path.join(OUTDIR, "validation/{gene}/pcp_aa_counts.csv")
     log:
@@ -1567,17 +1622,25 @@ rule validate_pcp_vs_counts:
 
     Fanned over ``pcp_genes``. ``extract_mutations_from_pcps`` carries the
     ``{gene}`` wildcard; the aamut_fitness inputs hold every gene and are
-    filtered to ``{gene}`` in the script.
+    aligned to ``{gene}`` in the script -- via ``pcp_gene_to_fitness_gene``
+    where the PCP gene is absent from ``aamut_fitness`` under its own name and
+    numbering (ORF1a, ORF1b). The GTF is an input because that alignment
+    re-derives the codon correspondence from both genes' CDS blocks rather than
+    trusting the configured offset (#133).
     """
     input:
         pcp_counts=rules.extract_mutations_from_pcps.output.aa_counts,
         aamut_fitness_files=lambda wc: per_clade_inputs(
             os.path.join(OUTDIR, "aamut_fitness/{clade}_aamut_fitness.csv"), wc
         ),
-        all_aamut_fitness=rules.aggregate_aamut_fitness.output.csv
+        all_aamut_fitness=rules.aggregate_aamut_fitness.output.csv,
+        gtf=rules.edit_ref_gtf.output.gtf
     output:
         report=os.path.join(OUTDIR, "validation/{gene}/pcp_vs_counts_report.txt"),
         discrepancies=os.path.join(OUTDIR, "validation/{gene}/pcp_vs_counts_discrepancies.csv")
+    params:
+        pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS,
+        pcp_gene_to_fitness_gene=PCP_GENE_TO_FITNESS_GENE
     log:
         os.path.join(OUTDIR, "log/validate_pcp_vs_counts_{gene}.log")
     conda:

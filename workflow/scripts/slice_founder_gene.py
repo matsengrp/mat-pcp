@@ -54,6 +54,9 @@ founder_fasta = snakemake.input.fasta
 gtf_path = snakemake.input.gtf
 gene = snakemake.wildcards.gene
 clade = snakemake.wildcards.clade
+# Optional explicit CDS blocks for PCP-only genes the reference GTF does not
+# carry (ORF1b; #133). Empty for every gene resolved from the GTF.
+pcp_gene_cds_blocks = snakemake.params.pcp_gene_cds_blocks
 output_fasta = snakemake.output.gene_fasta
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
@@ -67,7 +70,9 @@ def log(msg):
 
 
 founder_seq = str(Bio.SeqIO.read(founder_fasta, "fasta").seq)
-cds_blocks = gtf_utils.cds_blocks_for_gene(gtf_path, gene)
+cds_blocks = gtf_utils.resolve_cds_blocks(
+    gtf_path, gene, pcp_gene_cds_blocks, genome_length=len(founder_seq)
+)
 gene_seq = sequences.slice_cds(founder_seq, cds_blocks)
 
 expected_len = sum(end - start + 1 for start, end in cds_blocks)
