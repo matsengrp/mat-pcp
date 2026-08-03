@@ -75,9 +75,10 @@ cross-check disagreed.
   `all_pcps_dasm_ready` — are now `.csv.gz`. **Every PCP path gained a `.csv.gz` suffix;
   contents and column schemas are unchanged.** `pandas.read_csv` and
   `dasm2.data.registry.load_dataframe` both handle it transparently, the latter by extension.
-  Motivation: on `gisaid-and-public_2026-04-22_v8`, `pcps/` was 503.6 GB apparent, ~97% of the
-  whole output tree; measured gzip level 9 gives ~125× on ORF1a and ~110× on S, bringing it to
-  ~4 GB. `mtime=0` is pinned so re-runs are byte-identical, which matters because
+  Motivation: on `gisaid-and-public_2026-04-22_v8`, `pcps/` was 504 GB apparent (470 GiB), 93% of
+  the whole 542 GB output tree; measured gzip level 9 gives ~125× on ORF1a and ~110× on S. On the
+  v9 run `pcps/` is **7.7 GB apparent** — across *five* genes where v8 had two, so the ratio
+  understates the per-file gain. `mtime=0` is pinned so re-runs are byte-identical, which matters because
   `data-central` manifests pin `md5`/`xxh3` per file.
   `{clade}_filtered_branches.csv` and `filtered_branch_ids.csv` stay plain.
 - **ORF1b PCPs, and a validation that was passing vacuously

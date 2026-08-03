@@ -3,7 +3,8 @@
 # =============================================================================
 # Trees to process (one Snakemake run builds all of them). Each tree's label
 # becomes an output dir {output_root}/{label}_{version}; output_root defaults to
-# "results", so this writes to results/test_data_v5.
+# "results", so this writes to results/test_data_$(cat VERSION). Do not spell the
+# version out here -- a literal goes stale at the next bump (#88).
 trees:
   test_data:
     mat: "data/test_data/filtered_tree_raw.pb.gz"

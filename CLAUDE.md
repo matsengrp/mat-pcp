@@ -271,7 +271,9 @@ mat-pcp/
    PCP families (`{clade}_pcps`, `all_pcps`, `{clade}_pcps_dasm_ready`,
    `all_pcps_dasm_ready`) are `.csv.gz` as of v9; `{clade}_filtered_branches.csv`
    and `filtered_branch_ids.csv` deliberately stay plain. On the v8 production
-   tree `pcps/` was **503.6 GB apparent, ~97% of the whole output tree**, and
+   tree `pcps/` was **504 GB apparent (470 GiB), 93% of the whole 542 GB output
+   tree** — quote apparent or allocated consistently, never a mix (allocated is
+   403/415 GiB, i.e. 97%) — and
    measured gzip level 9 gives ~125× on ORF1a / ~110× on S. The policy lives in
    `modules/pcpio.py::PCP_CSV_COMPRESSION` rather than at each `to_csv`, because a
    writer that omitted `mtime=0` would break reproducibility for that one file

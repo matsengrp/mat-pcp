@@ -2,10 +2,16 @@
 
 The four PCP families -- ``{clade}_pcps``, ``all_pcps``,
 ``{clade}_pcps_dasm_ready`` and ``all_pcps_dasm_ready`` -- are written as
-``.csv.gz``. On ``gisaid-and-public_2026-04-22_v8`` they came to **503.6 GB
-apparent, ~97% of the whole 415 GiB output tree**, because every row stores a
-full parent sequence *and* its child, differing by a handful of mutations, and
-adjacent rows within a clade are near-identical to each other.
+``.csv.gz``. On ``gisaid-and-public_2026-04-22_v8`` they came to **504 GB
+apparent (470 GiB), 93% of the whole 542 GB output tree**, because every row
+stores a full parent sequence *and* its child, differing by a handful of
+mutations, and adjacent rows within a clade are near-identical to each other.
+
+Quote one measure or the other, never a mix: ``du --apparent-size`` gives
+504/542 GB (93%), while ``du``'s allocated blocks give 403/415 GiB (97%) on this
+GPFS filesystem. An earlier revision of this docstring paired the apparent
+``pcps/`` figure with the allocated tree total, which cannot both hold -- 470 GiB
+is not 97% of 415 GiB.
 
 Measured gzip ratios, sampled at 25/50/75% through each aggregate file so the
 numbers are not an artifact of the head of the file:

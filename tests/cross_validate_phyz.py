@@ -168,10 +168,24 @@ def compare_clade(clade, matpcp_csv, phyz_tsv, branch_muts=None,
     }
 
 
+def default_results_dir():
+    """Versioned test output dir, tracking ``VERSION`` (#88).
+
+    A literal ``results/test_data_v1`` here went eight bumps stale without
+    anything noticing, because a missing directory reads as "the pipeline has
+    not been run" rather than as a wrong path.
+    """
+    try:
+        with open("VERSION") as vf:
+            return f"results/test_data_{vf.read().strip()}"
+    except OSError:
+        return "results/test_data"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--phyz-bin", default=os.environ.get("PHYZ", "./phyz"))
-    ap.add_argument("--results-dir", default="results/test_data_v1")
+    ap.add_argument("--results-dir", default=default_results_dir())
     ap.add_argument("--clades", nargs="+", default=["19A", "19B", "20A"])
     ap.add_argument("--region", default="21563-25381")
     ap.add_argument("--max-mutations", type=int, default=4)

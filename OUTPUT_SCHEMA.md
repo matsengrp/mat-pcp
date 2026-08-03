@@ -10,7 +10,7 @@ For information on running the pipeline, see [README.md](README.md).
 
 Curated parent-child sequence pairs extracted from the mutation-annotated tree. These represent evolutionary transitions along tree branches and are suitable for training sequence models (e.g., DASM).
 
-> **Renamed in v9 (#134):** these were `.csv` through v8. Contents are unchanged — the column schema below is identical — but every path gained a `.csv.gz` suffix. `pandas.read_csv` and `dasm2.data.registry.load_dataframe` both handle it transparently; the latter matches on the extension, so the name must end in exactly `.csv.gz`. The motivation was size: on `gisaid-and-public_2026-04-22_v8`, `pcps/` was 503.6 GB apparent, ~97% of the entire output tree. Measured gzip level 9 gives ~125x on ORF1a and ~110x on S.
+> **Renamed in v9 (#134):** these were `.csv` through v8. Contents are unchanged — the column schema below is identical — but every path gained a `.csv.gz` suffix. `pandas.read_csv` and `dasm2.data.registry.load_dataframe` both handle it transparently; the latter matches on the extension, so the name must end in exactly `.csv.gz`. The motivation was size: on `gisaid-and-public_2026-04-22_v8`, `pcps/` was 504 GB apparent (470 GiB), 93% of the entire 542 GB output tree. Measured gzip level 9 gives ~125x on ORF1a and ~110x on S; on the v9 run `pcps/` is 7.7 GB apparent, across five genes where v8 had two.
 
 | Column | Type | Description |
 |--------|------|-------------|

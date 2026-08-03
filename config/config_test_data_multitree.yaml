@@ -3,7 +3,9 @@
 # =============================================================================
 # Trees to process (one Snakemake run builds all of them). Each tree's label
 # becomes an output dir {output_root}/{label}_{version}; output_root defaults to
-# "results", so this writes to results/test_data_v5 and results/test_data_early_v5.
+# "results", so this writes to results/test_data_$(cat VERSION) and
+# results/test_data_early_$(cat VERSION). Do not spell the version out here -- a
+# literal goes stale at the next bump (#88).
 trees:
   # Default global max_leaf_date (2022-06-01) -> 25 clades / 2437 sequences.
   # Byte-identical outputs to config_test_data.yaml's single tree.
