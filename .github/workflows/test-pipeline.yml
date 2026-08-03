@@ -1079,10 +1079,17 @@ jobs:
         offset, fitness_gene = remap['codon_offset'], remap['gene']
         cds_nt = sum(end - start + 1 for start, end in blocks)
         # divmod, not //: a future block edit that breaks codon alignment would
-        # otherwise truncate to a plausible n_codons, shift `last`, and report
-        # "the mask is in the wrong codon numbering" instead of the real cause.
-        # gtf.validate_cds_blocks catches this inside the pipeline, but this step
-        # reads the config directly and bypasses it.
+        # otherwise truncate to a plausible n_codons, shift the last codon, and
+        # report "the mask is in the wrong codon numbering" instead of the real
+        # cause. gtf.validate_cds_blocks catches this inside the pipeline, but
+        # this step reads the config directly and bypasses it.
+        #
+        # NB: this whole block is a double-quoted shell string, so backticks and
+        # dollar-paren command substitution are expanded by bash BEFORE python
+        # sees the source -- even inside a python comment. A stray pair of
+        # backticks here spliced the output of last(1) into the middle of this
+        # script; writing the dollar-paren form out literally then did the same
+        # thing again. Use neither form anywhere in this block, prose included.
         n_codons, remainder = divmod(cds_nt, 3)
         if remainder:
             sys.exit(f'pcp_gene_cds_blocks ORF1b totals {cds_nt} nt, not a whole '
