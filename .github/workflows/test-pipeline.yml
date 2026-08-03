@@ -171,7 +171,17 @@ jobs:
     # on any that is not wired up individually.
     - name: Verify every tests/test_*.py file actually runs
       run: |
+        # GitHub runs `run:` steps as `bash -e {0}`, so errexit is ALREADY ON and
+        # the `set -uo pipefail` below does not add it. What keeps a failing file
+        # from aborting the loop is that the invocation sits in an `if !`
+        # condition, which bash exempts from errexit. Do not unwrap that `if` --
+        # the loop would stop at the first failure and silently skip the rest,
+        # which is the invisibility this step exists to prevent.
         set -uo pipefail
+        # nullglob so an unmatched glob yields nothing rather than the literal
+        # pattern; without it `found` is 1 for a non-matching glob and the
+        # layout-changed branch below is unreachable.
+        shopt -s nullglob
         status=0
         found=0
         for f in tests/test_*.py; do
@@ -1068,7 +1078,15 @@ jobs:
         remap = cfg['pcp_gene_to_fitness_gene']['ORF1b']
         offset, fitness_gene = remap['codon_offset'], remap['gene']
         cds_nt = sum(end - start + 1 for start, end in blocks)
-        n_codons = cds_nt // 3
+        # divmod, not //: a future block edit that breaks codon alignment would
+        # otherwise truncate to a plausible n_codons, shift `last`, and report
+        # "the mask is in the wrong codon numbering" instead of the real cause.
+        # gtf.validate_cds_blocks catches this inside the pipeline, but this step
+        # reads the config directly and bypasses it.
+        n_codons, remainder = divmod(cds_nt, 3)
+        if remainder:
+            sys.exit(f'pcp_gene_cds_blocks ORF1b totals {cds_nt} nt, not a whole '
+                     f'number of codons -- fix the config blocks')
         if fitness_gene not in cfg['pcp_genes']:
             sys.exit(f'this step compares ORF1b against {fitness_gene}, which is '
                      f'not in pcp_genes -- add it, or the mask comparison below '
@@ -1090,6 +1108,24 @@ jobs:
                          f'remapping did not happen, so the comparison is vacuous')
         print(f'ORF1b validated against {fitness_gene} over {n_codons} '
               f'corresponding codons')
+
+        # No gene's report may be VACUOUS or have compared zero rows. This is the
+        # only coverage for that branch: it lives in validate_pcp_vs_aamut.py and
+        # nothing else asserts it, so removing it restored the pre-#133 wording
+        # with every test still green.
+        import glob as _glob
+        checked = 0
+        for path in sorted(_glob.glob('${OUTPUT_DIR}/validation/*/pcp_vs_counts_report.txt')):
+            body = open(path).read()
+            if 'VACUOUS' in body:
+                sys.exit(f'{path} reports VACUOUS: zero discrepancies and zero '
+                         f'matches, i.e. nothing was compared')
+            if 'PCP-derived count rows compared: 0\n' in body:
+                sys.exit(f'{path} compared 0 PCP-derived rows')
+            checked += 1
+        if checked == 0:
+            sys.exit('no validation reports found to check for vacuity')
+        print(f'{checked} validation reports are non-vacuous')
 
         def read_mask(gene):
             path = f'${OUTPUT_DIR}/{gene}_codon_sites_to_mask.txt'

@@ -258,6 +258,20 @@ def main():
         )
     print("=" * len(header))
 
+    # Every clade skips when its inputs are missing, so an unresolvable
+    # --results-dir left `summaries` empty and this script still printed
+    # "SUCCESS: every mat-pcp edge is present in phyz output" and exited 0 --
+    # a guaranteed-vacuous pass, the same shape as the #133 validation. Note the
+    # NOTE at the `matpcp_csv` assignment below: that path is stale independently
+    # (missing the per-gene component since #92), so today this branch is the one
+    # that fires. Fail rather than congratulate.
+    if not summaries:
+        print("\nFAILURE: no clade produced a comparison -- every one was "
+              f"skipped for missing inputs under {results_dir}. Nothing was "
+              f"cross-validated, so this is not a pass. Check --results-dir and "
+              f"the pcps/{{gene}}/ path component (see the NOTE above).")
+        sys.exit(1)
+
     total_mp_only = sum(s["n_matpcp_only"] for s in summaries)
     total_pz_other = sum(len(s["phyz_only_other"]) for s in summaries)
 

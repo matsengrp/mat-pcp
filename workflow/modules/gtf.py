@@ -127,11 +127,17 @@ def validate_cds_blocks(gene, blocks, genome_length=None):
     # boundary. Both real cases satisfy that (ORF1b's leading block is 27 nt,
     # ORF1ab's is 13203, both multiples of 3), and neither the overlap check nor
     # the whole-codon *total* below implies it: [[1, 11], [11, 20]] passes both
-    # (21 nt) while reading nt 11 twice *within one codon* -- (10, 11, 11). So the
-    # junction frame is checked at each shared nucleotide, and a second shared
-    # junction is rejected outright, because "the single -1 ribosomal frameshift
-    # nucleotide" is exactly one for every coronavirus ORF this supports and
-    # [[1, 4], [4, 7], [7, 10]] otherwise passes at 12 nt.
+    # (21 nt) while reading nt 11 twice *within one codon* -- (10, 11, 11). That
+    # is what the frame check below catches.
+    #
+    # The separate "at most one shared junction" rule is needed for a case the
+    # frame check does *not* reach: [[1, 3], [3, 5], [5, 7]] is on a codon
+    # boundary at *both* junctions and totals 9 nt, so it passes every other
+    # check and translates cleanly. (Do not test that rule with
+    # [[1, 4], [4, 7], [7, 10]] -- the frame check rejects it first at
+    # cumulative == 4, so removing this rule would look harmless.) One shared
+    # junction is right because "the single -1 ribosomal frameshift nucleotide"
+    # is exactly one for every coronavirus ORF this supports.
     cumulative = 0
     shared_junctions = 0
     for (prev_start, prev_end), (next_start, next_end) in zip(parsed, parsed[1:]):
@@ -152,10 +158,10 @@ def validate_cds_blocks(gene, blocks, genome_length=None):
             raise ValueError(
                 f"pcp_gene_cds_blocks[{gene!r}] blocks ({prev_start}, {prev_end}) "
                 f"and ({next_start}, {next_end}) share nucleotide {prev_end}, but "
-                f"{cumulative} nt precede the junction -- not a whole number of "
-                f"codons, so that nucleotide is read twice *inside one codon* "
-                f"rather than at a frameshift. A -1 frameshift share is only in "
-                f"frame on a codon boundary."
+                f"the first block ends {cumulative} nt into the CDS -- not a "
+                f"whole number of codons, so that nucleotide is read twice "
+                f"*inside one codon* rather than at a frameshift. A -1 frameshift "
+                f"share is only in frame on a codon boundary."
             )
         if shared_junctions > 1:
             raise ValueError(

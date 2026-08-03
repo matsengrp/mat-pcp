@@ -436,7 +436,8 @@ class _Namespace:
         return self.__dict__.get(key, default)
 
 
-def _run_mask_script(tmpdir, gene, rows, overrides=None, gtf_genes=None):
+def _run_mask_script(tmpdir, gene, rows, overrides=None, gtf_genes=None,
+                     drop_columns=None):
     """Execute get_problematic_sites.py the way Snakemake does.
 
     ``rows`` is a list of ``(nt_site, exclude, gene_cell, codon_site_cell)``.
@@ -455,11 +456,18 @@ def _run_mask_script(tmpdir, gene, rows, overrides=None, gtf_genes=None):
     out_path = tmpdir / f"{gene}_codon_sites_to_mask.txt"
     log_path = tmpdir / f"{gene}.log"
 
+    drop = set(drop_columns or ())
+    columns = [c for c in ("nt_site", "exclude", "gene", "codon_site",
+                           "clade", "nt_mutation") if c not in drop]
     with open(counts_path, "w") as f:
-        f.write("nt_site,exclude,gene,codon_site,clade,nt_mutation\n")
+        f.write(",".join(columns) + "\n")
         for index, (nt_site, exclude, gene_cell, codon_cell) in enumerate(rows):
-            f.write(f"{nt_site},{exclude},{gene_cell},{codon_cell},"
-                    f"19A,A{nt_site}T_{index}\n")
+            values = {
+                "nt_site": nt_site, "exclude": exclude, "gene": gene_cell,
+                "codon_site": codon_cell, "clade": "19A",
+                "nt_mutation": f"A{nt_site}T_{index}",
+            }
+            f.write(",".join(str(values[c]) for c in columns) + "\n")
 
     gtf_path = _synthetic_gtf(
         tmpdir / "ref.gtf",
@@ -563,8 +571,9 @@ def check_mask_script_guards_and_gene_pairing():
         try:
             got = _run_mask_script(tmpdir, "N", overlap_rows, gtf_genes=n_blocks)
         except Exception as exc:  # noqa: BLE001 - reported as a failure
-            return [f"N mask derivation raised: {exc}"]
-    if got != [4, 37]:
+            failures.append(f"N mask derivation raised: {exc}")
+            got = None
+    if got is not None and got != [4, 37]:
         failures.append(
             f"N's mask is {got}, expected [4, 37]. [1, 4, 37] means ORF9b's "
             f"codon 1 was filed as a codon of N: the components of 'gene' and "
@@ -572,11 +581,49 @@ def check_mask_script_guards_and_gene_pairing():
             f"flattened."
         )
 
+    # The gene name must match a whole component, not a substring: `ORF1a` is a
+    # substring of `ORF1ab`, so a substring match files ORF1ab's codon numbers
+    # under ORF1a (#114). Without this case the whole-component match is
+    # uncovered -- relaxing it to `masking_gene not in gene_component` survives
+    # every other check here, and lands in the production tree's largest gene.
+    # It cannot be caught by the test config, whose pcp_genes (S, ORF1ab, E,
+    # ORF1b) contain no symbol that is a substring of another; `ORF1a` appears
+    # only in the production config.
+    substring_rows = [
+        (500, True, "ORF1a;ORF1ab", "79;79"),
+        (13468, True, "ORF1a;ORF1ab;ORF1ab", "4401;4401;4402"),
+    ]
+    substring_blocks = {"ORF1a": ORF1A_BLOCKS, "ORF1ab": ORF1AB_BLOCKS}
+    for gene, expected, note in [
+        ("ORF1a", [79, 4401],
+         "4402 present means ORF1ab's codon was filed under ORF1a via a "
+         "substring match"),
+        ("ORF1ab", [79, 4401, 4402],
+         "ORF1ab must collect both 4401 and 4402 at the shared frameshift "
+         "nucleotide, where it appears twice in one cell"),
+    ]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                got_sub = _run_mask_script(
+                    tmpdir, gene, substring_rows, gtf_genes=substring_blocks
+                )
+            except Exception as exc:  # noqa: BLE001 - reported as a failure
+                failures.append(f"{gene} mask derivation raised: {exc}")
+                continue
+        if got_sub != expected:
+            failures.append(
+                f"{gene}'s mask is {got_sub}, expected {expected} -- {note}"
+            )
+
     # Each of these writes an empty mask at exit 0 if unguarded.
     guarded = {
+        # "pcp_gene_cds_blocks" would be too weak a needle: every
+        # validate_cds_blocks message opens with `pcp_gene_cds_blocks[...]` and
+        # the add-only message names it too, so it cannot tell this error from
+        # several others.
         "gene in neither the GTF nor the override": dict(
             gene="ZZZ", rows=[(13442, True, "nan", "")], overrides={},
-            must_mention="pcp_gene_cds_blocks",
+            must_mention="appears in neither",
         ),
         "override blocks intersect nothing in the grid": dict(
             gene="ORF1b", rows=[(100, True, "nan", ""), (110, True, "nan", "")],
@@ -586,6 +633,15 @@ def check_mask_script_guards_and_gene_pairing():
             gene="N", rows=[(28300, True, "N;ORF9b", "4")], overrides={},
             must_mention="components",
         ),
+        # A missing codon_site column returned [] and wrote a 0-byte mask at
+        # exit 0 for every GTF-carried gene, while its two siblings (missing
+        # 'exclude', missing 'gene') raised. build_count_table.py drops a missing
+        # column from counts_all.csv silently, so one upstream schema regression
+        # would unmask every gene with nothing to attribute it to.
+        "counts table has no codon_site column": dict(
+            gene="N", rows=[(28300, True, "N", "4")], overrides={},
+            must_mention="codon_site", drop_columns=["codon_site"],
+        ),
     }
     for label, case in guarded.items():
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -593,6 +649,7 @@ def check_mask_script_guards_and_gene_pairing():
                 _run_mask_script(
                     tmpdir, case["gene"], case["rows"],
                     overrides=case["overrides"], gtf_genes=n_blocks,
+                    drop_columns=case.get("drop_columns"),
                 )
             except (ValueError, KeyError) as exc:
                 if case["must_mention"] not in str(exc):
@@ -625,8 +682,9 @@ def check_mask_script_guards_and_gene_pairing():
             )
 
     if not failures:
-        print("  cross-gene codon pairing is zipped not flattened; all three "
-              "empty-mask routes raise; dispatch keys off the config")
+        print(f"  codon pairing zipped not flattened, and matched on whole "
+              f"components (ORF1a != ORF1ab); all {len(guarded)} empty-mask "
+              f"routes raise; dispatch keys off the config")
     return failures
 
 

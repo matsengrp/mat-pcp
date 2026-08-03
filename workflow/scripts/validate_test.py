@@ -807,7 +807,25 @@ def validate_orf1b_founder_slice(output_dir):
         # indistinguishable from a pass in the "All validation checks passed"
         # block, which is how a check stops covering anything without anyone
         # noticing.
-        return [], f"SKIPPED: no {orf1b_dir} (ORF1b not among pcp_genes)"
+        #
+        # ORF1b genuinely is optional in pcp_genes, so a skip can be correct --
+        # but the *reason* is checked rather than asserted. If sibling gene
+        # directories exist while ORF1b's does not, the run did request per-gene
+        # founders and ORF1b's are missing, which is a failure and not a skip.
+        founders_root = os.path.join(output_dir, "clade_founders")
+        siblings = sorted(
+            name for name in os.listdir(founders_root)
+            if os.path.isdir(os.path.join(founders_root, name))
+        ) if os.path.isdir(founders_root) else []
+        if siblings:
+            return [], (
+                f"SKIPPED: no {orf1b_dir}; ORF1b is not among pcp_genes "
+                f"(per-gene founders present for {', '.join(siblings)})"
+            )
+        return [], (
+            f"SKIPPED: no per-gene founder directories under {founders_root} at "
+            f"all, so ORF1b's absence is not evidence about pcp_genes"
+        )
     orf1ab_dir = os.path.join(output_dir, "clade_founders", "ORF1ab")
 
     def read_seq(path):
@@ -978,9 +996,15 @@ def validate_founder_codon_background(output_dir):
     differences = []
     counts_path = Path(output_dir) / 'counts_all.csv'
     if not counts_path.exists():
-        # Visible SKIPPED rather than a silent None -- see
-        # validate_orf1b_founder_slice for why.
-        return differences, f"SKIPPED: no {counts_path}"
+        # A *difference*, not a skip: counts_all.csv is an unconditional output of
+        # build_count_table for every tree, so there is no config under which it
+        # is legitimately absent. Reporting SKIPPED here would pass the run on a
+        # missing headline output.
+        differences.append(
+            f"{counts_path} does not exist, but build_count_table writes it for "
+            f"every tree -- this is a missing output, not an inapplicable check"
+        )
+        return differences, None
 
     seen = set()
     duplicates = []

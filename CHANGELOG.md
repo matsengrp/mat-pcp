@@ -86,10 +86,15 @@ cross-check disagreed.
   `dasm2.data.registry.load_dataframe` both handle it transparently, the latter by extension.
   Motivation: on `gisaid-and-public_2026-04-22_v8`, `pcps/` was 504 GB apparent (470 GiB), 93% of
   the whole 542 GB output tree; measured gzip level 9 gives ~125× on ORF1a and ~110× on S. On the
-  v9 run `pcps/` is **7.7 GB apparent** — across *five* genes where v8 had two, so the ratio
+  v9 run `pcps/` is **8.3 GB apparent** — across *six* genes where v8 had two, so the ratio
   understates the per-file gain. `mtime=0` is pinned so re-runs are byte-identical, which matters because
   `data-central` manifests pin `md5`/`xxh3` per file.
-  `{clade}_filtered_branches.csv` and `filtered_branch_ids.csv` stay plain.
+  `{clade}_filtered_branches.csv` and `filtered_branch_ids.csv` stay plain — **note that this is
+  what dominates `pcps/` for a short gene**: the gzipped PCP data for E is 7 MB, while its
+  uncompressed rejected-branch ID lists are 592 MB, 98.8% of `pcps/E/`. Because
+  `pcp_rows + reject_rows` is the same branch universe for every gene (8,408,804 on the
+  `2026-04-22` tree), those lists grow as the gene shrinks, and across six genes they come to
+  ~3.0 GB that no known consumer reads. Candidate for a follow-up.
 - **ORF1b PCPs, and a validation that was passing vacuously
   ([#133](https://github.com/matsengrp/mat-pcp/issues/133)).** New optional config
   `pcp_gene_cds_blocks` gives explicit CDS blocks for PCP genes the reference GTF does not

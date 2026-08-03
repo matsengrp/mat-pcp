@@ -163,23 +163,29 @@ if codon_map is not None and len(pcp_counts) > 0:
         f"{len(pcp_counts)}; without: {len(pcp_counts_no_counterpart)}"
     )
 
+# Per-clade first, deliberately: it yields the more actionable error, and it is
+# the *stronger* of the two checks rather than an extra one.
+# `aggregate_aamut_fitness.py` builds all_aamut_fitness.csv by pd.concat of
+# exactly these per-clade files and then groups, and `to_pcp_codon_frame` applies
+# the same gene/codon filter to both -- so an empty per-clade slice implies an
+# empty aggregate, and checking the aggregate first would make this one dead
+# code. (An earlier revision had them in the opposite order, justified by the
+# claim that a non-empty aggregate does not imply a non-empty per-clade slice.
+# For this data flow it does.)
+genemap.require_nonempty_fitness_slice(
+    pcp_gene_name,
+    fitness_gene,
+    len(pcp_counts),
+    len(aamut_clade_df),
+    f"{len(aamut_fitness_files)} per-clade aamut_fitness files in "
+    f"{os.path.dirname(aamut_fitness_files[0]) if aamut_fitness_files else '?'}",
+)
 genemap.require_nonempty_fitness_slice(
     pcp_gene_name,
     fitness_gene,
     len(pcp_counts),
     len(aamut_all),
     all_aamut_fitness_csv,
-)
-# The aggregate slice being non-empty does not imply the per-clade one is, and
-# the per-clade comparison is the one that carries almost all the rows (ORF1a:
-# 462,957 of 488,340 matches). An empty per-clade slice with PCP counts present
-# is the same vacuity #133 fixed, one table over.
-genemap.require_nonempty_fitness_slice(
-    pcp_gene_name,
-    fitness_gene,
-    len(pcp_counts),
-    len(aamut_clade_df),
-    f"{len(aamut_fitness_files)} per-clade aamut_fitness files",
 )
 
 
@@ -341,9 +347,15 @@ with open(output_report, "w") as f:
 
     if total_discrepancies == 0 and clade_matches + agg_matches == 0:
         # Zero discrepancies *and* zero matches means the two sides never met.
-        # "SUCCESS: all counts match exactly" is the exact wording that concealed
-        # the vacuous ORF1a validation through v8, and it is true of an empty
-        # comparison, so it must not be reachable from one.
+        # "SUCCESS: all counts match exactly" is true of an empty comparison, so
+        # it must not be reachable from one.
+        #
+        # The v8 ORF1a case (PCP rows present, fitness slice empty) now raises at
+        # require_nonempty_fitness_slice above, so it does *not* reach here. What
+        # does: `len(pcp_counts) == 0` with no `actual_count > 0` rows on the
+        # fitness side -- e.g. a PCP gene with no observed AA mutations, or a
+        # codon_offset wrong enough that the `in_map` filter empties pcp_counts.
+        # Keep this branch; it is not shadowed by the guard.
         f.write("VACUOUS: no amino acid mutation was compared at all.\n\n")
         f.write(
             f"Zero discrepancies here means the two sides shared no rows, not "

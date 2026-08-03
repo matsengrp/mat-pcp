@@ -19,13 +19,22 @@ Which route applies is decided from the *config* (does the gene have a
 ``pcp_gene_cds_blocks`` entry), never from whether the count table happens to
 mention the gene -- see the comment at the dispatch below.
 
-Two routes to a silently empty mask both raise, rather than emitting one --
+Three routes to a silently empty mask all raise, rather than emitting one --
 same reasoning as ``genemap.require_nonempty_fitness_slice`` (#133), since a
 silent empty file is indistinguishable from "nothing needed masking": a gene
-resolvable by neither route, and blocks whose coordinates intersect nothing in
-the count grid. An empty mask for a *resolvable* gene is legitimate (a small
-gene may simply have no fully-excluded site -- E has one on the v9 test tree),
-so that is logged prominently rather than raised.
+resolvable by neither route, blocks whose coordinates intersect nothing in the
+count grid, and a count table missing its ``codon_site`` column.
+
+An empty mask for a *resolvable* gene is left legal, on the theory that a short
+gene might contain no fully-excluded site -- but note that **no shipped config
+actually produces one**: every configured gene has a non-empty mask on both the
+v9 test tree (S 17, ORF1ab 86, ORF1b 35, E 1) and the v9 production tree (S 17,
+ORF1a 52, ORF1b 35, M 2, N 8, E 1). So the WARNING below fires in no CI run and
+is untested. If a future gene legitimately masks nothing, confirm it against the
+gene's length before trusting it: at E's 75 codons the observed per-codon
+masking rate (~1.3%) predicts 0.95 masked codons, so an empty mask would be
+entirely unremarkable -- and empty is exactly the signature of the #133 ORF1b
+defect. Recompute rather than reason from the rate.
 """
 
 import os
@@ -121,7 +130,21 @@ def codon_sites_from_counts_column(counts, keep_row, masking_gene):
     """
     rows = counts[keep_row]
     if "codon_site" not in rows.columns:
-        return []
+        # Raise, symmetric with the missing-'exclude' and missing-'gene' checks:
+        # returning [] here wrote a 0-byte mask at exit 0 for *every* GTF-carried
+        # gene, and the empty-mask WARNING below is indistinguishable from a
+        # legitimately empty one. It compounds with build_count_table.py's
+        # `available_cols = [c for c in output_columns if c in grid.columns]`,
+        # which drops a missing column from counts_all.csv silently -- so one
+        # upstream schema regression would unmask every gene with nothing to
+        # attribute it to. This is the third such route found in this file; the
+        # other two now raise as well.
+        raise KeyError(
+            f"counts table has no 'codon_site' column, so {masking_gene!r}'s "
+            f"codon numbers cannot be read from it. This is a schema problem "
+            f"upstream in build_count_table, not an absence of problematic "
+            f"sites -- refusing to write an empty mask."
+        )
     found = []
     for gene_cell, codon_cell in zip(rows["gene"], rows["codon_site"]):
         if pd.isna(codon_cell):
