@@ -30,3 +30,9 @@ docs/issues/
 
 # One-off test scripts
 workflow/scripts/test_v2_regression.py
+
+# bip epic orchestration (local only)
+.epic-config.json
+.epic-status.json
+.epic-worklog.md
+.epic-notifications.log

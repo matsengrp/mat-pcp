@@ -94,13 +94,14 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 ### Testing
 ```bash
 # Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
-# all six before the pipeline steps)
+# all seven before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 pixi run python tests/test_clade_founder_guards.py
 pixi run python tests/test_founder_codon_background.py
 pixi run python tests/test_lightswitch_boundary.py
 pixi run python tests/test_pcp_compression.py
 pixi run python tests/test_pcp_gene_coordinates.py
+pixi run python tests/test_era_mapping.py
 
 # Run on test data (fast, uses max_clades=3)
 pixi run snakemake -j 2 --use-conda \

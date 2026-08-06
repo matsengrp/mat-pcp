@@ -163,6 +163,19 @@ jobs:
       run: |
         pixi run python tests/test_pcp_gene_coordinates.py
 
+    # Fixture-only, and necessarily so: the era mapping's failure mode is a clade
+    # in the wrong list, which yields a plausible rate table rather than an error,
+    # so no pipeline assertion can see it. The test config is also single-era
+    # (max_clades: 3 -> 19A/19B/20A, all pre-Omicron), so a run exercises the
+    # empty-Omicron skip but never routes two eras. Covers what that cannot: that
+    # the mapping is total over the release tree, that an unmapped clade raises
+    # rather than defaulting the way upstream's `else 'omicron'` does, and that the
+    # year-prefix audit is *two-sided* -- the check is mutation-tested against
+    # 21K/21L/21M moved to pre_omicron, which a one-sided allowlist accepts (#137).
+    - name: Verify the pre-Omicron / Omicron era mapping and its audit
+      run: |
+        pixi run python tests/test_era_mapping.py
+
     # The steps above name each test file so a failure points at a readable log.
     # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]
     # is empty, so a *new* tests/test_*.py runs zero times and CI stays green --
