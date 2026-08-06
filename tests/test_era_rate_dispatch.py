@@ -665,6 +665,133 @@ def check_real_curate_counts_partitions_by_era():
             )
 
 
+def check_real_expected_counts_script_dispatches_two_eras():
+    """Execute the shipped ``expected_counts_by_clade.py`` against two eras.
+
+    **This is the only two-era coverage of the production script.** Every shipped
+    config resolves to a single era in CI (``config_test_data.yaml``'s
+    ``max_clades: 3`` gives 19A/19B/20A, all pre-Omicron), on which the script
+    reduces to the v9 pooled fit -- so a pipeline run cannot tell whether the
+    ``curated_{era}`` inputs are read at all, whether they are matched to the
+    right era, or whether ``era_for_clade`` is consulted. Checking
+    ``rates.add_expected_count_by_era`` directly and calling that two-era coverage
+    would be the CLAUDE.md pattern-8 vacuity: a test named for the dispatch that
+    never runs the code doing the dispatching.
+
+    The era labels are recoverable from the output because the two training sets
+    differ in G->T by a known factor, so a swapped pair inverts the ratio rather
+    than merely perturbing it.
+    """
+    era = _load("era")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+
+        # Curated training tables per era, differing only in G->T. Written with
+        # the columns load_curated_muts requires (it filters on synonymous /
+        # noncoding / gene -- it is the whole neutral-rate restriction, #126).
+        paths = {}
+        for era_name, scale, seed in (
+            ("pre_omicron", GT_ERA_FACTOR, 41),
+            ("omicron", 1.0, 41),
+        ):
+            frame = synthetic_training_frame(gt_scale=scale, seed=seed)
+            frame["synonymous"] = True
+            frame["noncoding"] = False
+            frame["gene"] = "S"
+            path = tmp / f"curated_counts_{era_name}.csv"
+            frame.to_csv(path, index=False)
+            paths[era_name] = path
+
+        counts = synthetic_count_frame(MIXED_CLADES)
+        counts_path = tmp / "annotated_counts.csv"
+        counts.to_csv(counts_path, index=False)
+        out = tmp / "expected_counts_by_clade.csv"
+
+        stub = _StubSnakemake(
+            inputs={
+                "counts": str(counts_path),
+                "curated_pre_omicron": str(paths["pre_omicron"]),
+                "curated_omicron": str(paths["omicron"]),
+            },
+            outputs={"csv": str(out)},
+            params={"lightswitch_boundaries": BOUNDARIES},
+            log_path=tmp / "expected_counts_by_clade.log",
+        )
+        saved = sys.modules.get("snakemake")
+        sys.modules["snakemake"] = stub
+        try:
+            runpy.run_path(
+                str(SCRIPTS / "expected_counts_by_clade.py"),
+                init_globals={"snakemake": stub},
+                run_name="__main__",
+            )
+        finally:
+            if saved is None:
+                sys.modules.pop("snakemake", None)
+            else:
+                sys.modules["snakemake"] = saved
+
+        result = pd.read_csv(out)
+        if result["expected_count"].isna().any():
+            raise AssertionError(
+                "the script left null expected_count values, which downstream "
+                "reads as a legitimate near-zero expectation"
+            )
+
+        def ratio(clade):
+            sub = result[result["clade"] == clade]
+            gt = sub.loc[sub["mut_type"] == "GT", "expected_count"].mean()
+            ag = sub.loc[sub["mut_type"] == "AG", "expected_count"].mean()
+            return gt / ag
+
+        pre = ratio(PRE_OMICRON_CLADES[0])
+        om = ratio(OMICRON_CLADES[0])
+        observed = pre / om
+        if not 1.5 < observed < 2.6:
+            raise AssertionError(
+                f"the shipped script's G->T era ratio is {observed:.3f}, expected "
+                f"near the injected {GT_ERA_FACTOR}. Near 1.0 means one era's "
+                f"table served every clade; near {1 / GT_ERA_FACTOR:.2f} means "
+                f"the curated_{{era}} inputs are matched to the wrong eras."
+            )
+
+        # An era present in the counts but absent from the inputs must raise,
+        # not quietly serve the one table that did arrive.
+        stub_missing = _StubSnakemake(
+            inputs={
+                "counts": str(counts_path),
+                "curated_pre_omicron": str(paths["pre_omicron"]),
+            },
+            outputs={"csv": str(tmp / "partial.csv")},
+            params={"lightswitch_boundaries": BOUNDARIES},
+            log_path=tmp / "partial.log",
+        )
+        saved = sys.modules.get("snakemake")
+        sys.modules["snakemake"] = stub_missing
+        try:
+            runpy.run_path(
+                str(SCRIPTS / "expected_counts_by_clade.py"),
+                init_globals={"snakemake": stub_missing},
+                run_name="__main__",
+            )
+        except ValueError as exc:
+            if "21K" not in str(exc):
+                raise AssertionError(
+                    f"the raise does not name the unserved clade: {exc}"
+                )
+        else:
+            raise AssertionError(
+                "the script accepted Omicron clades with no Omicron training "
+                "table and produced a full output file"
+            )
+        finally:
+            if saved is None:
+                sys.modules.pop("snakemake", None)
+            else:
+                sys.modules["snakemake"] = saved
+
+
 CHECKS = [
     ("the pooled path is the degenerate two-era path", check_pooled_is_degenerate_two_era),
     ("nothing depends on input row order", check_no_positional_dependence),
@@ -676,6 +803,10 @@ CHECKS = [
     (
         "the real curate_counts.py partitions by era without moving conserved sites",
         check_real_curate_counts_partitions_by_era,
+    ),
+    (
+        "the real expected_counts_by_clade.py dispatches two eras",
+        check_real_expected_counts_script_dispatches_two_eras,
     ),
 ]
 
