@@ -36,3 +36,6 @@ workflow/scripts/test_v2_regression.py
 .epic-status.json
 .epic-worklog.md
 .epic-notifications.log
+
+# Local issue drafts; GitHub holds the canonical text
+ISSUE-*.md
