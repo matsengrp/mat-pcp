@@ -94,7 +94,7 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 ### Testing
 ```bash
 # Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
-# all seven before the pipeline steps)
+# all eight before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 pixi run python tests/test_clade_founder_guards.py
 pixi run python tests/test_founder_codon_background.py
@@ -102,6 +102,11 @@ pixi run python tests/test_lightswitch_boundary.py
 pixi run python tests/test_pcp_compression.py
 pixi run python tests/test_pcp_gene_coordinates.py
 pixi run python tests/test_era_mapping.py
+pixi run python tests/test_bte_haplotype.py   # half A (env pin) only without bte
+
+# Half B of the bte test needs the Snakemake-built bte env, so it runs after a
+# pipeline run; --require-bte makes a missing env a failure rather than a skip.
+pixi run python tests/test_bte_haplotype.py --require-bte
 
 # Run on test data (fast, uses max_clades=3)
 pixi run snakemake -j 2 --use-conda \

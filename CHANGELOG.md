@@ -18,6 +18,30 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### Unreleased (v10 in progress, EPIC [#138](https://github.com/matsengrp/mat-pcp/issues/138))
+
+No version bump yet — `VERSION` is still `v9`, and the bump lands with the schema
+change in #137 Task 3. Nothing here changes any output.
+
+- **[#136](https://github.com/matsengrp/mat-pcp/issues/136)**: `workflow/envs/bte.yml`
+  now pins `bte>=0.9.3` with `python>=3.10,<3.11`. `bte<=0.9.2`'s
+  `MATree.get_haplotype()` keeps the *first* mutation at a twice-mutated position and
+  discards later non-reversions, which would corrupt every PCP parent haplotype
+  (`pcp_from_tree.py:206`) and every window founder mutation set
+  (`windows/founder_muts.csv`). v9 was unaffected only by luck of the solve.
+  **No output change**: the re-solved env moved (bte build `py310h184ae93_1` →
+  `py310h1153794_2`, python 3.10.19 → 3.10.20) and a full test-data run still
+  reproduced `data/test_data/expected_summary.json` exactly, including every md5.
+  So this needs no bump of its own (#138 decision 4). New guard:
+  `tests/test_bte_haplotype.py`.
+- **[#137](https://github.com/matsengrp/mat-pcp/issues/137) Task 1** (diagnostic only,
+  no pipeline rule reads it yet): `workflow/modules/era.py` carries the explicit
+  52-clade pre-Omicron/Omicron mapping and its year-prefix audit;
+  `analysis/137-era-offsets/` records the 51 × 12 synonymous offset table. G→T
+  separates completely by era (gap +0.393), so the era split is justified. Eleven of
+  twelve types do *not* separate — see
+  [#140](https://github.com/matsengrp/mat-pcp/issues/140).
+
 ### v9
 
 **Three of these fix outputs that were silently wrong in v8, so v9 is not an optional

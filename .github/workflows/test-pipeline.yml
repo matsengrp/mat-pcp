@@ -176,6 +176,15 @@ jobs:
       run: |
         pixi run python tests/test_era_mapping.py
 
+    # Half A only at this point -- the env-pin check, which is what guards against
+    # a backwards edit to bte.yml. Half B needs bte, which lives only in the
+    # Snakemake conda env, so it runs in the post-pipeline step further down. Both
+    # invocations are required: half A alone never executes get_haplotype, and half
+    # B alone would not notice the python floor being relaxed (#136).
+    - name: Verify the bte floor that closes the get_haplotype re-mutation bug
+      run: |
+        pixi run python tests/test_bte_haplotype.py
+
     # The steps above name each test file so a failure points at a readable log.
     # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]
     # is empty, so a *new* tests/test_*.py runs zero times and CI stays green --
@@ -252,6 +261,16 @@ jobs:
         pixi run snakemake -j $(nproc) --use-conda \
           --conda-frontend conda \
           --configfile config/config_test_data.yaml
+
+    # Half B of the bte test, now that .snakemake/conda holds the bte env the
+    # pipeline just built. --require-bte makes a missing env a FAILURE rather than
+    # a skip: half B is the only check that executes the real get_haplotype against
+    # a twice-mutated site, so letting it quietly not run would leave #136 guarded
+    # by a version-string comparison alone. The test re-execs itself under the
+    # conda env's interpreter.
+    - name: Verify get_haplotype composes re-mutations (real bte)
+      run: |
+        pixi run python tests/test_bte_haplotype.py --require-bte
 
     - name: Set output directory variable
       run: |
