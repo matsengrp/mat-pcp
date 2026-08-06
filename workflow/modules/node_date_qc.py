@@ -60,6 +60,13 @@ import numpy as np
 #: Mutation-count bins for check A. Upper bounds inclusive; the last is open.
 MUT_COUNT_BINS = [0, 1, 2, 3, 4, 5, 10, 20, 50]
 
+#: The leading bins that hold exactly one mutation count, so consecutive medians
+#: differ by exactly one mutation and their difference estimates the clock slope.
+#: The ranged bins above (``6-10``, ``11-20``, ``21-50``, ``51+``) have no
+#: well-defined increment, and on the production tree they also saturate -- the ~650
+#: branches with >20 mutations sit far below any linear extrapolation.
+SINGLE_COUNT_BINS = [b for b in MUT_COUNT_BINS if b == 0 or b - 1 in MUT_COUNT_BINS]
+
 #: Rough clock expectation, days per mutation. 8e-4 subs/site/yr x 29903 nt
 #: ~= 23.9 subs/yr -> ~15.3 days/substitution. An order-of-magnitude reference
 #: only: the MAT is masked and branch-filtered, so the realized rate on counted
@@ -102,6 +109,25 @@ class DayHistogram:
     def update(self, values):
         for v in values:
             self.add(int(v))
+
+    def update_from_array(self, values):
+        """Bulk-load a NumPy array of day values.
+
+        ``np.unique`` collapses 21 M branches to a few thousand distinct day values
+        in C, which is what keeps the whole-tree checks off the Python-level
+        per-node loop they started as (that cost minutes on the production tree).
+        NaNs are dropped; the caller is responsible for having masked out nodes with
+        no date.
+        """
+        values = np.asarray(values)
+        values = values[~np.isnan(values)]
+        if not values.size:
+            return
+        uniques, counts = np.unique(values.astype("int64"), return_counts=True)
+        for value, count in zip(uniques.tolist(), counts.tolist()):
+            self._counts[value] = self._counts.get(value, 0) + count
+            self.n += count
+            self.total += value * count
 
     def quantile(self, q):
         """Lower-interpolated quantile, matching ``numpy.percentile(..., 'lower')``."""
@@ -155,21 +181,32 @@ def propagate_min_descendant(parent_index, leaf_values, n_nodes):
 
     ``leaf_values`` is a float array with ``nan`` where a node has no observed date
     of its own. Returns a float array with ``nan`` where no descendant is observed.
+
+    The loop runs over Python **lists** with ``inf`` as the missing sentinel rather
+    than over NumPy arrays with ``nan``. At 21 M nodes the NumPy version spent
+    minutes building a scalar object per element access; lists plus a sentinel make
+    the body two indexed reads and a comparison. It cannot be vectorized outright
+    because each parent depends on its children, so the sequential pass stays --
+    only its constant factor changes.
     """
     if len(parent_index) != n_nodes or len(leaf_values) != n_nodes:
         raise ValueError(
             f"parent_index ({len(parent_index)}) and leaf_values "
             f"({len(leaf_values)}) must both have length n_nodes ({n_nodes})"
         )
-    best = np.array(leaf_values, dtype="float64", copy=True)
+    parents = np.asarray(parent_index, dtype="int64").tolist()
+    values = np.asarray(leaf_values, dtype="float64")
+    best = np.where(np.isnan(values), np.inf, values).tolist()
     for i in range(n_nodes - 1, 0, -1):
-        parent = parent_index[i]
+        parent = parents[i]
         if parent < 0:
             continue
         value = best[i]
-        if not np.isnan(value) and (np.isnan(best[parent]) or value < best[parent]):
+        if value < best[parent]:
             best[parent] = value
-    return best
+    out = np.array(best, dtype="float64")
+    out[np.isinf(out)] = np.nan
+    return out
 
 
 def format_stats(stats, unit="d"):

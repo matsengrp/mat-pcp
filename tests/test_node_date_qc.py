@@ -100,6 +100,24 @@ def check_histogram_matches_exact_quantiles():
         if sum(c for _, c in hist.as_rows()) != len(values):
             failures.append(f"trial {trial}: as_rows() does not sum to n")
 
+        # update_from_array is the production path (the per-node Python loop cost
+        # minutes at 21 M nodes), so it must agree with update() exactly rather
+        # than merely approximately. Fed floats with nan padding, as the script
+        # does, to pin that nan is dropped and not counted as a day value.
+        bulk = qc.DayHistogram()
+        padded = np.concatenate([values.astype("float64"), [np.nan, np.nan]])
+        bulk.update_from_array(padded)
+        if bulk.as_rows() != hist.as_rows():
+            failures.append(
+                f"trial {trial}: update_from_array disagrees with update(). "
+                f"n={bulk.n} vs {hist.n}. The vectorized bulk loader is the path "
+                f"the pipeline actually takes."
+            )
+        if bulk.stats() != stats:
+            failures.append(
+                f"trial {trial}: update_from_array stats differ from update stats"
+            )
+
     empty = qc.DayHistogram().stats()
     if empty["n"] != 0 or empty["median"] is not None:
         failures.append(f"an empty histogram must report n=0 and None: {empty}")

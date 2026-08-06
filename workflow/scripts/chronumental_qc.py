@@ -257,18 +257,32 @@ is_leaf = np.ones(n_total, dtype=bool)
 is_leaf[parent_index[parent_index >= 0]] = False
 
 # --- check 5: branch Delta-t vs branch mutation count -------------------------
+# Vectorized: a per-node Python loop cost minutes on the 21 M-node production tree,
+# against a 349 s baseline for the whole rule. Every branch is one (child, parent)
+# index pair, so the whole check is array arithmetic plus one np.unique per bin.
+has_parent = parent_index >= 0
+child_idx = np.flatnonzero(has_parent)
+parent_of_child = parent_index[child_idx]
+branch_dt = predicted_days[child_idx] - predicted_days[parent_of_child]
+branch_muts = n_branch_mutations[child_idx]
+
+# Bin edges from MUT_COUNT_BINS, so the labels stay the module's single definition.
+bin_labels = np.array(
+    [node_date_qc.mutation_count_bin(b) for b in node_date_qc.MUT_COUNT_BINS]
+    + [node_date_qc.mutation_count_bin(node_date_qc.MUT_COUNT_BINS[-1] + 1)]
+)
+bin_of_branch = np.searchsorted(
+    np.array(node_date_qc.MUT_COUNT_BINS), branch_muts, side="left"
+)
+
 dt_by_bin = {}
-for i in range(n_total):
-    p = parent_index[i]
-    if p < 0:
-        continue
-    if np.isnan(predicted_days[i]) or np.isnan(predicted_days[p]):
-        continue
-    label = node_date_qc.mutation_count_bin(int(n_branch_mutations[i]))
-    hist = dt_by_bin.get(label)
-    if hist is None:
-        hist = dt_by_bin[label] = node_date_qc.DayHistogram()
-    hist.add(int(predicted_days[i] - predicted_days[p]))
+for bin_pos in np.unique(bin_of_branch):
+    label = bin_labels[bin_pos]
+    values = branch_dt[bin_of_branch == bin_pos]
+    hist = node_date_qc.DayHistogram()
+    hist.update_from_array(values)
+    if hist.n:
+        dt_by_bin[label] = hist
 
 def bin_lower_bound(label):
     """Smallest mutation count in a bin label, for sorting and the slope estimate."""
@@ -286,59 +300,94 @@ pd.DataFrame(
     branch_rows, columns=["mut_count_bin", "dt_days", "count"]
 ).to_csv(branch_dt_path, index=False)
 
-# Days per mutation, over bins with at least one mutation. The nominal ~15 d/mut is
-# an order-of-magnitude reference only: the MAT is masked and branch-filtered, so
-# the realized rate on counted mutations is lower and the observed slope is expected
-# to come out HIGHER than nominal, not equal to it.
-ratios = []
-total_branches = 0
+# The clock estimate is the INCREMENTAL slope between adjacent single-count bins,
+# not median(Delta-t)/n. On the production tree the zero-mutation bin already has a
+# median Delta-t of 16 days, so median/n carries that intercept and decays from 23.0
+# at n=1 to 2.6 at n>=51 -- a 9x spread that is mostly intercept dilution plus
+# saturation on the ~650 branches with >20 mutations, not a clock failure. Reporting
+# median/n as "days per mutation" invites reading a defect off an artifact of the
+# arithmetic, so the median per bin is reported instead and the slope is taken from
+# differences. The nominal ~15 d/mut stays an order-of-magnitude reference: the MAT
+# is masked and branch-filtered, so the realized figure is not expected to match.
+total_branches = sum(hist.stats()["n"] for hist in dt_by_bin.values())
+medians = {}
+median_labels = {}
 for label, hist in dt_by_bin.items():
     stats = hist.stats()
-    total_branches += stats["n"]
-    lower = bin_lower_bound(label)
-    if lower >= 1 and stats["n"]:
-        ratios.append(stats["median"] / lower)
-slope_note = ""
-if ratios:
-    slope_note = (
-        f", median days/mutation across bins with >=1 mutation: "
-        f"{min(ratios):.1f}-{max(ratios):.1f} "
-        f"(nominal ~{node_date_qc.DAYS_PER_MUTATION_NOMINAL:.1f})"
+    if stats["n"]:
+        lower = bin_lower_bound(label)
+        medians[lower] = stats["median"]
+        # Keep the bin's own label for the report: printing the lower bound would
+        # render the "6-10" bin as "6", implying a single mutation count.
+        median_labels[lower] = label
+
+# Only bins that are a single mutation count (the leading MUT_COUNT_BINS entries)
+# have a well-defined increment; the ranged bins at the top do not.
+single_counts = sorted(n for n in medians if n in node_date_qc.SINGLE_COUNT_BINS)
+steps = sorted(
+    medians[b] - medians[a]
+    for a, b in zip(single_counts, single_counts[1:])
+    if b - a == 1
+)
+clock_note = ""
+if steps:
+    slope = steps[len(steps) // 2]
+    intercept = medians.get(0)
+    clock_note = (
+        f", median incremental slope {slope} d/mutation across the single-count "
+        f"bins"
+        + (f" on a {intercept} d zero-mutation intercept" if intercept is not None else "")
+        + f" (nominal ~{node_date_qc.DAYS_PER_MUTATION_NOMINAL:.1f} d/mutation)"
     )
 record_report(
     "branch_dt_vs_mutations",
     f"{len(dt_by_bin)} mutation-count bins over {total_branches} dated branches"
-    f"{slope_note}; per-bin day distributions in "
-    f"{os.path.basename(branch_dt_path)}",
+    f"{clock_note}; median Delta-t by bin: "
+    + ", ".join(f"{median_labels[n]}mut:{medians[n]}d" for n in sorted(medians))
+    + f"; full per-bin day distributions in {os.path.basename(branch_dt_path)}",
 )
 
 # --- check 6: zero-mutation leaf/parent pairs --------------------------------
 # The predicted-date form is one-sided: check 2 forces Delta-t >= 0, so this is a
 # right tail and a median of 0 is the expected result, not a coincidence.
+# ``res`` carries only DAY-resolution tips, inherited from check 4's filter, and that
+# inheritance is deliberate: ``filter_metadata`` imputes month/year dates to a
+# fabricated day (mid-month / mid-year) and rewrites every surviving value to
+# YYYY-MM-DD, so admitting them here would compare predicted dates against invented
+# ones and quietly widen both distributions. Checks 6 and 8 therefore cover fewer
+# nodes than the tree has, which the reported ``n`` makes visible.
+own_observed = np.full(n_total, np.nan, dtype="float64")
+observed_days = to_day_ordinal(res["observed"])
+observed_pos = np.array(
+    [index_of.get(s, -1) for s in res["strain"].astype(str)], dtype="int64"
+)
+known = observed_pos >= 0
+own_observed[observed_pos[known]] = observed_days[known]
+
+zero_mut_leaf = is_leaf & (n_branch_mutations == 0) & has_parent
 zero_pred = node_date_qc.DayHistogram()
+zero_pred.update_from_array(
+    predicted_days[zero_mut_leaf] - predicted_days[parent_index[zero_mut_leaf]]
+)
+
 # The non-circular form: the parent's predicted date against the EARLIEST observed
 # date among its zero-mutation leaf children. Per-leaf equality is the wrong bar --
 # identical sequences in the data genuinely carry different collection dates.
-observed_by_id = dict(
-    zip(res["strain"].astype(str), to_day_ordinal(res["observed"]))
+# np.minimum.at does the per-parent minimum in one pass; inf is the identity so a
+# parent with no observed zero-mutation child stays inf and drops out below.
+observed_zero_leaf = zero_mut_leaf & ~np.isnan(own_observed)
+min_obs_by_parent = np.full(n_total, np.inf, dtype="float64")
+np.minimum.at(
+    min_obs_by_parent,
+    parent_index[observed_zero_leaf],
+    own_observed[observed_zero_leaf],
 )
-min_obs_by_parent = {}
-for i in range(n_total):
-    p = parent_index[i]
-    if p < 0 or not is_leaf[i] or n_branch_mutations[i] != 0:
-        continue
-    if not np.isnan(predicted_days[i]) and not np.isnan(predicted_days[p]):
-        zero_pred.add(int(predicted_days[i] - predicted_days[p]))
-    obs = observed_by_id.get(str(node_list[i].id))
-    if obs is not None and not np.isnan(obs):
-        prev = min_obs_by_parent.get(p)
-        if prev is None or obs < prev:
-            min_obs_by_parent[p] = obs
-
+has_min_obs = np.isfinite(min_obs_by_parent) & ~np.isnan(predicted_days)
+n_zero_mut_parents = int(has_min_obs.sum())
 zero_obs = node_date_qc.DayHistogram()
-for p, obs in min_obs_by_parent.items():
-    if not np.isnan(predicted_days[p]):
-        zero_obs.add(int(obs - predicted_days[p]))
+zero_obs.update_from_array(
+    min_obs_by_parent[has_min_obs] - predicted_days[has_min_obs]
+)
 
 record_report(
     "zero_mut_leaf_predicted_dt",
@@ -348,7 +397,7 @@ record_report(
 record_report(
     "zero_mut_leaf_vs_earliest_observed",
     f"parent predicted date vs earliest observed date among its zero-mutation "
-    f"leaf children over {len(min_obs_by_parent)} parents; "
+    f"leaf children over {n_zero_mut_parents} parents; "
     + node_date_qc.format_stats(zero_obs.stats()),
 )
 
@@ -368,22 +417,17 @@ else:
     )
 
 # --- check 8: internal date vs minimum descendant observed date ---------------
-own_observed = np.full(n_total, np.nan, dtype="float64")
-for nid, obs in observed_by_id.items():
-    i = index_of.get(nid)
-    if i is not None:
-        own_observed[i] = obs
+# own_observed was filled for check 6 above; reuse it rather than rebuilding.
 min_desc_observed = node_date_qc.propagate_min_descendant(
     parent_index, own_observed, n_total
 )
 
+internal = ~is_leaf & ~np.isnan(min_desc_observed) & ~np.isnan(predicted_days)
+n_internal_checked = int(internal.sum())
 internal_gap = node_date_qc.DayHistogram()
-n_internal_checked = 0
-for i in range(n_total):
-    if is_leaf[i] or np.isnan(min_desc_observed[i]) or np.isnan(predicted_days[i]):
-        continue
-    n_internal_checked += 1
-    internal_gap.add(int(predicted_days[i] - min_desc_observed[i]))
+internal_gap.update_from_array(
+    predicted_days[internal] - min_desc_observed[internal]
+)
 
 stats = internal_gap.stats()
 record_report(
