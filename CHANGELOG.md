@@ -34,6 +34,15 @@ change in #137 Task 3. Nothing here changes any output.
   reproduced `data/test_data/expected_summary.json` exactly, including every md5.
   So this needs no bump of its own (#138 decision 4). New guard:
   `tests/test_bte_haplotype.py`.
+- **[#135](https://github.com/matsengrp/mat-pcp/issues/135)** (measurement only, no
+  behaviour change): `workflow/scripts/audit_off_grid_drop.py` +
+  `analysis/135-off-grid-drop/` decompose `build_count_table`'s 46,284-row /
+  210,111-count "absent from the founder grid" drop. It is **97.8% reversions toward
+  the clade founder**, which the grid cannot represent by construction, plus 2.2%
+  nucleotide-level off-founder background (the twin of #130's codon-level filter).
+  Zero unexplained. Stable v8 -> v9 (-473 rows), with 100% of the change in the five
+  clades #129 fixed. Criterion 3's disposition table is in the README; nothing
+  adopted yet.
 - **[#137](https://github.com/matsengrp/mat-pcp/issues/137) Task 1** (diagnostic only,
   no pipeline rule reads it yet): `workflow/modules/era.py` carries the explicit
   52-clade pre-Omicron/Omicron mapping and its year-prefix audit;
