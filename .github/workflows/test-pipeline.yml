@@ -176,6 +176,21 @@ jobs:
       run: |
         pixi run python tests/test_era_mapping.py
 
+    # The companion to the above: that mapping says which era a clade is in, this
+    # says what the pipeline does with it. **The only two-era coverage that exists.**
+    # Every shipped config is single-era, so the pipeline run below exercises the
+    # empty-Omicron skip but reduces the fit to v9's pooled one -- it cannot tell
+    # whether the curated_{era} inputs are read, matched to the right era, or
+    # dispatched through era_for_clade at all. So this drives the real
+    # curate_counts.py and the real expected_counts_by_clade.py against two
+    # constructed eras whose G->T rates differ by a known factor: one table serving
+    # everyone gives a ratio of 1.0, a swapped pair inverts it, and both are
+    # distinguished from the correct answer. Mutation-tested against four separate
+    # breaks of the shipped scripts (#137).
+    - name: Verify the two-era fit and its per-clade dispatch
+      run: |
+        pixi run python tests/test_era_rate_dispatch.py
+
     # Half A only at this point -- the env-pin check, which is what guards against
     # a backwards edit to bte.yml. Half B needs bte, which lives only in the
     # Snakemake conda env, so it runs in the post-pipeline step further down. Both

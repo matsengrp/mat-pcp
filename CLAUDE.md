@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade` |
 | 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
 | 5 | Unified Count Table | `build_count_table` (full mutation grid + actual counts + masking flags, via `modules/masking.py`) |
-| 6 | GLM Rate Estimation | `annotate_counts`, `curate_counts`, `master_table`, `get_rates_table`, `window_expected_counts` (windowed expected counts + `delta_fitness_ratio`) |
+| 6 | GLM Rate Estimation | `annotate_counts`, `curate_counts`, `master_table`, `get_rates_table`, plus their per-era counterparts `curate_counts_era`, `master_table_era`, `get_rates_table_era` and `era_fit_summary` (#137), `window_expected_counts` (windowed expected counts + `delta_fitness_ratio`; stays on the **pooled** table) |
 | 7 | Fitness Estimation | `ntmut_fitness_by_clade`, `aamut_fitness_by_clade`, `aggregate_*_fitness` |
 | 8 | Validation | `extract_mutations_from_pcps`, `validate_pcp_vs_counts` |
 
@@ -102,6 +102,7 @@ pixi run python tests/test_lightswitch_boundary.py
 pixi run python tests/test_pcp_compression.py
 pixi run python tests/test_pcp_gene_coordinates.py
 pixi run python tests/test_era_mapping.py
+pixi run python tests/test_era_rate_dispatch.py
 pixi run python tests/test_bte_haplotype.py   # half A (env pin) only without bte
 pixi run python tests/test_node_date_qc.py
 
@@ -394,6 +395,73 @@ mat-pcp/
     The test config carries ORF1b so the override runs end-to-end in CI; **ORF1a
     is not in it**, so no pipeline run asserts the vacuity fix itself.
     See [#133](https://github.com/matsengrp/mat-pcp/issues/133).
+
+11. **The neutral model is fitted once per era, and the pooled fit is the
+    degenerate one-era case rather than a second implementation.**
+    `SARS2-mut-fitness-v2` fits two rate models — pre-Omicron and Omicron+ — and
+    dispatches per clade; the `pre_omicron_or_omicron` covariate did not survive
+    mat-pcp's port, while the light-switch covariate from the same upstream
+    notebook did. v10 restores it. Three things about the shape are load-bearing.
+
+    *`add_expected_count` is `add_expected_count_by_era` with one era.* That makes
+    "the split did not move the pre-existing fit" true by construction instead of
+    by measurement, and it is why a single-era tree reproduces the v9 outputs
+    **byte-for-byte** — verified on the test data across `curated_counts.csv`,
+    `master_table.csv`, `rates_table.csv`, `expected_counts_by_clade.csv`,
+    `ntmut_fitness_aggregated.csv` and `all_aamut_fitness.csv`. Re-implementing
+    the pooled path separately would retire that guarantee silently, since both
+    paths would still produce plausible tables.
+
+    *Conserved sites are computed over every clade **before** the era partition*
+    (`curate_counts.py`), matching upstream, which computes `conserved_sites` from
+    all clades and only then queries by era. Computing conservation within era
+    gives each era a different training site set — so the two era fits and the
+    pooled fit would no longer be comparable, and the degeneracy guarantee above
+    would break — while still writing three well-formed files. The era filter
+    applies to *rows*, never to the site-set derivation.
+
+    *An empty era is skipped at DAG-construction time, and the skip is recorded.*
+    `populate_rates` raises on an empty partition, and single-era trees are
+    normal, not hypothetical: `config_test_data.yaml`'s `max_clades: 3` gives
+    19A/19B/20A, all pre-Omicron. `Snakefile: eras_present` resolves the
+    `get_clades` checkpoint and requests only non-empty eras, rather than having
+    the rule emit a placeholder — a header-only file or a `touch()` would ship a
+    rate table that looks fitted and contains nothing. But a skipped era leaves
+    *no file*, which is indistinguishable from an era dropped by a wiring
+    mistake, so `glm/era_fit_summary.csv` names **every** era with `fitted`
+    true/false. The two failure modes stay distinct: *no clades in the era* →
+    skip and record; *clades present but routed to an unfitted era* → raise. One
+    `try/except` around both turns a broken fit into a silently absent table.
+
+    **Three tables, not one with an `era` column.** DASM2's
+    `TabularRatesNeutralModel` assigns `wt_to_mut_rates[wt][mut]` in a row loop,
+    so an unrecognized extra column is read *last-row-wins, silently*; and
+    `rates.residual_variance` zips `groupby(...).apply(...)` output
+    **positionally** against `self.rates.loc[idx]`, guarded only by a
+    `len(...) != len(...)` early `return` — correct today only because the grid's
+    construction order happens to equal sorted order. The pooled
+    `master_table.csv` is retained with its v9 meaning as the **control arm** of
+    the per-era comparison, not as backwards compatibility.
+    `window_expected_counts` deliberately still reads it: the windowed path keys
+    on `founder_id` with no clade to dispatch on, and a per-window date label is
+    wrong exactly across the transition.
+
+    **No shipped config is two-era, so CI cannot check the dispatch.** Every
+    config resolves to one era, on which the whole path reduces to v9's pooled
+    fit — a pipeline run cannot tell whether the `curated_{era}` inputs are read,
+    matched to the right era, or dispatched through `era_for_clade` at all.
+    `tests/test_era_rate_dispatch.py` is therefore the only two-era coverage, and
+    it **execs the real `curate_counts.py` and the real
+    `expected_counts_by_clade.py`** against two constructed eras whose G→T rates
+    differ by a known factor: one table serving everyone yields a ratio of 1.0
+    and a swapped pair inverts it, so both are distinguished from the right
+    answer. Checking `add_expected_count_by_era` alone and calling that two-era
+    coverage is pattern 8's vacuity — a test named for the dispatch that never
+    runs the dispatching code. Mutation-tested against four separate breaks of
+    the shipped scripts. `validate_test.py::validate_era_rate_tables` is the
+    end-to-end counterpart, reconciling the summary against the output tree in
+    both directions.
+    See [#137](https://github.com/matsengrp/mat-pcp/issues/137).
 
 ### Configuration Sections
 

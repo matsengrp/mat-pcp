@@ -230,6 +230,82 @@ Estimated neutral mutation rates by sequence context and RNA structure, derived 
 **Notes:**
 - These rates are used to compute expected mutation counts for fitness estimation.
 - The `unpaired` column reflects RNA secondary structure from Lan et al. 2022.
+- **384 rows, not 512.** `get_rates_table.py` drops the `nt_site_before_boundary
+  == True` half of the grid, so consumers re-derive the boundary side per gene.
+  The full grid is in `glm/master_table.csv` below.
+
+### `rates_table_{era}.csv` (v10+)
+
+One per era present on the tree — `rates_table_pre_omicron.csv` and/or
+`rates_table_omicron.csv`. Identical schema and row count (384) to
+`rates_table.csv`; only the training population differs. See
+`glm/era_fit_summary.csv` for which eras a given run produced.
+
+### `glm/master_table.csv`
+
+The full GLM condition grid: **512 rows**, one per
+`(mut_type, motif, unpaired, nt_site_before_boundary)` combination. Documented
+here for the first time in v10 — it shipped from v1 with no schema entry.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `mut_type` | string | Two-letter mutation type (e.g., `CT`, `GA`) — note this differs from `rates_table.csv`'s `C>T` rendering. |
+| `motif` | string | Trinucleotide sequence context. |
+| `unpaired` | int | 1 if the site is in an unpaired (single-stranded) RNA region. |
+| `nt_site_boundary` | int | The configured light-switch boundary for this `mut_type`; 0 for the eight types that have none. |
+| `nt_site_before_boundary` | boolean | Which side of the boundary this row serves. The boundary site itself belongs to the **before** bucket (`site <= boundary`, `modules/lightswitch.py`). |
+| `rate` | float | Estimated neutral mutation rate for this condition. |
+| `expected_count` | float | Predicted count for the training population. |
+| `residual` | float | Empirical-Bayes-shrunk residual variance for this condition. |
+
+**Row arithmetic:** 4 boundary types (`AT`, `CG`, `GC`, `CT`) × 16 motifs × 2
+unpaired × 2 boundary sides = 256, plus 8 non-boundary types × 16 motifs × 2
+unpaired × 1 = 256.
+
+### `glm/master_table_{era}.csv` (v10+)
+
+Same 512-row schema and grid as `glm/master_table.csv`, fitted on one era's
+clades only. Both eras' tables share the grid exactly, so they are comparable
+cell by cell.
+
+**Three tables, not one with an `era` column.** DASM2's
+`TabularRatesNeutralModel` assigns `wt_to_mut_rates[wt][mut]` in a row loop, so
+an unrecognized extra column would be read *last-row-wins, silently*. The pooled
+`master_table.csv` is retained with its v9 meaning as the control arm of the
+per-era comparison, not as backwards compatibility.
+
+### `glm/era_fit_summary.csv` (v10+)
+
+Which eras this tree's run fitted, and which it skipped.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `era` | string | `pre_omicron` or `omicron`. **Every** era appears, fitted or not. |
+| `fitted` | boolean | Whether a rate table was produced for this era. |
+| `n_clades` | int | Clades in this era on this tree. |
+| `clades` | string | `;`-joined clade labels, in Nextstrain order. |
+| `master_table` | string | Relative path to the era's master table, or empty if skipped. |
+| `rates_table` | string | Relative path to the era's rates table, or empty if skipped. |
+
+**Why this file exists.** An era with no clades on a tree is skipped — the GLM
+cannot fit an empty partition, and single-era trees are normal (the test config's
+three clades are all pre-Omicron; the BA.2/JN.1/XFG trees are single-era by
+construction). But a skipped era leaves *no file*, which is indistinguishable
+from an era that went missing through a wiring mistake. This records the absence
+explicitly so it is auditable from the output tree alone.
+
+On a single-era tree the era's tables are **byte-identical** to the pooled ones,
+which `validate_test.py::validate_era_rate_tables` asserts.
+
+### `windows/` expected counts use the pooled table
+
+`window_expected_counts` reads `glm/master_table.csv`, **not** a per-era table.
+The windowed path has no clade column to dispatch on (`subtree_counts.csv` and
+`founder_muts.csv` key on `founder_id`, a bare node id), a per-window date label
+is wrong exactly across the transition, and a per-founder label breaks the
+shared-base-enumeration optimization. Since `T_window` divides out any constant
+rate factor, only the split's *relative* structure leaks through — dominated by
+G→T. Tracked as a follow-up.
 
 ## Node Dates (chronumental)
 

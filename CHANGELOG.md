@@ -75,6 +75,62 @@ change in #137 Task 3. Nothing here changes any output.
   separates completely by era (gap +0.393), so the era split is justified. Eleven of
   twelve types do *not* separate — see
   [#140](https://github.com/matsengrp/mat-pcp/issues/140).
+- **[#137](https://github.com/matsengrp/mat-pcp/issues/137) Tasks 2 and 3 — the
+  neutral model is now fitted per era.** This is the change the v10 bump is for:
+  it moves `fitness/` and `aamut_fitness/` on any multi-era tree.
+
+  **New outputs** (per tree, per era present): `glm/curated_counts_{era}.csv`,
+  `glm/master_table_{era}.csv`, `rates_table_{era}.csv`, and
+  `glm/era_fit_summary.csv`. The pooled `glm/master_table.csv`,
+  `glm/curated_counts.csv` and `rates_table.csv` are **retained unchanged** — the
+  pooled fit is the control arm of the per-era comparison, not legacy baggage.
+  Three separate files rather than one with an `era` column: DASM2's
+  `TabularRatesNeutralModel` reads rates in a row loop, so an unrecognized column
+  would be applied last-row-wins with no error.
+
+  **Changed outputs**: `fitness/expected_counts_by_clade.csv` and everything
+  derived from it (`fitness/ntmut_fitness*`, `aamut_fitness/*`) now take each
+  clade's `expected_count` and `tau_squared` from its **own era's** fit, dispatched
+  on the clade label via `modules/era.py`. Upstream dispatches on the positional
+  slice `clades[0:11]`, correct only while the counts file happens to arrive in
+  Nextstrain clade order; mat-pcp does not.
+
+  **Unchanged on a single-era tree, byte-for-byte.** `add_expected_count` is now
+  `add_expected_count_by_era` with one era, so the pooled path *is* the degenerate
+  per-era path. A full test-data run reproduced every v9 md5 —
+  `curated_counts.csv`, `master_table.csv`, `rates_table.csv`,
+  `expected_counts_by_clade.csv`, `ntmut_fitness_aggregated.csv`,
+  `all_aamut_fitness.csv` — and `data/test_data/expected_summary.json` is
+  unchanged. That makes the CI run a regression check on the split rather than a
+  new path with no baseline.
+
+  **Empty era → the rule is skipped, and the skip is recorded.** The GLM cannot
+  fit an empty partition, and single-era trees are normal (the test config's three
+  clades are all pre-Omicron; the BA.2/JN.1/XFG trees are single-era by
+  construction). `eras_present` resolves the `get_clades` checkpoint and requests
+  only non-empty eras, rather than emitting a header-only placeholder that would
+  look like a fit. Because a missing file cannot distinguish "legitimately absent"
+  from "dropped by a wiring mistake", `glm/era_fit_summary.csv` names every era
+  with `fitted` true/false and its clade list.
+
+  **Conserved sites are computed over all clades before the partition**, matching
+  upstream. Computing conservation within era would give each era a different
+  training site set and break comparability with the pooled fit.
+
+  **`window_expected_counts` deliberately stays on the pooled table** (EPIC #138
+  decision 7). The windowed path keys on `founder_id` with no clade to dispatch on,
+  and a per-window date label is wrong exactly across the transition. `T_window`
+  absorbs any constant rate factor, so only the split's relative structure leaks
+  through. Documented at the call site; era dispatch there is a follow-up.
+
+  **`OUTPUT_SCHEMA.md` now documents `glm/master_table.csv`**, which had shipped
+  since v1 with no schema entry.
+
+  New guards: `tests/test_era_rate_dispatch.py` (the *only* two-era coverage — no
+  shipped config is two-era, so CI's pipeline run cannot exercise the dispatch; it
+  execs the real `curate_counts.py` and `expected_counts_by_clade.py`, and is
+  mutation-tested against four separate breaks of them) and
+  `validate_test.py::validate_era_rate_tables`.
 
 ### v9
 
