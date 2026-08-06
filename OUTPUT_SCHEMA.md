@@ -309,6 +309,29 @@ percentiles at a few tens of kB.
 | `dt_days` | int | `date(child) − date(parent)` in whole days. |
 | `count` | int | Number of branches in that bin with that Δt. |
 
+### `mat/node_dates_branch_dt_summary.csv`
+
+Wide-form per-bin summary of the same distributions — median, interquartile range and
+p95 for branch Δt binned by branch length in mutations (#139). One row per
+mutation-count bin plus a final `all` row.
+
+Built from the *same* `DayHistogram` objects as `node_dates_branch_dt.csv`, so the two
+files cannot disagree, and every statistic is **exact** rather than interpolated: Δt is
+whole days and the histogram retains every observation. `iqr` is `p75 − p25` on those
+same order statistics, not a separate estimate. The `all` row is the marginal of the
+pooled data (via `DayHistogram.merge`), **not** an average of per-bin medians; the
+script raises if its `n_branches` does not equal the number of branches with a defined
+Δt, so a bin set that stopped partitioning them would fail rather than under-report.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `mut_count_bin` | string | Mutation-count bin (`0`, `1`, …, `6-10`, `11-20`, `21-50`, `51+`), or `all` for the pooled row. |
+| `n_branches` | int | Branches in the bin with a defined Δt. |
+| `min`, `p05`, `p25`, `median`, `p75`, `p95`, `max` | int | Exact order statistics of Δt in whole days. |
+| `iqr` | int | `p75 − p25`. |
+| `mean` | float | Mean Δt in days, to 2 dp. |
+| `frac_dt_zero` | float | Fraction of the bin with Δt exactly 0 — parent and child dated the same day. |
+
 ### `mat/node_dates_internal_checks.csv`
 
 Long-form day distributions for the three internal-node checks that produce one

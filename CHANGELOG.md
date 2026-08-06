@@ -49,8 +49,10 @@ change in #137 Task 3. Nothing here changes any output.
   adopted yet.
 - **[#139](https://github.com/matsengrp/mat-pcp/issues/139)** (additive outputs,
   report-only): `chronumental_qc` now checks the **internal** node dates, not just
-  tips. Five new `REPORT` rows in `mat/node_dates_qc.tsv` plus two new binned
-  artifacts, `mat/node_dates_branch_dt.csv` and
+  tips. Five new `REPORT` rows in `mat/node_dates_qc.tsv` plus three new binned
+  artifacts: `mat/node_dates_branch_dt.csv`,
+  `mat/node_dates_branch_dt_summary.csv` (per-bin median / IQR / p95 for branch Δt
+  binned by branch length in mutations, plus a pooled `all` row) and
   `mat/node_dates_internal_checks.csv`. They gate nothing — the existing
   `tip_residual` gate and its threshold are untouched. Internal dates are what
   `modules/windowing.py` uses to bucket every branch into a time window, and until

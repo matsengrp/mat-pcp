@@ -50,6 +50,7 @@ report_path = snakemake.output.report
 residuals_path = snakemake.output.residuals
 branch_dt_path = snakemake.output.branch_dt
 internal_checks_path = snakemake.output.internal_checks
+branch_dt_summary_path = snakemake.output.branch_dt_summary
 max_median_abs_tip_residual_days = float(
     snakemake.params.max_median_abs_tip_residual_days
 )
@@ -313,6 +314,63 @@ for label in sorted(dt_by_bin, key=bin_lower_bound):
 pd.DataFrame(
     branch_rows, columns=["mut_count_bin", "dt_days", "count"]
 ).to_csv(branch_dt_path, index=False)
+
+# Wide form: the per-bin summary. Derived from the same DayHistogram objects that
+# produce the long form above, so the two cannot disagree -- and every statistic is
+# EXACT rather than interpolated, because Delta-t is whole days and the histogram
+# holds every observation (see the DayHistogram docstring). ``iqr`` is p75 - p25 on
+# those same exact order statistics, not a separate estimate.
+branch_summary = []
+for label in sorted(dt_by_bin, key=bin_lower_bound):
+    s = dt_by_bin[label].stats()
+    branch_summary.append(
+        {
+            "mut_count_bin": label,
+            "n_branches": s["n"],
+            "min": s["min"],
+            "p05": s["p05"],
+            "p25": s["p25"],
+            "median": s["median"],
+            "p75": s["p75"],
+            "iqr": s["iqr"],
+            "p95": s["p95"],
+            "max": s["max"],
+            "mean": round(s["mean"], 2),
+            "frac_dt_zero": round(
+                dict(dt_by_bin[label].as_rows()).get(0, 0) / s["n"], 6
+            ),
+        }
+    )
+# An "all" row, so the marginal distribution does not have to be recombined by hand
+# from the bins (and cannot be got wrong by averaging per-bin medians).
+all_hist = node_date_qc.DayHistogram()
+for hist in dt_by_bin.values():
+    all_hist.merge(hist)
+s = all_hist.stats()
+branch_summary.append(
+    {
+        "mut_count_bin": "all",
+        "n_branches": s["n"],
+        "min": s["min"],
+        "p05": s["p05"],
+        "p25": s["p25"],
+        "median": s["median"],
+        "p75": s["p75"],
+        "iqr": s["iqr"],
+        "p95": s["p95"],
+        "max": s["max"],
+        "mean": round(s["mean"], 2),
+        "frac_dt_zero": round(dict(all_hist.as_rows()).get(0, 0) / s["n"], 6),
+    }
+)
+n_dt_defined = int((~np.isnan(branch_dt)).sum())
+if s["n"] != n_dt_defined:
+    raise ValueError(
+        f"the branch Delta-t summary's 'all' row covers {s['n']} branches but "
+        f"{n_dt_defined} branches have a defined Delta-t; the mutation-count bins "
+        f"are not a partition of them"
+    )
+pd.DataFrame(branch_summary).to_csv(branch_dt_summary_path, index=False)
 
 # The clock estimate is the INCREMENTAL slope between adjacent single-count bins,
 # not median(Delta-t)/n. On the production tree the zero-mutation bin already has a

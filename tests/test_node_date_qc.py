@@ -97,10 +97,20 @@ def check_histogram_matches_exact_quantiles():
         expected = {
             "min": int(values.min()),
             "max": int(values.max()),
-            "median": int(np.percentile(values, 50, method="lower")),
-            "p05": int(np.percentile(values, 5, method="lower")),
-            "p95": int(np.percentile(values, 95, method="lower")),
+            "median": int(np.quantile(values, 0.5, method="lower")),
+            "p05": int(np.quantile(values, 0.05, method="lower")),
+            # The quartiles feed node_dates_branch_dt_summary.csv's median/IQR/p95
+            # table, so they need the same exactness guarantee as the median.
+            "p25": int(np.quantile(values, 0.25, method="lower")),
+            "p75": int(np.quantile(values, 0.75, method="lower")),
+            "p95": int(np.quantile(values, 0.95, method="lower")),
         }
+        if stats["iqr"] != stats["p75"] - stats["p25"]:
+            failures.append(
+                f"trial {trial}: iqr={stats['iqr']} but p75-p25="
+                f"{stats['p75'] - stats['p25']}; iqr must be derived from the same "
+                f"exact order statistics, not estimated separately"
+            )
         for key, want in expected.items():
             if stats[key] != want:
                 failures.append(
@@ -166,6 +176,19 @@ def check_quantile_boundary_is_exact():
     """
     failures = []
     qc = _load()
+
+    # merge() builds the summary table's "all" row from the per-bin histograms, so
+    # its order statistics must equal those of the pooled data -- not an average of
+    # per-bin medians. Checked here because a wrong merge produces a plausible table.
+    a, b = qc.DayHistogram(), qc.DayHistogram()
+    a.update([1, 1, 5]), b.update([2, 9, 9, 100])
+    pooled = qc.DayHistogram()
+    pooled.update([1, 1, 5, 2, 9, 9, 100])
+    if qc.DayHistogram().merge(a).merge(b).stats() != pooled.stats():
+        failures.append(
+            "merge() does not reproduce the pooled distribution, so the summary "
+            "table's 'all' row would not be the marginal of its bins"
+        )
 
     for n in range(2, 60):
         for k in range(1, n):

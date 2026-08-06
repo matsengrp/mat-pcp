@@ -143,6 +143,20 @@ class DayHistogram:
             self.n += count
             self.total += value * count
 
+    def merge(self, other):
+        """Fold ``other``'s counts into this histogram.
+
+        Used to build the marginal "all branches" row from the per-bin histograms.
+        Doing it this way rather than re-scanning the tree means the marginal and the
+        bins cannot disagree, and it keeps the marginal's order statistics exact --
+        averaging per-bin medians would not be the median of the pooled data.
+        """
+        for value, count in other._counts.items():
+            self._counts[value] = self._counts.get(value, 0) + count
+            self.n += count
+            self.total += value * count
+        return self
+
     def quantile(self, q):
         """Lower-interpolated quantile, matching ``numpy.percentile(..., 'lower')``."""
         if not self.n:
@@ -161,19 +175,28 @@ class DayHistogram:
                 "n": 0,
                 "min": None,
                 "p05": None,
+                "p25": None,
                 "median": None,
+                "p75": None,
+                "iqr": None,
                 "p95": None,
                 "max": None,
                 "mean": None,
                 "frac_negative": None,
+                "frac_positive": None,
             }
         negatives = sum(c for v, c in self._counts.items() if v < 0)
         positives = sum(c for v, c in self._counts.items() if v > 0)
+        p25 = self.quantile(0.25)
+        p75 = self.quantile(0.75)
         return {
             "n": self.n,
             "min": min(self._counts),
             "p05": self.quantile(0.05),
+            "p25": p25,
             "median": self.quantile(0.5),
+            "p75": p75,
+            "iqr": p75 - p25,
             "p95": self.quantile(0.95),
             "max": max(self._counts),
             "mean": self.total / self.n,

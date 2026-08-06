@@ -571,6 +571,12 @@ rule chronumental_qc:
         # and Delta-t in whole days is an integer so a histogram gives exact
         # medians and percentiles at a few tens of kB.
         branch_dt=os.path.join(OUTDIR, "mat/node_dates_branch_dt.csv"),
+        # Per-bin median / IQR / p95 summary of the same distributions. Derived from
+        # the same histograms as branch_dt above, so the two cannot disagree, and
+        # every statistic is exact rather than interpolated.
+        branch_dt_summary=os.path.join(
+            OUTDIR, "mat/node_dates_branch_dt_summary.csv"
+        ),
         internal_checks=os.path.join(OUTDIR, "mat/node_dates_internal_checks.csv")
     params:
         max_median_abs_tip_residual_days=config.get(
