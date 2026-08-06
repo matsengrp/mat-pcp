@@ -18,10 +18,16 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
-### Unreleased (v10 in progress, EPIC [#138](https://github.com/matsengrp/mat-pcp/issues/138))
+### v10 (EPIC [#138](https://github.com/matsengrp/mat-pcp/issues/138))
 
-No version bump yet — `VERSION` is still `v9`, and the bump lands with the schema
-change in #137 Task 3. Nothing here changes any output.
+**The reason for the bump is [#137](https://github.com/matsengrp/mat-pcp/issues/137):
+the neutral rate model is now fitted once per era instead of once globally, so
+`fitness/` and `aamut_fitness/` move on any tree spanning both eras.** Models
+trained on v9 fitness outputs should not be mixed with v10 ones.
+
+The other three items in this release change no output on their own — #135 and
+#139 are measurement-only, #136 is an environment pin that reproduced v9's md5s
+exactly — and ride the coordinated bump rather than carrying one each.
 
 - **[#136](https://github.com/matsengrp/mat-pcp/issues/136)**: `workflow/envs/bte.yml`
   now pins `bte>=0.9.3` with `python>=3.10,<3.11`. `bte<=0.9.2`'s
