@@ -17,17 +17,46 @@ The script reconstructs the drop from the same two inputs
 `build_count_table.py` uses and **reconciles exactly against the run's own log
 line**: 46,284 rows / 210,111 counts.
 
-## The answer: it is 97.8% reversions *toward* the clade founder
+## The answer: 100% is off-founder background, and 97.8% of it restores the founder
 
-| category | rows | % rows | counts | % counts |
+**All 46,284 rows** (100.00% of rows, 100.00% of counts) are observations whose
+*from*-base differs from the clade founder base. Within that, the great majority
+restore the founder base — a reversion *toward* the founder, which the grid cannot
+hold by construction:
+
+| | rows | % of rows | counts | % of counts |
 |---|---|---|---|---|
-| `reversion_to_clade_founder` | 43,596 | 94.19 | 205,566 | **97.84** |
-| `off_founder_nt_background` | 2,688 | 5.81 | 4,545 | 2.16 |
-| **unexplained** | **0** | **0** | **0** | **0** |
+| **off-founder at the nucleotide level** | **46,284** | **100.00** | **210,111** | **100.00** |
+| — of which restore the founder base | 43,596 | 94.19 | 205,566 | **97.84** |
+| — of which do not | 2,688 | 5.81 | 4,545 | 2.16 |
 
-Every one of the 46,284 rows lands in exactly one category, asserted by the script
-rather than assumed, and **nothing is unexplained** — so #135's "open an issue for
-the unexplained remainder" does not apply.
+> **Do not read the 97.84 / 2.16 as a split between two causes.** An earlier
+> version of this README did. The two cascade categories are **strictly nested**,
+> not alternatives: `reversion_to_clade_founder` is `to_nt == founder`, and
+> `off_founder_nt_background` is `from_nt != founder`. Since self-mutations are
+> consumed earlier in the cascade, `to_nt == founder` *implies*
+> `from_nt != founder` — verified at 100.00% of its rows on both the v8 and v9
+> trees. Swapping two `assign` calls in the script reports "100% off-founder, 0%
+> reversions" over the identical set of rows. The union is the finding; the
+> reversion share is a sub-decomposition of it.
+
+> **"Zero unexplained" is a theorem, not a measurement**, and the earlier version
+> of this README quoted it as evidence of completeness. Off-grid is *defined* as
+> `founder.isna() | (from != founder) | (to == founder)`. Category 1 consumes the
+> first disjunct and categories 5-6 are exactly the other two, so their union is
+> the whole remainder for **any** input — `unexplained` is empty by construction
+> and the partition assertion is tautological. It is retained only as a tripwire
+> on the mask definition in `load_run`. Quoting it as "nothing is unexplained,
+> therefore the drop is fully understood" is CLAUDE.md pattern 10's vacuity: a
+> check that cannot fail, reported as a check that passed.
+
+What genuinely *is* established, and could have come out otherwise: the four
+data-checking categories (missing founder row, non-ACGT founder base, non-ACGT
+mutation base, self-mutation) are all **empirically zero** on this tree. Those can
+fire. And #135's "open an issue for the unexplained remainder" does not apply —
+not because `unexplained` is zero, but because the union above accounts for every
+row against a predicate that was independently reconciled with the run's own log
+line.
 
 Grid membership is a three-part predicate, which is what makes this tractable.
 `(clade, nt_mutation)` is on the grid iff `clade_founder_nts.csv` has a row for

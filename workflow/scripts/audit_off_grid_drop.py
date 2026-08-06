@@ -41,6 +41,36 @@ asserts the first two rather than just claiming it:
   (``gene == "noncoding"``), so being non-coding does not withhold a grid row.
 * *No founder codon*: a codon-level notion. Grid membership here is decided purely
   at the nucleotide level; the codon-level filter is #130's, reported separately.
+
+**Two things this decomposition does NOT establish, recorded because the output
+invites reading them into it.**
+
+1. *The last two categories are nested, so their ratio is not a finding.*
+   ``reversion_to_clade_founder`` is ``to_nt == founder``; ``off_founder_nt_background``
+   is ``from_nt != founder``. Self-mutations are consumed earlier, so
+   ``to_nt == founder`` *implies* ``from_nt != founder`` — category 5 is a strict
+   subset of category 6, verified at 100.00% of its rows on both the v8 and v9
+   trees. Swapping the two ``assign`` calls reports "100% off-founder background,
+   0% reversions" over the identical set of rows. So "97.84% reversions vs 2.16%
+   off-founder" is a statement about cascade order, not about two competing
+   mechanisms; the union is the real quantity and the reversion share is a
+   sub-decomposition of it. ``main`` prints it that way.
+
+2. *"Zero unexplained" is a theorem, not a measurement.* Off-grid is defined in
+   ``load_run`` as ``founder.isna() | (from != founder) | (to == founder)``.
+   Category 1 consumes the first disjunct; categories 5 and 6 are exactly the
+   other two. Their union is therefore the entire remainder for **any** input, so
+   ``unexplained`` is empty by construction and the partition assertion below is
+   likewise tautological. It is kept as a tripwire on ``load_run``'s mask
+   definition — if that mask and this cascade ever drift apart, this is what
+   fires — but it must not be quoted as evidence that the drop is fully
+   understood. That would be CLAUDE.md pattern 10's vacuity: a check that cannot
+   fail, reported as a check that passed.
+
+   The categories that *are* real data checks are 1-4 (missing founder row,
+   non-ACGT founder base, non-ACGT mutation base, self-mutation). Those can fire
+   and are all zero as an empirical fact about the tree, which is the informative
+   part of this audit.
 """
 
 import argparse
@@ -79,16 +109,22 @@ CATEGORY_NOTES = {
     ),
     "self_mutation": "the observed from- and to-base are identical (a no-op mutation)",
     "reversion_to_clade_founder": (
-        "the observed to-base IS the clade founder base: a reversion *toward* the "
-        "founder. The grid enumerates mutations *away from* the founder, so it has "
-        "no such row by construction -- this is excluded by design, not missing"
+        "off-founder AND the observed to-base IS the clade founder base: a "
+        "reversion *toward* the founder. The grid enumerates mutations *away from* "
+        "the founder, so it has no such row by construction -- excluded by design, "
+        "not missing. NOTE this is a SUBSET of off_founder_nt_background, not an "
+        "alternative to it (see the module docstring)"
     ),
     "off_founder_nt_background": (
-        "the from-base is neither the founder base nor reverting to it: a lineage "
-        "mutated founder->X and then X->Y. The nucleotide-level analogue of #130's "
+        "off-founder and NOT restoring the founder base: a lineage mutated "
+        "founder->X and then X->Y. The nucleotide-level analogue of #130's "
         "codon-level mutated-background case"
     ),
-    "unexplained": "fails grid membership for none of the reasons above",
+    "unexplained": (
+        "unreachable by construction and retained only as a tripwire on the "
+        "definition of off-grid itself; see the module docstring. A non-zero value "
+        "here means load_run's off_grid mask no longer matches this cascade"
+    ),
 }
 
 
@@ -237,6 +273,38 @@ def main():
         by_cat[["category", "rows", "pct_rows", "counts", "pct_counts"]].to_string(
             index=False
         )
+    )
+
+    # State the nesting, because the two big categories are NOT competing
+    # explanations and the percentages above read as though they were. Category 5
+    # is a strict subset of category 6's predicate: given from_nt != to_nt (self
+    # mutations are already consumed), to_nt == founder implies from_nt != founder.
+    # So swapping the order of two assign() calls would move the whole drop from
+    # "97.84% reversions" to "100% off-founder background" without changing a
+    # single row's membership in the underlying set. The honest headline is the
+    # union, with the reversion share as a sub-decomposition of it.
+    off_founder = off["from_nt"] != off["grid_founder_nt"]
+    restores = off_founder & (off["to_nt"] == off["grid_founder_nt"])
+    n_off_rows = int(off_founder.sum())
+    n_off_counts = int(off.loc[off_founder, "count"].sum())
+    nested = int(restores.sum())
+    if nested != int((off["category"] == "reversion_to_clade_founder").sum()):
+        raise ValueError(
+            "the reversion category is not exactly the founder-restoring subset of "
+            "the off-founder rows; the cascade and the nesting claim disagree"
+        )
+    print(
+        f"\n=== the nesting, stated (the two categories above are not "
+        f"alternatives) ===\n"
+        f"  off-founder at the nucleotide level: {n_off_rows} rows "
+        f"({100 * n_off_rows / n_rows:.2f}%), {n_off_counts} counts "
+        f"({100 * n_off_counts / n_counts:.2f}%)\n"
+        f"    of which restore the founder base: {nested} rows "
+        f"({100 * nested / max(n_off_rows, 1):.2f}% of the off-founder rows)\n"
+        f"  Read as: essentially the whole drop is off-founder background, and "
+        f"most of it is founder-restoring. NOT as two causes in a "
+        f"{100 * nested / n_rows:.0f}/{100 * (n_off_rows - nested) / n_rows:.0f} "
+        f"split -- that ratio is decided by cascade order alone."
     )
 
     summarize(off, ["clade", "category"]).to_csv(

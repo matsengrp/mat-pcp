@@ -154,6 +154,7 @@ class DayHistogram:
                 "frac_negative": None,
             }
         negatives = sum(c for v, c in self._counts.items() if v < 0)
+        positives = sum(c for v, c in self._counts.items() if v > 0)
         return {
             "n": self.n,
             "min": min(self._counts),
@@ -163,6 +164,7 @@ class DayHistogram:
             "max": max(self._counts),
             "mean": self.total / self.n,
             "frac_negative": negatives / self.n,
+            "frac_positive": positives / self.n,
         }
 
     def as_rows(self):
@@ -194,7 +196,28 @@ def propagate_min_descendant(parent_index, leaf_values, n_nodes):
             f"parent_index ({len(parent_index)}) and leaf_values "
             f"({len(leaf_values)}) must both have length n_nodes ({n_nodes})"
         )
-    parents = np.asarray(parent_index, dtype="int64").tolist()
+    parents = np.asarray(parent_index, dtype="int64")
+    # The precondition is checked, not merely documented. Violating it does not
+    # raise on its own: the reverse pass simply stops propagating past the
+    # offending edge and returns a smaller-but-plausible minimum (a nan where a
+    # real date belonged), at exit 0 -- the #129/#130/#133 silent-drop shape. The
+    # loop below cannot be vectorized because each parent depends on its
+    # children, but this guard can: one O(n) comparison, which is free next to
+    # the pass it protects.
+    positions = np.arange(n_nodes)
+    has_parent = parents >= 0
+    out_of_order = has_parent & (parents >= positions)
+    if out_of_order.any():
+        bad = np.flatnonzero(out_of_order)[:5].tolist()
+        raise ValueError(
+            f"parent_index must list every parent before its children (a "
+            f"depth-first pre-order); {int(out_of_order.sum())} node(s) violate "
+            f"this, first at indices {bad} with parents "
+            f"{parents[bad].tolist()}. The single reverse pass below relies on "
+            f"this ordering, and silently under-propagates without it rather "
+            f"than failing -- so it is checked instead of assumed."
+        )
+    parents = parents.tolist()
     values = np.asarray(leaf_values, dtype="float64")
     best = np.where(np.isnan(values), np.inf, values).tolist()
     for i in range(n_nodes - 1, 0, -1):
@@ -209,13 +232,37 @@ def propagate_min_descendant(parent_index, leaf_values, n_nodes):
     return out
 
 
-def format_stats(stats, unit="d"):
-    """Compact one-line rendering for the report's ``detail`` column."""
+def format_stats(stats, unit="d", violation=None):
+    """Compact one-line rendering for the report's ``detail`` column.
+
+    ``violation`` names the sign that indicates a problem -- ``"negative"`` or
+    ``"positive"`` -- and makes the report state the violating fraction as such.
+    It is required rather than optional-by-default because checks 6 and 8 use
+    **opposite** sign conventions (``min_observed - predicted`` versus
+    ``predicted - min_observed``), and printing only ``frac<0`` for both rendered
+    one as 23.6% *bad* and the other as 96.1% *good* in the same column. A reader
+    comparing those two numbers draws the opposite of the right conclusion.
+
+    Both fractions are printed regardless, so the raw quantity stays available;
+    ``violation`` only adds the labelled one. ``frac_negative`` +
+    ``frac_positive`` does not sum to 1 -- exact zeros are in neither.
+    """
     if not stats["n"]:
         return "no observations"
-    return (
+    text = (
         f"n={stats['n']}, median={stats['median']}{unit}, "
         f"mean={stats['mean']:.1f}{unit}, p05={stats['p05']}{unit}, "
         f"p95={stats['p95']}{unit}, min={stats['min']}{unit}, "
-        f"max={stats['max']}{unit}, frac<0={stats['frac_negative']:.4f}"
+        f"max={stats['max']}{unit}, frac<0={stats['frac_negative']:.4f}, "
+        f"frac>0={stats['frac_positive']:.4f}"
     )
+    if violation is None:
+        return text
+    if violation not in ("negative", "positive"):
+        raise ValueError(
+            f"violation must be 'negative', 'positive' or None, not {violation!r}"
+        )
+    key = "frac_negative" if violation == "negative" else "frac_positive"
+    sign = "<0" if violation == "negative" else ">0"
+    count = round(stats[key] * stats["n"])
+    return f"{text}; VIOLATING ({sign}) = {stats[key]:.4f} ({count} of {stats['n']})"

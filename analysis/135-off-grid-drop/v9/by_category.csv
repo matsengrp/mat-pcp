@@ -1,3 +1,3 @@
 category,rows,counts,pct_rows,pct_counts,note
-reversion_to_clade_founder,43596,205566.0,94.19,97.84,"the observed to-base IS the clade founder base: a reversion *toward* the founder. The grid enumerates mutations *away from* the founder, so it has no such row by construction -- this is excluded by design, not missing"
-off_founder_nt_background,2688,4545.0,5.81,2.16,the from-base is neither the founder base nor reverting to it: a lineage mutated founder->X and then X->Y. The nucleotide-level analogue of #130's codon-level mutated-background case
+reversion_to_clade_founder,43596,205566.0,94.19,97.84,"off-founder AND the observed to-base IS the clade founder base: a reversion *toward* the founder. The grid enumerates mutations *away from* the founder, so it has no such row by construction -- excluded by design, not missing. NOTE this is a SUBSET of off_founder_nt_background, not an alternative to it (see the module docstring)"
+off_founder_nt_background,2688,4545.0,5.81,2.16,off-founder and NOT restoring the founder base: a lineage mutated founder->X and then X->Y. The nucleotide-level analogue of #130's codon-level mutated-background case

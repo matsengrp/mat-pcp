@@ -231,8 +231,37 @@ def check_audit_rejects_each_mutation():
     else:
         failures.append("audit accepted the era value 'Omicron', which is not in ERAS")
 
+    # Every mutation above is a SINGLE wrong entry, so none of them can tell
+    # whether the audit reports all disagreements or only the first. That gap is
+    # real: truncating the message to ``disagreements[:1]`` leaves this whole file
+    # green. It matters because the audit's purpose is to be read by whoever
+    # mis-edited the table -- surfacing one of three wrong clades sends them off
+    # to fix one and re-run into the next, and the natural reading of a
+    # one-line failure is that there is one problem.
+    multi = dict(era.CLADE_ERA)
+    wrong = {"21K": era.PRE_OMICRON, "22A": era.PRE_OMICRON, "20A": era.OMICRON}
+    for clade, wrong_era in wrong.items():
+        if multi[clade] == wrong_era:
+            failures.append(f"{clade} is already {wrong_era!r}; multi-entry case is a no-op")
+        multi[clade] = wrong_era
+    try:
+        era.audit_clade_era_mapping(multi)
+    except ValueError as exc:
+        missing = sorted(c for c in wrong if c not in str(exc))
+        if missing:
+            failures.append(
+                f"audit rejected a 3-entry mutation but named only "
+                f"{sorted(set(wrong) - set(missing))}, omitting {missing}. It must "
+                f"list every disagreement, not stop at the first."
+            )
+    else:
+        failures.append(f"audit ACCEPTED three simultaneous wrong entries: {wrong}")
+
     if not failures:
-        print(f"  audit rejects all {len(MUTATIONS)} mutations and a bad era value")
+        print(
+            f"  audit rejects all {len(MUTATIONS)} single mutations, a bad era "
+            f"value, and names all 3 clades in a multi-entry mutation"
+        )
     return failures
 
 

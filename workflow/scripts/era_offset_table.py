@@ -203,10 +203,20 @@ def main():
         f"source_clade == 'all'"
     )
 
-    cells["era"] = cells["clade"].map(era_mod.era_for_clade)
+    # Check for unmapped clades BEFORE the map, not after. Series.map propagates
+    # the KeyError that era_for_clade raises, so a check placed after the map can
+    # never run -- and it would report only the first bad clade anyway. Doing it
+    # first makes the guard that actually fires the one that lists every clade
+    # needing an era entry, which is what someone adding a new tree wants.
     unmapped = sorted(set(cells["clade"]) - set(era_mod.CLADE_ERA))
     if unmapped:
-        raise KeyError(f"clades in the fitness table with no era: {unmapped}")
+        raise KeyError(
+            f"clades in the fitness table with no era: {unmapped}. Add them to "
+            f"workflow/modules/era.py::CLADE_ERA -- era_for_clade raises rather "
+            f"than defaulting, because a clade fitted into the wrong era yields a "
+            f"plausible rate table instead of an error."
+        )
+    cells["era"] = cells["clade"].map(era_mod.era_for_clade)
 
     cells = cells.sort_values(["clade", "mut_type"]).reset_index(drop=True)
     os.makedirs(args.outdir, exist_ok=True)

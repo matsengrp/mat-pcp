@@ -578,7 +578,14 @@ rule chronumental_qc:
         )
     threads: get_threads("chronumental_qc")
     resources:
-        mem_mb=16000,
+        # Measured, not guessed: 43.4 GB max RSS over the 20,961,614 nodes of
+        # gisaid-and-public_2026-04-22 (38.2 GB before the #139 checks added
+        # their full-length per-node arrays). The previous 16000 was under the
+        # real peak by more than 2x. Production runs use a local executor with
+        # no --resources ceiling, so nothing enforced it and nothing failed --
+        # which is exactly why it needs to be right before anyone runs this
+        # under a scheduler that does enforce it.
+        mem_mb=56000,
         runtime=120
     benchmark:
         os.path.join(OUTDIR, "benchmarks/chronumental_qc.tsv")

@@ -35,8 +35,16 @@ What each check exists for:
 
 5. **The reverse-iteration precondition is asserted, not assumed.** The function
    relies on parents preceding children, which is what ``depth_first_expansion``
-   gives. A shuffled ordering must produce a wrong answer -- if it did not, the
-   function would not be doing the propagation it claims to.
+   gives. A violated ordering must **raise**. It used to return silently, and
+   what it returned was plausible -- ``nan`` at the root, indistinguishable from a
+   genuinely unobserved subtree -- so a traversal-order change in ``bte`` would
+   have degraded checks 6 and 8 with no symptom.
+
+6. **The quantile boundary.** Item 1's random trials do not pin the ``seen >
+   target`` comparison: mutating it to ``seen >= target`` leaves them all green,
+   because the bug needs a cumulative count to land *exactly* on an integer
+   target. That coincidence is constructed on purpose in
+   ``check_quantile_boundary_is_exact`` rather than hoped for.
 
 Usage:
     python tests/test_node_date_qc.py
@@ -124,6 +132,75 @@ def check_histogram_matches_exact_quantiles():
 
     if not failures:
         print("  histogram order statistics are exact over 5 random trials")
+    return failures
+
+
+def check_quantile_boundary_is_exact():
+    """Pin the ``seen > target`` comparison at targets that land on an integer.
+
+    ``quantile`` walks the sorted day values accumulating counts and returns the
+    first value whose cumulative count exceeds ``q * (n - 1)``. The comparison has
+    to be strict: when the target is an exact integer *and* a cumulative count
+    equals it, ``>=`` returns the value one rank too low.
+
+    The random trials above cannot see this. Mutating the shipped comparison to
+    ``seen >= target`` leaves every one of them green -- verified by running this
+    file against a mutated copy of ``node_date_qc.py`` -- because hitting the bug
+    needs a cumulative count to fall *exactly* on an integer target, which random
+    integers in a wide range essentially never do at the three quantiles sampled.
+    So this check constructs that coincidence on purpose instead of hoping for it.
+
+    ``[0]*k + [1]*(n-k)`` with ``q = k/(n-1)`` gives ``target == k`` exactly, and
+    the cumulative count after the zeros is exactly ``k`` -- the boundary, every
+    time. Exactness is the whole justification for binning rather than keeping
+    21 M per-branch rows (see the module docstring), so it deserves a test that
+    fails when it breaks.
+    """
+    failures = []
+    qc = _load()
+
+    for n in range(2, 60):
+        for k in range(1, n):
+            q = k / (n - 1)
+            if q > 1.0:
+                continue
+            values = [0] * k + [1] * (n - k)
+            hist = qc.DayHistogram()
+            hist.update(values)
+            got = hist.quantile(q)
+            # np.quantile, not np.percentile: percentile takes q*100 and divides
+            # by 100 internally, and that round trip is lossy. At q=1/3, n=4 it
+            # yields a virtual index of 0.9999999999999999 which floors to 0,
+            # while quantile() computes q*(n-1) == 1.0 exactly. Comparing against
+            # the percentile form reports a failure against correct code -- the
+            # reference has to do the same arithmetic as the implementation.
+            want = int(np.quantile(values, q, method="lower"))
+            if got != want:
+                failures.append(
+                    f"n={n}, k={k}, q={q!r}: quantile={got}, exact answer is {want}. "
+                    f"target = q*(n-1) = {q * (n - 1)!r} and the cumulative count "
+                    f"after the {k} zero(s) is exactly {k}, so the comparison "
+                    f"against the target must be strict."
+                )
+                if len(failures) > 5:
+                    failures.append("... further boundary failures suppressed")
+                    return failures
+
+    # The minimal hand-checked case, stated explicitly so the intent survives a
+    # future refactor of the sweep above.
+    hist = qc.DayHistogram()
+    hist.update([1, 1, 1, 1, 2, 2, 2, 2, 2])
+    if hist.quantile(0.5) != 2:
+        failures.append(
+            f"median of [1]*4+[2]*5 is {hist.quantile(0.5)}, must be 2 "
+            f"(numpy lower); target is 0.5*(9-1) = 4.0 and the count of 1s is 4"
+        )
+
+    if not failures:
+        print(
+            "  quantile is exact at integer targets (1711 constructed boundary "
+            "cases), where the random trials are blind"
+        )
     return failures
 
 
@@ -224,18 +301,27 @@ def check_min_descendant_propagation():
 
 
 def check_ordering_precondition_matters():
-    """A shuffled ordering must give a wrong answer.
+    """A violated ordering must RAISE, not return a wrong answer.
 
     The function's correctness rests on parents preceding children, which
-    ``depth_first_expansion`` guarantees. If a shuffled order produced the same
-    result, the single reverse pass would not be doing the accumulation it claims
-    and the check would be vacuous.
+    ``depth_first_expansion`` guarantees. Two things are asserted here, and the
+    second is the one that matters:
+
+    1. In a valid order the deepest value reaches the root -- otherwise the single
+       reverse pass is not doing the accumulation it claims.
+    2. In a violated order the function **raises**. It used to return silently,
+       and what it returned was plausible: for the reversed chain below, ``nan``
+       at the root instead of ``7.0``. Nothing downstream could distinguish that
+       from a genuinely unobserved subtree, so a change in ``bte``'s traversal
+       order would have degraded checks 6 and 8 with no symptom -- the
+       #129/#130/#133 shape. Asserting the raise, rather than asserting the wrong
+       answer, is what keeps that from coming back.
     """
     failures = []
     qc = _load()
 
     # A chain 0 -> 1 -> 2 -> 3, observed only at the deepest leaf. In DFS order the
-    # value must reach the root; with children BEFORE parents it cannot.
+    # value must reach the root.
     chain_parent = np.array([-1, 0, 1, 2], dtype="int64")
     chain_own = np.array([np.nan, np.nan, np.nan, 7.0])
     forward = qc.propagate_min_descendant(chain_parent, chain_own, 4)
@@ -245,19 +331,41 @@ def check_ordering_precondition_matters():
             f"got {forward[0]}"
         )
 
-    # Same tree indexed in reverse (3 -> 2 -> 1 -> 0 becomes 0 <- 1 <- 2 <- 3 with
-    # parent indices pointing FORWARD), which violates the precondition.
+    # Same tree indexed in reverse (parent indices point FORWARD), violating the
+    # precondition. This must raise rather than under-propagate.
     bad_parent = np.array([1, 2, 3, -1], dtype="int64")
     bad_own = np.array([7.0, np.nan, np.nan, np.nan])
-    reverse = qc.propagate_min_descendant(bad_parent, bad_own, 4)
-    if reverse[3] == 7.0:
+    try:
+        reverse = qc.propagate_min_descendant(bad_parent, bad_own, 4)
+    except ValueError as exc:
+        if "depth-first" not in str(exc):
+            failures.append(
+                f"a child-before-parent ordering raised, but the message does not "
+                f"explain the ordering requirement: {exc}"
+            )
+    else:
         failures.append(
-            "a child-before-parent ordering still propagated to the root, so the "
-            "single reverse pass is not order-dependent and this test proves "
-            "nothing about the real call site"
+            f"a child-before-parent ordering returned {reverse.tolist()} instead "
+            f"of raising. Whether or not the value is wrong, returning it means a "
+            f"traversal-order change in bte degrades checks 6 and 8 with no "
+            f"symptom at all."
         )
+
+    # A single bad edge in an otherwise valid ordering must also be caught -- the
+    # realistic failure is one misplaced node, not a wholesale reversal.
+    one_bad = np.array([-1, 0, 3, 1], dtype="int64")
+    try:
+        qc.propagate_min_descendant(one_bad, np.array([np.nan, np.nan, 5.0, 6.0]), 4)
+    except ValueError:
+        pass
+    else:
+        failures.append(
+            "a single out-of-order edge (node 2's parent at index 3) was accepted; "
+            "the guard must be per-edge, not a whole-array heuristic"
+        )
+
     if not failures:
-        print("  propagation is order-dependent, as the single reverse pass requires")
+        print("  a violated node ordering raises instead of under-propagating")
     return failures
 
 
@@ -283,10 +391,11 @@ def check_constants_are_sane():
 
 CHECKS = [
     ("histogram order statistics are exact", check_histogram_matches_exact_quantiles),
+    ("quantile is exact at integer targets", check_quantile_boundary_is_exact),
     ("negative day values survive", check_negatives_survive),
     ("bins partition mutation counts", check_bins_partition_mutation_counts),
     ("min-descendant propagation", check_min_descendant_propagation),
-    ("propagation depends on node ordering", check_ordering_precondition_matters),
+    ("a violated node ordering raises", check_ordering_precondition_matters),
     ("constants are sane", check_constants_are_sane),
 ]
 

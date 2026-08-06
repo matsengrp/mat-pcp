@@ -37,10 +37,14 @@ change in #137 Task 3. Nothing here changes any output.
 - **[#135](https://github.com/matsengrp/mat-pcp/issues/135)** (measurement only, no
   behaviour change): `workflow/scripts/audit_off_grid_drop.py` +
   `analysis/135-off-grid-drop/` decompose `build_count_table`'s 46,284-row /
-  210,111-count "absent from the founder grid" drop. It is **97.8% reversions toward
-  the clade founder**, which the grid cannot represent by construction, plus 2.2%
-  nucleotide-level off-founder background (the twin of #130's codon-level filter).
-  Zero unexplained. Stable v8 -> v9 (-473 rows), with 100% of the change in the five
+  210,111-count "absent from the founder grid" drop. **100%** of it is off-founder
+  background at the nucleotide level (the twin of #130's codon-level filter), of
+  which **97.8% of counts restore the founder base** -- a reversion the grid cannot
+  represent by construction. Those two are strictly *nested*, not competing causes,
+  so their ratio is decided by cascade order; and `unexplained` is unreachable by
+  construction, so its being zero is a tautology rather than a completeness result.
+  Both are stated as such in the README and the script docstring.
+  Stable v8 -> v9 (-473 rows), with 100% of the change in the five
   clades #129 fixed. Criterion 3's disposition table is in the README; nothing
   adopted yet.
 - **[#139](https://github.com/matsengrp/mat-pcp/issues/139)** (additive outputs,

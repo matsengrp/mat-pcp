@@ -415,6 +415,11 @@ def main():
         interpreter = _locate_bte_python()
         if interpreter is not None:
             print(f"bte is not importable here; re-executing under {interpreter}")
+            # execv replaces the process image without flushing Python's buffers,
+            # so without this the line above is lost whenever stdout is a pipe
+            # rather than a TTY -- i.e. in CI, which is the one place the record of
+            # which interpreter half B ran under actually matters.
+            sys.stdout.flush()
             os.environ[REEXEC_FLAG] = "1"
             os.execv(str(interpreter), [str(interpreter), __file__, *sys.argv[1:]])
 

@@ -60,6 +60,29 @@ Decision rule, fixed before the table was read: **complete separation**,
 **GATE PASSED.** G→T separates with a gap of **+0.393** — reproducing #137's
 pre-stated value and ranges exactly. The v10 era split is justified.
 
+> **The gate is genuinely pre-registered, and also genuinely fragile. Both matter.**
+>
+> *Pre-registered:* `ISSUE-137.md` fixes `Σ actual_count ≥ 100` and states "492 of
+> 612 cells clear that threshold" and the +0.393 gap **before** this table was
+> produced, so the cutoff was not chosen to make the gate pass.
+>
+> *Fragile:* the verdict flips at `--min-count 52`. At any threshold ≤ 51,
+> **zero of twelve** types separate and the script exits 1. The sole cause is one
+> cell — **20F G→T, 51 counts, offset −0.0955** — a pre-Omicron cell sitting inside
+> the Omicron range (−0.344 … +0.036). It is listed in `sub_threshold_cells.csv`,
+> as the issue required, rather than hidden; but it is a real counterexample that
+> the cutoff excludes by one count, not a noise cell (its Poisson SE is ≈0.14, so
+> it sits ~5 SE below the pre-Omicron mean of +0.64).
+>
+> Complete separation is a min-vs-max statistic and therefore maximally sensitive
+> to exactly the cells a count cutoff removes. **The release argument should rest on
+> the weighted era difference below (G→T at z ≈ 14, nothing else above 1.4σ), not on
+> "GATE PASSED".** The substantive conclusion is unaffected and survives every
+> confound tested — the era effect is a clean step at the Omicron boundary (flat at
+> +0.64 across 2019–2021, flat at −0.13 across 2021–2025), uncorrelated with clade
+> size or calendar time within era (|Spearman| ≤ 0.06), and unaffected by per-clade
+> UShER masking (8 of 1.48 M G→T counts fall on masked pairs).
+
 ## The finding that differs from what #137/#138 predicted
 
 #138's risk section says "**two** of twelve mutation types are expected to fail
@@ -92,10 +115,30 @@ The count-weighted era means show the same thing without the strictness:
 | GA | −0.151 | +0.022 | −0.173 | 289,100 |
 | TA | +0.109 | +0.351 | −0.242 | 96,725 |
 
-**G→T's era effect is 5.9× the next largest** (+0.732 vs A→C's +0.124), and five
-types have an era difference of the *opposite* sign. So the honest description of
-this release is that **the era split is a G→T fix**: G→T is the one type where the
-pooled model is badly miscalibrated *and* the miscalibration is an era effect.
+**G→T is the only era difference distinguishable from zero.** Its weighted
+difference is +0.732; adding a between-clade SE (the weights are heavily
+concentrated — the largest clade holds 48–61% of pre-Omicron weight, so the Kish
+effective sample size is only ~3 per era) puts it at **z ≈ 14**, with no other
+positive difference above **1.4σ**. So the honest description of this release is
+that **the era split is a G→T fix**: G→T is the one type where the pooled model is
+badly miscalibrated *and* the miscalibration is an era effect.
+
+> **Two earlier framings of this table were wrong and are corrected here**, because
+> both read as independent support and neither is.
+>
+> *"G→T's era effect is 5.9× the next largest."* The denominator is noise: A→C's
+> +0.124 is z ≈ 1.2. A ratio against a quantity indistinguishable from zero is
+> unstable and would change materially on another tree. Use the z column, not the
+> ratio.
+>
+> *"Five types have an era difference of the opposite sign."* This is largely
+> **mechanically forced**, not five findings. `rates.py:204` sets
+> `T = N_syn / (gen_comp @ rates)` per clade, so total expected synonymous equals
+> total observed synonymous *by construction* — the 12 offsets within a clade are a
+> near-fixed-sum composition (measured: per-clade Σactual/Σexpected = 1.025 ± 0.011
+> against cell offsets spanning ±1.3). G→T's ~+60k pre-Omicron excess therefore
+> *must* be paid for by deficits elsewhere, and T→C / G→A / A→G are where it lands.
+> They look like era effects because G→T is one. Do not count them as corroboration.
 
 Two consequences worth carrying into Task 2 rather than treating as noise:
 

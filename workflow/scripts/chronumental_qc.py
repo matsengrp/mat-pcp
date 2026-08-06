@@ -190,10 +190,24 @@ if len(res):
     mean_abs = float(abs_res.mean())
     p95_abs = float(abs_res.quantile(0.95))
     n_tips = len(res)
+    # The tail, alongside the median the gate uses. The gate is a median over ~17 M
+    # tips and is insensitive to a tail of any size: on
+    # gisaid-and-public_2026-04-22 it reads median|res|=1.0d against a 30 d
+    # threshold while 208,995 tips (1.23%) have predicted LATER than observed, up
+    # to +1663 d. That tail is what check 8 then re-reports, amplified ~2x, as
+    # "3.14% of internal nodes postdate their earliest sample" -- so reporting only
+    # the median here is what made the tail look like a separate discovery about
+    # internal nodes. Report-only: the gate itself is unchanged.
+    n_late = int((res["residual_days"] > 0).sum())
+    n_late_30 = int((res["residual_days"] > 30).sum())
+    max_late = int(res["residual_days"].max())
     detail = (
         f"median|res|={median_abs:.1f}d, mean|res|={mean_abs:.1f}d, "
         f"p95|res|={p95_abs:.1f}d, N={n_tips} "
-        f"(threshold={max_median_abs_tip_residual_days:.1f}d)"
+        f"(threshold={max_median_abs_tip_residual_days:.1f}d); "
+        f"positive tail (predicted later than observed, which bounds check 8): "
+        f"{n_late} tips ({n_late / n_tips:.4%}), {n_late_30} by >30d, "
+        f"max={max_late}d"
     )
     record("tip_residual", median_abs <= max_median_abs_tip_residual_days, detail)
 else:
@@ -362,6 +376,12 @@ observed_pos = np.array(
     [index_of.get(s, -1) for s in res["strain"].astype(str)], dtype="int64"
 )
 known = observed_pos >= 0
+# Counted, not silently dropped. ``res`` is filtered on having a predicted date,
+# which comes from node_dates.tsv; ``index_of`` comes from the tree. Those are
+# different universes and can diverge (a dating run over a superset tree), and
+# the comment above argues the OTHER exclusion here is acceptable precisely
+# because the reported n makes it visible. Same standard applies to this one.
+n_strains_not_in_tree = int((~known).sum())
 own_observed[observed_pos[known]] = observed_days[known]
 
 zero_mut_leaf = is_leaf & (n_branch_mutations == 0) & has_parent
@@ -391,14 +411,24 @@ zero_obs.update_from_array(
 
 record_report(
     "zero_mut_leaf_predicted_dt",
-    "one-sided by construction (check 2 forces >=0); "
+    # frac<0 here is forced to 0 by check 2, which is a hard gate -- so quoting it
+    # as a confirmed prediction would be quoting an upstream invariant. Two
+    # loopholes keep it from being fully forced, and ``min`` is what settles them:
+    # EPS_DAYS allows a -1 day edge past check 2, and a 4-decimal fraction over
+    # 12 M observations hides up to ~600 negatives.
+    "one-sided by construction (check 2 is a hard gate forcing >=0, so frac<0 is "
+    "an invariant, not a measurement -- read min); "
     + node_date_qc.format_stats(zero_pred.stats()),
 )
 record_report(
     "zero_mut_leaf_vs_earliest_observed",
-    f"parent predicted date vs earliest observed date among its zero-mutation "
-    f"leaf children over {n_zero_mut_parents} parents; "
-    + node_date_qc.format_stats(zero_obs.stats()),
+    f"earliest observed date among a parent's zero-mutation leaf children MINUS "
+    f"the parent's predicted date, over {n_zero_mut_parents} parents (note this "
+    f"is the opposite orientation to check 8: here a NEGATIVE value is the "
+    f"anomaly, meaning the parent postdates a leaf identical to it); "
+    + node_date_qc.format_stats(zero_obs.stats(), violation="negative")
+    + f"; {n_strains_not_in_tree} dated strain(s) had no node in the tree and are "
+    f"excluded from checks 6 and 8",
 )
 
 # --- check 7: root date plausibility ------------------------------------------
@@ -433,8 +463,13 @@ stats = internal_gap.stats()
 record_report(
     "internal_date_vs_min_descendant_observed",
     f"predicted internal date minus earliest observed descendant date over "
-    f"{n_internal_checked} internal nodes (a positive value means the ancestor "
-    f"postdates its earliest sample); " + node_date_qc.format_stats(stats),
+    f"{n_internal_checked} internal nodes (a POSITIVE value is the anomaly: the "
+    f"ancestor postdates its earliest sample); "
+    + node_date_qc.format_stats(stats, violation="positive")
+    + "; NOTE this is bounded by the tip residuals -- check 2 forces "
+    "pred(ancestor) <= pred(tip), so a positive gap requires that tip's own "
+    "residual to be at least as large. It is an amplified view of check 4's "
+    "positive tail, not independent evidence about internal placement.",
 )
 
 # Binned artifact for checks 6 and 8, so the follow-up can pick thresholds from a

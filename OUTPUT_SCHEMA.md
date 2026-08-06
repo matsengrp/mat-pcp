@@ -276,10 +276,18 @@ nobody has characterised would fail production runs uninterpretably.
 | `check` | measures |
 |---|---|
 | `branch_dt_vs_mutations` | Δt binned by branch mutation count, plus days/mutation against a nominal ~15.3 (order-of-magnitude only: the MAT is masked and branch-filtered, so the realized slope runs higher). |
-| `zero_mut_leaf_predicted_dt` | Predicted Δt on zero-mutation leaf branches. **One-sided**: `time_monotonicity` already forces Δt ≥ 0, so this is a right tail and a median of 0 is expected, not remarkable. |
-| `zero_mut_leaf_vs_earliest_observed` | Parent's predicted date vs the *earliest observed* date among its zero-mutation leaf children. The only one of the four that is not circular — identical sequences genuinely carry different collection dates, so per-leaf equality is the wrong bar. |
+| `zero_mut_leaf_predicted_dt` | Predicted Δt on zero-mutation leaf branches. **One-sided**: `time_monotonicity` is a hard gate already forcing Δt ≥ 0, so `frac<0` here is an *invariant rather than a measurement* and must not be quoted as a confirmed prediction. Read `min` instead: `EPS_DAYS = 1` admits a −1 day edge past that gate, and a 4-decimal fraction over 12 M observations hides up to ~600 negatives. |
+| `zero_mut_leaf_vs_earliest_observed` | *Earliest observed* date among a parent's zero-mutation leaf children **minus** the parent's predicted date. Note this is the **opposite orientation** to `internal_date_vs_min_descendant_observed`: here a **negative** value is the anomaly. Also reports how many dated strains had no node in the tree and were excluded. |
 | `root_date_plausible` | Root date against a deliberately wide window (2019-10-01 … 2020-02-29). A tripwire for a mis-scaled time axis. |
-| `internal_date_vs_min_descendant_observed` | Predicted internal date minus the earliest observed descendant date. **Positive means the ancestor postdates its earliest sample**, which should be rare. |
+| `internal_date_vs_min_descendant_observed` | Predicted internal date minus the earliest observed descendant date. **Positive is the anomaly** (the ancestor postdates its earliest sample). Not independent of `tip_residual`: monotonicity forces `pred(ancestor) ≤ pred(tip)`, so a positive gap requires that tip's own residual to be at least as large — this is an amplified view of `tip_residual`'s positive tail, not evidence about internal placement per se. |
+
+Because checks 6 and 8 use opposite sign conventions, `format_stats` prints **both**
+`frac<0` and `frac>0`, and the two rows above additionally carry an explicit
+`VIOLATING (<0)` / `VIOLATING (>0)` fraction and count. `frac<0 + frac>0` does not
+sum to 1 — exact zeros are in neither. `tip_residual`'s detail also now reports its
+**positive tail** (count, count beyond 30 d, and max), because the gate is a median
+over ~17 M tips and cannot see a tail of any size; that tail is what check 8
+re-expresses.
 
 Why report-only rather than gating: `tip_residual` is the only pre-#139 check that
 compares an inferred date to evidence, and it is aimed where there is least to

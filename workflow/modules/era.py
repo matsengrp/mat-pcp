@@ -36,9 +36,15 @@ Four properties of that predicate are load-bearing, and each is asserted by
 ``tests/test_era_mapping.py``:
 
 * **It is two-sided.** The ``21K``/``21L``/``21M`` exclusion on the pre-Omicron
-  half is what makes it so. Without it, moving ``21K`` into ``pre_omicron`` — the
-  single most likely misassignment in the table, since ``21K`` is BA.1 and sorts
-  among the 2021 clades — passes the audit.
+  half is what makes it so, and the failure it prevents is worse than a missed
+  error: without the exclusion the audit *demands* the wrong answer. Drop it and
+  ``era_from_label`` calls every ``21x`` clade pre-Omicron, so auditing the
+  shipped mapping raises on ``21K``, ``21L`` and ``21M`` — three failures whose
+  obvious "fix" is to move all three into ``pre_omicron``, after which the audit
+  passes over all 52 entries with the three Omicron founders in the wrong era.
+  (Moving ``21K`` alone does *not* pass: ``21L``/``21M`` then disagree. The
+  vacuity needs all three, which is exactly what a maintainer clearing three
+  audit failures would do.)
 * **It asserts the label format.** The clade label space is *not* guaranteed to be
   ``NN[A-Z]``. ``checkpoint get_clades`` normalizes ``"21K (BA.1)"`` to ``"21K"``
   by accident of awk field splitting (``split($0, a, " ")`` then ``a[2]``,
