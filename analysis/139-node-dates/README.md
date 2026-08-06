@@ -65,6 +65,73 @@ That reframes #141: the unit to attribute is ~209 K **tips**, not 125 K internal
 nodes, and the likely fix is a tail statistic on residuals already computed rather
 than a new gate on a derived measure.
 
+## The algorithm test: Δt to the nearest descendant (check 9)
+
+Checks 6 and 8 both compare an *inferred* date against an *observed* one, so a
+violation is a three-way inconsistency between the inferred date, the topology and a
+collection date — and check 8 is bounded by the tip residuals, as above. Neither is a
+clean test of the dating algorithm. Check 9 compares **two chronumental outputs**:
+given the topology it was handed, how much time does the fit put between an internal
+node and its closest descendant?
+
+Because monotonicity makes predicted dates nondecreasing along every path, the
+nearest descendant is always an immediate **child**, so this is min-over-children of
+the branch Δt — one scatter-min over the edges check 5 already builds, with no
+propagation pass and no dependence on node ordering.
+
+Over all 3,982,424 internal nodes:
+
+| | value |
+|---|---|
+| **Δt = 0** (simultaneous with nearest descendant) | **177,348 (4.45%)** |
+| Δt ≤ 1 d | 504,403 (12.67%) |
+| p50 | 8 d |
+| p95 | 37 d |
+| p99 | 67 d |
+| p99.9 | 130 d |
+| max | 862 d |
+| > 365 d | 42 (0.0011%) |
+
+Nothing here is impossible — `frac<0 = 0.0000`, i.e. no internal node is dated after
+its nearest descendant — and the shape is what a working clock looks like: most
+internal nodes sit a week or two above their closest child. The two features worth a
+follow-up judgement are the **4.45% dated simultaneously** with a descendant (which
+put a branch's mutations on a window boundary in `modules/windowing.py`) and the
+0.0011% with more than a year of unsampled time below them.
+
+## Branch Δt by mutation count (check 5), full table
+
+| mutations | n | p05 | median | p95 | max | frac Δt=0 |
+|---|---|---|---|---|---|---|
+| 0 | 12,103,637 | 1 | **16** | 71 | 1500 | 2.78% |
+| 1 | 5,636,409 | 4 | **23** | 74 | 1031 | 0.63% |
+| 2 | 1,819,065 | 8 | 36 | 95 | 1072 | 0.22% |
+| 3 | 726,900 | 12 | 47 | 115 | 1098 | 0.12% |
+| 4 | 322,823 | 15 | 58 | 135 | 839 | 0.08% |
+| 5 | 154,602 | 17 | 68 | 154 | 781 | 0.07% |
+| 6–10 | 172,560 | 17 | 84 | 191 | 946 | 0.07% |
+| 11–20 | 24,961 | **12** | **80** | 260 | 1321 | 0.02% |
+| 21–50 | 603 | 19 | 101 | 489 | 828 | — |
+| 51+ | 53 | 27 | 135 | 800 | 1114 | — |
+| **all** | **20,961,613** | 2 | **22** | 83 | 1500 | 1.80% |
+
+A clean ~11 d/mutation increment on a 16 d intercept through the 6–10 bin, then it
+breaks: the 11–20 bin's median (80 d) falls **below** the 6–10 bin's (84 d) and its
+p05 drops to 12 d. High-mutation branches include some very short ones — consistent
+with chronic infections or artifacts rather than clock time, and note
+`max_nt_mutations` branch QC applies to the counting path, not the timetree.
+
+**All 12,103,637 zero-mutation branches are terminal** — zero are internal, so check
+6 covers that whole population rather than a leaf subset. Check 9 reports the split
+explicitly so this stops being an inference from two matching row counts.
+
+Children are never dated *earlier* than parents (`frac<0 = 0` on all 20,961,613
+branches, `min = 0` in every bin), but **1.80% are exactly simultaneous**. That is
+close to forced rather than discovered: chronumental parameterizes non-negative
+durations, and `EPS_DAYS = 1` means a −1 day edge would pass `time_monotonicity`
+undetected. Every bin's `min` of 0 does settle it, but the gate is not independent
+evidence.
+
 ## Two report values that must not be quoted as measurements
 
 - **`zero_mut_leaf_predicted_dt`'s `frac<0 = 0.0000`** is forced by

@@ -47,6 +47,20 @@ because it is the cheapest possible tripwire for a mis-scaled time axis.
 **D. Internal date versus minimum descendant observed date.** An ancestor cannot
 postdate the earliest sample beneath it. Computed by propagating the per-node
 minimum observed descendant date in one reverse pass over the depth-first ordering.
+Note this compares an *inferred* date against an *observed* one, so a violation is a
+three-way inconsistency between the inferred date, the topology and a collection
+date -- and it is **bounded by the tip residuals**, because monotonicity forces
+``pred(ancestor) <= pred(tip)``. It quantifies downstream impact (how many internal
+nodes, hence branches, land in the wrong window) but it is not a clean test of the
+dating algorithm.
+
+**E. Internal node to its nearest descendant, inferred versus inferred.** The
+algorithm test D is not: both endpoints are chronumental outputs, so this asks how
+much time the fit puts between an internal node and its closest descendant given the
+topology it was handed. Because monotonicity makes predicted dates nondecreasing
+along every path, the nearest descendant is always an immediate *child*, so this is
+:func:`min_child_delta` -- one scatter-min over the edges already built for check A,
+with no propagation pass and no dependence on node ordering.
 
 **Everything is integer days in histograms, never per-branch rows.** The rule
 already costs 349 s at 38.2 GB max RSS over 20,961,614 nodes, and
@@ -228,6 +242,46 @@ def propagate_min_descendant(parent_index, leaf_values, n_nodes):
         if value < best[parent]:
             best[parent] = value
     out = np.array(best, dtype="float64")
+    out[np.isinf(out)] = np.nan
+    return out
+
+
+def min_child_delta(parent_index, values, n_nodes):
+    """Minimum ``values[child] - values[parent]`` over each node's own children.
+
+    Returns a float array with ``nan`` for nodes that have no child with a defined
+    delta (all leaves, plus any parent whose children are all undated).
+
+    **Why this is the Delta-t to the nearest descendant, not merely to the nearest
+    child.** When ``values`` is nondecreasing along every parent->child edge -- which
+    is what the ``time_monotonicity`` gate enforces for predicted dates -- then for
+    any deeper descendant ``d`` reached through child ``c``, ``values[d] >=
+    values[c]``. So the minimum over the whole descendant set is always attained at
+    an immediate child, and a one-pass ``np.minimum.at`` over the edges replaces a
+    propagation over the tree. Unlike :func:`propagate_min_descendant` this needs no
+    particular node ordering, because scatter-min does not care which edge it sees
+    first.
+
+    That equivalence is a *theorem about monotone values*, not about this function:
+    fed values that decrease somewhere, it still returns the minimum over children,
+    which is then **not** the minimum over descendants.
+    ``tests/test_node_date_qc.py`` asserts both halves -- agreement with
+    :func:`propagate_min_descendant` on a monotone tree, and disagreement on a
+    non-monotone one -- so the precondition cannot quietly stop being load-bearing.
+    """
+    parents = np.asarray(parent_index, dtype="int64")
+    vals = np.asarray(values, dtype="float64")
+    if len(parents) != n_nodes or len(vals) != n_nodes:
+        raise ValueError(
+            f"parent_index ({len(parents)}) and values ({len(vals)}) must both "
+            f"have length n_nodes ({n_nodes})"
+        )
+    out = np.full(n_nodes, np.inf, dtype="float64")
+    child = np.flatnonzero(parents >= 0)
+    parent_of = parents[child]
+    delta = vals[child] - vals[parent_of]
+    defined = ~np.isnan(delta)
+    np.minimum.at(out, parent_of[defined], delta[defined])
     out[np.isinf(out)] = np.nan
     return out
 

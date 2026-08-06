@@ -49,14 +49,23 @@ change in #137 Task 3. Nothing here changes any output.
   adopted yet.
 - **[#139](https://github.com/matsengrp/mat-pcp/issues/139)** (additive outputs,
   report-only): `chronumental_qc` now checks the **internal** node dates, not just
-  tips. Four new `REPORT` rows in `mat/node_dates_qc.tsv` plus two new binned
+  tips. Five new `REPORT` rows in `mat/node_dates_qc.tsv` plus two new binned
   artifacts, `mat/node_dates_branch_dt.csv` and
   `mat/node_dates_internal_checks.csv`. They gate nothing — the existing
   `tip_residual` gate and its threshold are untouched. Internal dates are what
   `modules/windowing.py` uses to bucket every branch into a time window, and until
   now nothing checked them; `tip_residual` passing at `p95|res|=1.0d` over 17 M tips
   is near-circular, since tip collection dates are the priors chronumental is fit
-  to. New guard: `tests/test_node_date_qc.py`.
+  to. The five rows split into two kinds, which the report now labels: the checks
+  comparing an inferred date to an *observed* one measure metadata consistency and
+  downstream impact (and `internal_date_vs_min_descendant_observed` is *bounded* by
+  the tip residuals, so it is an amplified view of their positive tail rather than
+  independent evidence about internal placement), while
+  `internal_dt_to_closest_descendant` compares two inferred dates and so tests the
+  algorithm. On the v9 tree the latter reads median 8 d, p95 37 d, max 862 d, with
+  4.45% of internal nodes dated *simultaneously* with their nearest descendant.
+  Production distributions are committed under `analysis/139-node-dates/`, since
+  #141 picks thresholds from them. New guard: `tests/test_node_date_qc.py`.
 - **[#137](https://github.com/matsengrp/mat-pcp/issues/137) Task 1** (diagnostic only,
   no pipeline rule reads it yet): `workflow/modules/era.py` carries the explicit
   52-clade pre-Omicron/Omicron mapping and its year-prefix audit;

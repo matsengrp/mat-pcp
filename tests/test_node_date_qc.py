@@ -46,6 +46,14 @@ What each check exists for:
    target. That coincidence is constructed on purpose in
    ``check_quantile_boundary_is_exact`` rather than hoped for.
 
+7. **``min_child_delta`` is the nearest-*descendant* Delta-t only because dates are
+   monotone.** Check 9 is named for descendants but computes a minimum over
+   immediate children; that is valid only because ``time_monotonicity`` forces
+   predicted dates to be nondecreasing along every edge. Both halves are asserted:
+   agreement with an independent brute-force min-over-all-descendants on a monotone
+   tree, and **disagreement** on a tree with one decreasing edge. Without the second
+   half the first is just two spellings of the same loop.
+
 Usage:
     python tests/test_node_date_qc.py
 """
@@ -369,6 +377,96 @@ def check_ordering_precondition_matters():
     return failures
 
 
+def check_min_child_delta_equals_min_descendant():
+    """``min_child_delta`` is the nearest-*descendant* Delta-t only if dates are monotone.
+
+    Check 9 reports "Delta-t to the nearest descendant" but computes a minimum over
+    immediate *children*. That shortcut is valid because ``time_monotonicity``
+    forces predicted dates to be nondecreasing along every edge, so the nearest
+    descendant is always a child. This asserts both halves of that:
+
+    * on a monotone tree it agrees with the independent brute-force route
+      (``propagate_min_descendant`` over each subtree, excluding the node itself);
+    * on a tree with one *decreasing* edge it disagrees -- so the monotonicity
+      precondition is load-bearing, not decoration. Without this second half the
+      first is just two spellings of the same loop.
+    """
+    failures = []
+    qc = _load()
+
+    def min_descendant_delta(parent, values, n):
+        """Brute force: min over ALL strict descendants, via child lists."""
+        kids = {i: [] for i in range(n)}
+        for i, p in enumerate(parent):
+            if p >= 0:
+                kids[p].append(i)
+        out = np.full(n, np.nan)
+        for i in range(n):
+            stack, best = list(kids[i]), np.inf
+            while stack:
+                j = stack.pop()
+                best = min(best, values[j] - values[i])
+                stack.extend(kids[j])
+            out[i] = best if np.isfinite(best) else np.nan
+        return out
+
+    # Monotone: a root with two children, one of which has a deep chain. The deep
+    # chain is what makes "nearest descendant" differ from "any descendant".
+    parent = np.array([-1, 0, 0, 1, 3, 2], dtype="int64")
+    dates = np.array([0.0, 5.0, 30.0, 6.0, 40.0, 31.0])
+    got = qc.min_child_delta(parent, dates, 6)
+    want = min_descendant_delta(parent, dates, 6)
+    if not np.allclose(got[~np.isnan(want)], want[~np.isnan(want)]):
+        failures.append(
+            f"on a monotone tree min_child_delta={got.tolist()} disagrees with the "
+            f"min over all descendants {want.tolist()}; the check-9 shortcut is "
+            f"not valid"
+        )
+    if not np.array_equal(np.isnan(got), np.isnan(want)):
+        failures.append(
+            f"nan placement differs: {np.isnan(got).tolist()} vs "
+            f"{np.isnan(want).tolist()} (leaves must be nan, not 0 or inf)"
+        )
+    # Node 0's nearest descendant is child 1 at +5, NOT the deeper node 4 at +40.
+    if got[0] != 5.0:
+        failures.append(f"root's nearest-descendant delta should be 5.0, got {got[0]}")
+
+    # Non-monotone: node 4 moves BEFORE its parent 3. min-over-children for node 3
+    # is now negative, but node 0's min over children is unchanged at +5 while its
+    # min over all descendants is -1. The two routes must part company.
+    bad_dates = np.array([0.0, 5.0, 30.0, 6.0, -1.0, 31.0])
+    got_bad = qc.min_child_delta(parent, bad_dates, 6)
+    want_bad = min_descendant_delta(parent, bad_dates, 6)
+    if got_bad[0] == want_bad[0]:
+        failures.append(
+            "with a decreasing edge the min over children still equals the min over "
+            "descendants, so this test cannot show that monotonicity is what makes "
+            "check 9's shortcut valid"
+        )
+
+    # Undated children must not be counted as a 0-day delta.
+    with_nan = np.array([0.0, np.nan, 12.0, np.nan, np.nan, np.nan])
+    got_nan = qc.min_child_delta(np.array([-1, 0, 0, 1, 3, 2], dtype="int64"), with_nan, 6)
+    if got_nan[0] != 12.0:
+        failures.append(
+            f"a node with one undated and one dated child must report the dated "
+            f"delta (12.0), got {got_nan[0]}"
+        )
+
+    if len(qc.min_child_delta(np.array([-1], dtype="int64"), np.array([1.0]), 1)) != 1:
+        failures.append("a single-node tree must still return an array of length 1")
+    try:
+        qc.min_child_delta(np.array([-1, 0], dtype="int64"), np.array([1.0]), 2)
+    except ValueError:
+        pass
+    else:
+        failures.append("a length mismatch must raise")
+
+    if not failures:
+        print("  min_child_delta is the nearest-descendant delta iff dates are monotone")
+    return failures
+
+
 def check_constants_are_sane():
     failures = []
     qc = _load()
@@ -396,6 +494,7 @@ CHECKS = [
     ("bins partition mutation counts", check_bins_partition_mutation_counts),
     ("min-descendant propagation", check_min_descendant_propagation),
     ("a violated node ordering raises", check_ordering_precondition_matters),
+    ("min_child_delta vs min descendant", check_min_child_delta_equals_min_descendant),
     ("constants are sane", check_constants_are_sane),
 ]
 

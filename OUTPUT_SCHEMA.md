@@ -279,7 +279,8 @@ nobody has characterised would fail production runs uninterpretably.
 | `zero_mut_leaf_predicted_dt` | Predicted Δt on zero-mutation leaf branches. **One-sided**: `time_monotonicity` is a hard gate already forcing Δt ≥ 0, so `frac<0` here is an *invariant rather than a measurement* and must not be quoted as a confirmed prediction. Read `min` instead: `EPS_DAYS = 1` admits a −1 day edge past that gate, and a 4-decimal fraction over 12 M observations hides up to ~600 negatives. |
 | `zero_mut_leaf_vs_earliest_observed` | *Earliest observed* date among a parent's zero-mutation leaf children **minus** the parent's predicted date. Note this is the **opposite orientation** to `internal_date_vs_min_descendant_observed`: here a **negative** value is the anomaly. Also reports how many dated strains had no node in the tree and were excluded. |
 | `root_date_plausible` | Root date against a deliberately wide window (2019-10-01 … 2020-02-29). A tripwire for a mis-scaled time axis. |
-| `internal_date_vs_min_descendant_observed` | Predicted internal date minus the earliest observed descendant date. **Positive is the anomaly** (the ancestor postdates its earliest sample). Not independent of `tip_residual`: monotonicity forces `pred(ancestor) ≤ pred(tip)`, so a positive gap requires that tip's own residual to be at least as large — this is an amplified view of `tip_residual`'s positive tail, not evidence about internal placement per se. |
+| `internal_date_vs_min_descendant_observed` | Predicted internal date minus the earliest observed descendant date. **Positive is the anomaly** (the ancestor postdates its earliest sample). Compares *inferred* against *observed*, so a violation is a three-way inconsistency between the inferred date, the topology and a collection date — and it is not independent of `tip_residual`: monotonicity forces `pred(ancestor) ≤ pred(tip)`, so a positive gap requires that tip's own residual to be at least as large. Quantifies downstream impact (how many internal nodes, hence branches, land in the wrong window) rather than testing the dating algorithm. |
+| `internal_dt_to_closest_descendant` | Predicted Δt from an internal node to its **nearest descendant, both dates inferred** — so unlike the row above this *is* a test of the algorithm: given the topology it was handed, how much time does the fit put below each internal node? Equals min-over-*children* of the branch Δt, because monotonicity makes predicted dates nondecreasing along every path, so the nearest descendant is always an immediate child. Also reports how many zero-mutation branches are internal rather than terminal (0 on the v9 tree, so `zero_mut_leaf_predicted_dt` covers all of them). |
 
 Because checks 6 and 8 use opposite sign conventions, `format_stats` prints **both**
 `frac<0` and `frac>0`, and the two rows above additionally carry an explicit
@@ -316,7 +317,7 @@ summary line.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `check` | string | `zero_mut_leaf_predicted_dt`, `zero_mut_leaf_vs_earliest_observed`, or `internal_date_vs_min_descendant_observed`. |
+| `check` | string | `zero_mut_leaf_predicted_dt`, `zero_mut_leaf_vs_earliest_observed`, `internal_date_vs_min_descendant_observed`, or `internal_dt_to_closest_descendant`. |
 | `days` | int | Signed day difference. Negative values are retained — for the latter two they are the informative direction. |
 | `count` | int | Number of nodes with that value. |
 

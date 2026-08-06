@@ -472,7 +472,47 @@ record_report(
     "positive tail, not independent evidence about internal placement.",
 )
 
-# Binned artifact for checks 6 and 8, so the follow-up can pick thresholds from a
+# --- check 9: internal node to its CLOSEST descendant, inferred vs inferred ---
+# Checks 6 and 8 both compare an inferred date against an *observed* one, so a
+# violation there is a three-way inconsistency between the inferred date, the
+# topology and a collection date -- and check 8 in particular is bounded by the tip
+# residuals (see its note), which makes it a metadata-quality measure wearing an
+# algorithm-test label. This check compares two chronumental outputs, so it tests
+# the algorithm: given the topology it was handed, how much time does it put
+# between an internal node and its nearest descendant?
+#
+# The minimum over ALL descendants is attained at an immediate CHILD. Check 2
+# forces predicted dates to be nondecreasing along every path, so for any deeper
+# descendant d reached via child c, pred(d) >= pred(c). That collapses what looks
+# like a propagation problem into one np.minimum.at over the edges already built
+# for check 5 -- no second traversal, and no reliance on node ordering.
+min_child_dt = node_date_qc.min_child_delta(parent_index, predicted_days, n_total)
+internal_dated = ~np.isnan(min_child_dt) & ~is_leaf
+n_internal_dt = int(internal_dated.sum())
+closest_dt = node_date_qc.DayHistogram()
+closest_dt.update_from_array(min_child_dt[internal_dated])
+
+# Zero-mutation branches: on the v9 production tree all 12,103,637 of them are
+# terminal, so check 6 covers the whole population rather than a leaf subset. That
+# identity is reported rather than assumed -- if internal zero-mutation branches
+# ever appear, check 6 stops being the complete picture of them.
+n_zero_mut_all = int((n_branch_mutations[child_idx] == 0).sum())
+n_zero_mut_internal = int(
+    ((n_branch_mutations[child_idx] == 0) & ~is_leaf[child_idx]).sum()
+)
+record_report(
+    "internal_dt_to_closest_descendant",
+    f"predicted Delta-t from an internal node to its NEAREST descendant, both "
+    f"inferred (so this tests the algorithm, not the metadata), over "
+    f"{n_internal_dt} internal nodes; "
+    + node_date_qc.format_stats(closest_dt.stats())
+    + f"; equals min-over-children of the branch Delta-t because check 2 makes "
+    f"predicted dates nondecreasing along every path. Of {n_zero_mut_all} "
+    f"zero-mutation branches, {n_zero_mut_internal} are internal (the rest are "
+    f"terminal and so are covered by check 6)",
+)
+
+# Binned artifact for checks 6, 8 and 9, so the follow-up can pick thresholds from a
 # distribution rather than a summary line.
 pd.concat(
     [
@@ -484,6 +524,7 @@ pd.concat(
             ("zero_mut_leaf_predicted_dt", zero_pred),
             ("zero_mut_leaf_vs_earliest_observed", zero_obs),
             ("internal_date_vs_min_descendant_observed", internal_gap),
+            ("internal_dt_to_closest_descendant", closest_dt),
         )
     ],
     ignore_index=True,
