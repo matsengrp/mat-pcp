@@ -258,12 +258,59 @@ Per-check pass/fail report from `chronumental_qc` (one row per check).
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `check` | string | `node_id_correspondence`, `time_monotonicity`, `date_coverage`, or `tip_residual`. |
-| `status` | string | `PASS` or `FAIL`. |
+| `check` | string | See the two lists below. |
+| `status` | string | `PASS`, `FAIL`, or `REPORT`. |
 | `detail` | string | Measured numbers for the check. |
 
-The rule raises (fails the run) on any hard-invariant violation, and on a
-`tip_residual` median above `chronumental_max_median_abs_tip_residual_days`.
+**Gating checks** (`PASS`/`FAIL`): `node_id_correspondence`, `time_monotonicity`,
+`date_coverage`, `tip_residual`. The rule raises on any hard-invariant violation, and
+on a `tip_residual` median above `chronumental_max_median_abs_tip_residual_days`.
+
+**Report-only checks** (`REPORT`, added by
+[#139](https://github.com/matsengrp/mat-pcp/issues/139)) — these validate the
+*internal* node dates, which `modules/windowing.py` uses to bucket every branch into
+a time window. They **gate nothing**: `status` is always `REPORT` and they cannot
+fail a run. Thresholds are deferred to a follow-up, because gating on a distribution
+nobody has characterised would fail production runs uninterpretably.
+
+| `check` | measures |
+|---|---|
+| `branch_dt_vs_mutations` | Δt binned by branch mutation count, plus days/mutation against a nominal ~15.3 (order-of-magnitude only: the MAT is masked and branch-filtered, so the realized slope runs higher). |
+| `zero_mut_leaf_predicted_dt` | Predicted Δt on zero-mutation leaf branches. **One-sided**: `time_monotonicity` already forces Δt ≥ 0, so this is a right tail and a median of 0 is expected, not remarkable. |
+| `zero_mut_leaf_vs_earliest_observed` | Parent's predicted date vs the *earliest observed* date among its zero-mutation leaf children. The only one of the four that is not circular — identical sequences genuinely carry different collection dates, so per-leaf equality is the wrong bar. |
+| `root_date_plausible` | Root date against a deliberately wide window (2019-10-01 … 2020-02-29). A tripwire for a mis-scaled time axis. |
+| `internal_date_vs_min_descendant_observed` | Predicted internal date minus the earliest observed descendant date. **Positive means the ancestor postdates its earliest sample**, which should be rare. |
+
+Why report-only rather than gating: `tip_residual` is the only pre-#139 check that
+compares an inferred date to evidence, and it is aimed where there is least to
+infer — tip collection dates are the priors chronumental is fit to. On
+`gisaid-and-public_2026-04-22_v9` it reports `p95|res|=1.0d` over 16,979,190 tips
+against a 30-day gate.
+
+### `mat/node_dates_branch_dt.csv`
+
+Long-form Δt distribution per mutation-count bin (#139). Binned rather than
+per-branch: `node_dates_residuals.csv` is already 1.6 GB on the production tree, and
+Δt in whole days is an integer, so a histogram gives **exact** medians and
+percentiles at a few tens of kB.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `mut_count_bin` | string | Mutation-count bin (`0`, `1`, …, `6-10`, `11-20`, `21-50`, `51+`). |
+| `dt_days` | int | `date(child) − date(parent)` in whole days. |
+| `count` | int | Number of branches in that bin with that Δt. |
+
+### `mat/node_dates_internal_checks.csv`
+
+Long-form day distributions for the three internal-node checks that produce one
+(#139), so a follow-up can choose thresholds from a distribution rather than a
+summary line.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `check` | string | `zero_mut_leaf_predicted_dt`, `zero_mut_leaf_vs_earliest_observed`, or `internal_date_vs_min_descendant_observed`. |
+| `days` | int | Signed day difference. Negative values are retained — for the latter two they are the informative direction. |
+| `count` | int | Number of nodes with that value. |
 
 ### `mat/node_dates_residuals.csv`
 

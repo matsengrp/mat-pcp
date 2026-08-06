@@ -185,6 +185,18 @@ jobs:
       run: |
         pixi run python tests/test_bte_haplotype.py
 
+    # Fixture-only, and this one has no pipeline backstop at all by design: #139's
+    # four internal-node date checks are REPORT-ONLY, so a run can never fail on
+    # them, which means a run also cannot tell you they compute the right thing.
+    # Covers the parts that would be silently wrong: that the day histograms give
+    # EXACT order statistics (the whole memory argument for binning at 21 M nodes
+    # rests on that), that negative values survive (a negative gap is the anomaly
+    # signal for checks 6 and 8), and that the descendant-minimum propagation is a
+    # real order-dependent post-order pass (#139).
+    - name: Verify the internal-node date check primitives
+      run: |
+        pixi run python tests/test_node_date_qc.py
+
     # The steps above name each test file so a failure points at a readable log.
     # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]
     # is empty, so a *new* tests/test_*.py runs zero times and CI stays green --

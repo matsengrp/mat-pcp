@@ -565,7 +565,13 @@ rule chronumental_qc:
         metadata=rules.filter_metadata.output.filtered_metadata
     output:
         report=os.path.join(OUTDIR, "mat/node_dates_qc.tsv"),
-        residuals=os.path.join(OUTDIR, "mat/node_dates_residuals.csv")
+        residuals=os.path.join(OUTDIR, "mat/node_dates_residuals.csv"),
+        # Internal-node date distributions (#139). Binned, not per-branch: the
+        # per-tip residuals file above is already 1.6 GB on the production tree,
+        # and Delta-t in whole days is an integer so a histogram gives exact
+        # medians and percentiles at a few tens of kB.
+        branch_dt=os.path.join(OUTDIR, "mat/node_dates_branch_dt.csv"),
+        internal_checks=os.path.join(OUTDIR, "mat/node_dates_internal_checks.csv")
     params:
         max_median_abs_tip_residual_days=config.get(
             "chronumental_max_median_abs_tip_residual_days", 30

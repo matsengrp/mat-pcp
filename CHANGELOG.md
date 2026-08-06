@@ -43,6 +43,16 @@ change in #137 Task 3. Nothing here changes any output.
   Zero unexplained. Stable v8 -> v9 (-473 rows), with 100% of the change in the five
   clades #129 fixed. Criterion 3's disposition table is in the README; nothing
   adopted yet.
+- **[#139](https://github.com/matsengrp/mat-pcp/issues/139)** (additive outputs,
+  report-only): `chronumental_qc` now checks the **internal** node dates, not just
+  tips. Four new `REPORT` rows in `mat/node_dates_qc.tsv` plus two new binned
+  artifacts, `mat/node_dates_branch_dt.csv` and
+  `mat/node_dates_internal_checks.csv`. They gate nothing — the existing
+  `tip_residual` gate and its threshold are untouched. Internal dates are what
+  `modules/windowing.py` uses to bucket every branch into a time window, and until
+  now nothing checked them; `tip_residual` passing at `p95|res|=1.0d` over 17 M tips
+  is near-circular, since tip collection dates are the priors chronumental is fit
+  to. New guard: `tests/test_node_date_qc.py`.
 - **[#137](https://github.com/matsengrp/mat-pcp/issues/137) Task 1** (diagnostic only,
   no pipeline rule reads it yet): `workflow/modules/era.py` carries the explicit
   52-clade pre-Omicron/Omicron mapping and its year-prefix audit;
