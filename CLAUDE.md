@@ -115,6 +115,15 @@ pixi run snakemake -j 2 --use-conda \
 
 # Validate results
 pixi run python workflow/scripts/validate_test.py
+```
+
+> **`CLAUDE.md` and `CHANGELOG.md` use CRLF line endings.** Edit them in place. A
+> Python `read_text()` / `write_text()` round-trip normalizes them to LF, which
+> rewrites every line and buries a three-line content edit in a ~2,200-line
+> whitespace diff. Nothing errors and the rendered text is identical, so it is only
+> visible in `git diff --stat`. Check with `file CLAUDE.md` after scripted edits.
+
+```bash
 
 # Multi-tree smoke test: two trees in one config that resolve their
 # get_clades checkpoints independently (the earlier max_leaf_date yields
