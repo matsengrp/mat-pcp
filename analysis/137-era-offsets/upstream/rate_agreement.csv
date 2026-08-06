@@ -1,0 +1,4 @@
+left,right,n_cells,pearson_log,spearman,median_abs_log_ratio,p95_abs_log_ratio,max_abs_log_ratio
+matpcp_pooled,upstream_pre_omicron,512,0.997248,0.997788,0.086642,0.303981,0.456407
+matpcp_pooled,upstream_omicron,512,0.99853,0.998955,0.070293,0.274261,0.632794
+upstream_pre_omicron,upstream_omicron,512,0.99277,0.994676,0.131651,0.544436,0.834648
