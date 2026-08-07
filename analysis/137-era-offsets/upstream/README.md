@@ -34,7 +34,63 @@ comparison reports statistics and asserts nothing about absolute equality. It do
 assert the grids join 1:1 on all 512 cells, because a partial join would compute
 every statistic over an unstated subset and still report healthy correlations.
 
-## Results: mat-pcp v9 pooled vs upstream's two eras
+## Results: mat-pcp **v10 per-era** vs upstream's two eras
+
+Run era-against-era after the v10 production run (#137 success criterion 4). This is
+the check the pooled comparison below was standing in for.
+
+| comparison | Pearson (log) | Spearman | median \|log ratio\| | p95 |
+|---|---|---|---|---|
+| **mat-pcp pre-Omicron vs upstream pre-Omicron** | 0.99994 | 0.99992 | **0.0153** | 0.0427 |
+| **mat-pcp Omicron vs upstream Omicron** | 0.99989 | 0.99985 | **0.0157** | 0.0654 |
+| mat-pcp pre-Omicron vs mat-pcp Omicron | 0.9927 | 0.9946 | 0.1301 | 0.5266 |
+| upstream pre-Omicron vs upstream Omicron | 0.9928 | 0.9947 | 0.1317 | 0.5444 |
+
+Two things to read off this.
+
+**The per-era fits agree with upstream ~5x better than the pooled fit did** — median
+|log ratio| 0.015 against the pooled 0.087 / 0.070 below. Since the two codebases run
+on different trees with different date cutoffs and filtering, 1.5% median disagreement
+across 512 cells is close to the floor set by the data alone.
+
+**mat-pcp's own era difference now reproduces upstream's**: 0.1301 against 0.1317, on
+tables fitted independently. That is the era effect measured the same way by two
+implementations, and it is what the split was for.
+
+### Criterion 4, evaluated
+
+| requirement | result |
+|---|---|
+| (a) each era table has 512 rows on the same grid | **PASS** — joined 1:1 on all 512 |
+| (b) sign of `mean log(rate_pre/rate_om)` matches upstream for all 10 types with \|value\| > 0.05 | **PASS** — 10/10 |
+| (c) G→T mean log ratio in [0.4, 1.0] | **PASS** — **+0.6158** (upstream +0.6161) |
+
+Per-type, mat-pcp's fitted era difference against upstream's — every one of the twelve
+agrees in sign, and the largest disagreement in magnitude is 0.03:
+
+| mut_type | upstream | mat-pcp v10 |
+|---|---|---|
+| **GT** | **+0.6161** | **+0.6158** |
+| GC | +0.2707 | +0.2889 |
+| AC | +0.2410 | +0.2295 |
+| AT | +0.1294 | +0.1306 |
+| CG | +0.0972 | +0.0646 |
+| TG | +0.0767 | +0.0887 |
+| AG | +0.0100 | +0.0149 |
+| CT | −0.0142 | −0.0154 |
+| CA | −0.0883 | −0.0859 |
+| TC | −0.1342 | −0.1312 |
+| TA | −0.1550 | −0.1634 |
+| GA | −0.1628 | −0.1562 |
+
+**This settles the #140 caveat below.** mat-pcp's own fitted tables put G→C at +0.289
+and A→C at +0.230 — real second-tier era structure, confirming upstream rather than
+Task 1's read. Complete separation of the *synonymous offset* is a stricter test than
+"has era structure", so the two measures were never in conflict; the wording *"eleven
+of twelve types show no era structure"* was simply too strong, and should be read as
+"eleven of twelve do not completely separate".
+
+## Results: mat-pcp v9 pooled vs upstream's two eras (superseded by the above)
 
 | comparison | Pearson (log) | Spearman | median \|log ratio\| | p95 |
 |---|---|---|---|---|

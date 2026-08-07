@@ -164,3 +164,75 @@ Two consequences worth carrying into Task 2 rather than treating as noise:
 | `era_weighted_means.csv` | count-weighted and unweighted mean offset per (era, type) |
 | `sub_threshold_cells.csv` | the 118 cells below `--min-count` |
 | `zero_count_cells.csv` | the 2 cells with `-inf` offset |
+
+---
+
+## v10 outcome: what the split fixed, and what it did not
+
+Measured on `gisaid-and-public_2026-04-22_v10` against the same `_v9` tree, over the
+same population (cells with `Σ actual_count ≥ 1000`). Raw per-cell tables:
+`gt_offsets_v9.csv`, `gt_offsets_v10.csv`.
+
+### The era structure in G→T is essentially gone — which is what the split was for
+
+| | pre-Omicron mean | Omicron mean | era gap | separation |
+|---|---|---|---|---|
+| v9 (pooled fit) | +0.6245 | −0.1217 | **+0.3928** | **COMPLETE** |
+| v10 (per-era fits) | +0.2762 | +0.1817 | −0.2586 | overlapping |
+
+The complete separation that justified this issue is destroyed: G→T's era difference
+falls **+0.7463 → +0.0945, an 87% reduction**, and the two eras' ranges now overlap
+heavily. Across all twelve types, mean |era difference| falls **0.1740 → 0.0903**.
+
+### Criterion 1 was not met
+
+> *"Over cells with `Σ actual_count ≥ 1000` (28 G→T cells), `max |offset|` for G→T
+> drops below **0.20**, against a current value of 0.796."*
+
+| | max \|offset\|, G→T | verdict |
+|---|---|---|
+| v9 | 0.7961 | (baseline, reproduces the pre-registered 0.796 exactly) |
+| v10 | **0.4482** | **FAIL** — 44% better, but the bar was 0.20 |
+
+**The residual is not era structure and not the site-restriction artifact.** Two
+measurements locate it:
+
+- *Not era structure*: 87% of the G→T era difference is gone (above). What remains is
+  common to both eras — v10's Omicron cells moved **up** (−0.122 → +0.182) as its own
+  fit stopped being dragged by pre-Omicron data, so both eras now sit positive.
+- *Not the site restriction* (`rates.py`'s `nt_site.isin(sites)`, which upstream lacks
+  and which ISSUE-137 identified as the source of the 0.9–5.5% pooled residue): the
+  G→T offset persists **on** the training sites, at +0.417 max over 27 cells, where
+  criterion 2's identity holds at **2.8e-15**.
+
+Those two coexist because `T` is a **single scalar per clade** balancing *all*
+synonymous types together. G→T can be under-predicted while other types are
+over-predicted and the clade total still nets to zero by construction. So the residual
+is a **within-era, per-mutation-type** bias in the GLM's relative rates — a different
+defect from the one this issue addressed, and one an era split cannot reach.
+
+The likely mechanism, flagged in ISSUE-137's own criterion 6: `glm.py` fits
+`log(count + 0.5)` by least squares and exponentiates the prediction, so it recovers a
+conditional *geometric* mean where the offset compares *arithmetic* sums. By Jensen
+that under-predicts, worst for the most over-dispersed type — which G→T is. Worth a
+follow-up issue; it is not a regression, and v10 is strictly better than v9 on this
+measure.
+
+### Four types gained era-structured offsets
+
+`AT` moved +0.0037 → −0.1740, and `CG`, `AC`, `AG` moved similarly if less. These all
+started near zero, so percentage reductions are meaningless for them. Note mat-pcp's
+*fitted* AT era ratio (+0.1306) matches upstream's (+0.1294) almost exactly — so by
+upstream's standard these rates are right, and the new offset says the pooled model
+had been accidentally well-calibrated for AT. Same follow-up.
+
+### The other criteria
+
+| criterion | result |
+|---|---|
+| 2 — training-site identity survives | **PASS**, 2.8e-15 (threshold 1e-6) |
+| 4 — era difference agrees with upstream | **PASS**, all three parts; see `upstream/README.md` |
+| 5 — single-era degeneracy exact | **PASS**, byte-identical on the test tree (stronger than the 1e-10 asked) |
+| 6 — runtime ≤ 2× | **PASS**, 3.27 s pooled → 3.28 s + 3.32 s per era |
+| 1 — G→T calibrates below 0.20 | **FAIL**, 0.448 |
+| 3 — held-out fit improves | not measured |
