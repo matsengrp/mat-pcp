@@ -230,6 +230,82 @@ Estimated neutral mutation rates by sequence context and RNA structure, derived 
 **Notes:**
 - These rates are used to compute expected mutation counts for fitness estimation.
 - The `unpaired` column reflects RNA secondary structure from Lan et al. 2022.
+- **384 rows, not 512.** `get_rates_table.py` drops the `nt_site_before_boundary
+  == True` half of the grid, so consumers re-derive the boundary side per gene.
+  The full grid is in `glm/master_table.csv` below.
+
+### `rates_table_{era}.csv` (v10+)
+
+One per era present on the tree — `rates_table_pre_omicron.csv` and/or
+`rates_table_omicron.csv`. Identical schema and row count (384) to
+`rates_table.csv`; only the training population differs. See
+`glm/era_fit_summary.csv` for which eras a given run produced.
+
+### `glm/master_table.csv`
+
+The full GLM condition grid: **512 rows**, one per
+`(mut_type, motif, unpaired, nt_site_before_boundary)` combination. Documented
+here for the first time in v10 — it shipped from v1 with no schema entry.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `mut_type` | string | Two-letter mutation type (e.g., `CT`, `GA`) — note this differs from `rates_table.csv`'s `C>T` rendering. |
+| `motif` | string | Trinucleotide sequence context. |
+| `unpaired` | int | 1 if the site is in an unpaired (single-stranded) RNA region. |
+| `nt_site_boundary` | int | The configured light-switch boundary for this `mut_type`; 0 for the eight types that have none. |
+| `nt_site_before_boundary` | boolean | Which side of the boundary this row serves. The boundary site itself belongs to the **before** bucket (`site <= boundary`, `modules/lightswitch.py`). |
+| `rate` | float | Estimated neutral mutation rate for this condition. |
+| `expected_count` | float | Predicted count for the training population. |
+| `residual` | float | Empirical-Bayes-shrunk residual variance for this condition. |
+
+**Row arithmetic:** 4 boundary types (`AT`, `CG`, `GC`, `CT`) × 16 motifs × 2
+unpaired × 2 boundary sides = 256, plus 8 non-boundary types × 16 motifs × 2
+unpaired × 1 = 256.
+
+### `glm/master_table_{era}.csv` (v10+)
+
+Same 512-row schema and grid as `glm/master_table.csv`, fitted on one era's
+clades only. Both eras' tables share the grid exactly, so they are comparable
+cell by cell.
+
+**Three tables, not one with an `era` column.** DASM2's
+`TabularRatesNeutralModel` assigns `wt_to_mut_rates[wt][mut]` in a row loop, so
+an unrecognized extra column would be read *last-row-wins, silently*. The pooled
+`master_table.csv` is retained with its v9 meaning as the control arm of the
+per-era comparison, not as backwards compatibility.
+
+### `glm/era_fit_summary.csv` (v10+)
+
+Which eras this tree's run fitted, and which it skipped.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `era` | string | `pre_omicron` or `omicron`. **Every** era appears, fitted or not. |
+| `fitted` | boolean | Whether a rate table was produced for this era. |
+| `n_clades` | int | Clades in this era on this tree. |
+| `clades` | string | `;`-joined clade labels, in Nextstrain order. |
+| `master_table` | string | Relative path to the era's master table, or empty if skipped. |
+| `rates_table` | string | Relative path to the era's rates table, or empty if skipped. |
+
+**Why this file exists.** An era with no clades on a tree is skipped — the GLM
+cannot fit an empty partition, and single-era trees are normal (the test config's
+three clades are all pre-Omicron; the BA.2/JN.1/XFG trees are single-era by
+construction). But a skipped era leaves *no file*, which is indistinguishable
+from an era that went missing through a wiring mistake. This records the absence
+explicitly so it is auditable from the output tree alone.
+
+On a single-era tree the era's tables are **byte-identical** to the pooled ones,
+which `validate_test.py::validate_era_rate_tables` asserts.
+
+### `windows/` expected counts use the pooled table
+
+`window_expected_counts` reads `glm/master_table.csv`, **not** a per-era table.
+The windowed path has no clade column to dispatch on (`subtree_counts.csv` and
+`founder_muts.csv` key on `founder_id`, a bare node id), a per-window date label
+is wrong exactly across the transition, and a per-founder label breaks the
+shared-base-enumeration optimization. Since `T_window` divides out any constant
+rate factor, only the split's *relative* structure leaks through — dominated by
+G→T. Tracked as a follow-up.
 
 ## Node Dates (chronumental)
 
@@ -258,12 +334,91 @@ Per-check pass/fail report from `chronumental_qc` (one row per check).
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `check` | string | `node_id_correspondence`, `time_monotonicity`, `date_coverage`, or `tip_residual`. |
-| `status` | string | `PASS` or `FAIL`. |
+| `check` | string | See the two lists below. |
+| `status` | string | `PASS`, `FAIL`, or `REPORT`. |
 | `detail` | string | Measured numbers for the check. |
 
-The rule raises (fails the run) on any hard-invariant violation, and on a
-`tip_residual` median above `chronumental_max_median_abs_tip_residual_days`.
+**Gating checks** (`PASS`/`FAIL`): `node_id_correspondence`, `time_monotonicity`,
+`date_coverage`, `tip_residual`. The rule raises on any hard-invariant violation, and
+on a `tip_residual` median above `chronumental_max_median_abs_tip_residual_days`.
+
+**Report-only checks** (`REPORT`, added by
+[#139](https://github.com/matsengrp/mat-pcp/issues/139)) — these validate the
+*internal* node dates, which `modules/windowing.py` uses to bucket every branch into
+a time window. They **gate nothing**: `status` is always `REPORT` and they cannot
+fail a run. Thresholds are deferred to a follow-up, because gating on a distribution
+nobody has characterised would fail production runs uninterpretably.
+
+| `check` | measures |
+|---|---|
+| `branch_dt_vs_mutations` | Δt binned by branch mutation count, plus days/mutation against a nominal ~15.3 (order-of-magnitude only: the MAT is masked and branch-filtered, so the realized slope runs higher). |
+| `zero_mut_leaf_predicted_dt` | Predicted Δt on zero-mutation leaf branches. **One-sided**: `time_monotonicity` is a hard gate already forcing Δt ≥ 0, so `frac<0` here is an *invariant rather than a measurement* and must not be quoted as a confirmed prediction. Read `min` instead: `EPS_DAYS = 1` admits a −1 day edge past that gate, and a 4-decimal fraction over 12 M observations hides up to ~600 negatives. |
+| `zero_mut_leaf_vs_earliest_observed` | *Earliest observed* date among a parent's zero-mutation leaf children **minus** the parent's predicted date. Note this is the **opposite orientation** to `internal_date_vs_min_descendant_observed`: here a **negative** value is the anomaly. Also reports how many dated strains had no node in the tree and were excluded. |
+| `root_date_plausible` | Root date against a deliberately wide window (2019-10-01 … 2020-02-29). A tripwire for a mis-scaled time axis. |
+| `internal_date_vs_min_descendant_observed` | Predicted internal date minus the earliest observed descendant date. **Positive is the anomaly** (the ancestor postdates its earliest sample). Compares *inferred* against *observed*, so a violation is a three-way inconsistency between the inferred date, the topology and a collection date — and it is not independent of `tip_residual`: monotonicity forces `pred(ancestor) ≤ pred(tip)`, so a positive gap requires that tip's own residual to be at least as large. Quantifies downstream impact (how many internal nodes, hence branches, land in the wrong window) rather than testing the dating algorithm. |
+| `internal_dt_to_closest_descendant` | Predicted Δt from an internal node to its **nearest descendant, both dates inferred** — so unlike the row above this *is* a test of the algorithm: given the topology it was handed, how much time does the fit put below each internal node? Equals min-over-*children* of the branch Δt, because monotonicity makes predicted dates nondecreasing along every path, so the nearest descendant is always an immediate child. Also reports how many zero-mutation branches are internal rather than terminal (0 on the v9 tree, so `zero_mut_leaf_predicted_dt` covers all of them). |
+
+Because checks 6 and 8 use opposite sign conventions, `format_stats` prints **both**
+`frac<0` and `frac>0`, and the two rows above additionally carry an explicit
+`VIOLATING (<0)` / `VIOLATING (>0)` fraction and count. `frac<0 + frac>0` does not
+sum to 1 — exact zeros are in neither. `tip_residual`'s detail also now reports its
+**positive tail** (count, count beyond 30 d, and max), because the gate is a median
+over ~17 M tips and cannot see a tail of any size; that tail is what check 8
+re-expresses.
+
+Why report-only rather than gating: `tip_residual` is the only pre-#139 check that
+compares an inferred date to evidence, and it is aimed where there is least to
+infer — tip collection dates are the priors chronumental is fit to. On
+`gisaid-and-public_2026-04-22_v9` it reports `p95|res|=1.0d` over 16,979,190 tips
+against a 30-day gate.
+
+### `mat/node_dates_branch_dt.csv`
+
+Long-form Δt distribution per mutation-count bin (#139). Binned rather than
+per-branch: `node_dates_residuals.csv` is already 1.6 GB on the production tree, and
+Δt in whole days is an integer, so a histogram gives **exact** medians and
+percentiles at a few tens of kB.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `mut_count_bin` | string | Mutation-count bin (`0`, `1`, …, `6-10`, `11-20`, `21-50`, `51+`). |
+| `dt_days` | int | `date(child) − date(parent)` in whole days. |
+| `count` | int | Number of branches in that bin with that Δt. |
+
+### `mat/node_dates_branch_dt_summary.csv`
+
+Wide-form per-bin summary of the same distributions — median, interquartile range and
+p95 for branch Δt binned by branch length in mutations (#139). One row per
+mutation-count bin plus a final `all` row.
+
+Built from the *same* `DayHistogram` objects as `node_dates_branch_dt.csv`, so the two
+files cannot disagree, and every statistic is **exact** rather than interpolated: Δt is
+whole days and the histogram retains every observation. `iqr` is `p75 − p25` on those
+same order statistics, not a separate estimate. The `all` row is the marginal of the
+pooled data (via `DayHistogram.merge`), **not** an average of per-bin medians; the
+script raises if its `n_branches` does not equal the number of branches with a defined
+Δt, so a bin set that stopped partitioning them would fail rather than under-report.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `mut_count_bin` | string | Mutation-count bin (`0`, `1`, …, `6-10`, `11-20`, `21-50`, `51+`), or `all` for the pooled row. |
+| `n_branches` | int | Branches in the bin with a defined Δt. |
+| `min`, `p05`, `p25`, `median`, `p75`, `p95`, `max` | int | Exact order statistics of Δt in whole days. |
+| `iqr` | int | `p75 − p25`. |
+| `mean` | float | Mean Δt in days, to 2 dp. |
+| `frac_dt_zero` | float | Fraction of the bin with Δt exactly 0 — parent and child dated the same day. |
+
+### `mat/node_dates_internal_checks.csv`
+
+Long-form day distributions for the three internal-node checks that produce one
+(#139), so a follow-up can choose thresholds from a distribution rather than a
+summary line.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `check` | string | `zero_mut_leaf_predicted_dt`, `zero_mut_leaf_vs_earliest_observed`, `internal_date_vs_min_descendant_observed`, or `internal_dt_to_closest_descendant`. |
+| `days` | int | Signed day difference. Negative values are retained — for the latter two they are the informative direction. |
+| `count` | int | Number of nodes with that value. |
 
 ### `mat/node_dates_residuals.csv`
 

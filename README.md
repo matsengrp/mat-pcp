@@ -67,15 +67,15 @@ global `qc_filter_options.max_leaf_date`.
 
 ```yaml
 # Optional; defaults to "results". Each tree writes to
-# {output_root}/{label}_{version}, e.g. results/public_2022-06-01_v9.
+# {output_root}/{label}_{version}, e.g. results/public_2022-06-01_v10.
 output_root: "results"
 
 trees:
-  public_2022-06-01:                       # -> results/public_2022-06-01_v9
+  public_2022-06-01:                       # -> results/public_2022-06-01_v10
     mat: "path/to/2022-06-01/tree.pb.gz"
     metadata: "path/to/2022-06-01/metadata.tsv.gz"
     max_leaf_date: "2022-06-01"            # per-tree override
-  public_2023-01-01:                       # -> results/public_2023-01-01_v9
+  public_2023-01-01:                       # -> results/public_2023-01-01_v10
     mat: "path/to/2023-01-01/tree.pb.gz"
     metadata: "path/to/2023-01-01/metadata.tsv.gz"
     # max_leaf_date omitted -> inherits the global default
@@ -97,7 +97,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml
 
 # Run specific target (per-tree output path)
 pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
-  results/public_2022-06-01_v9/aamut_fitness/all_aamut_fitness.csv
+  results/public_2022-06-01_v10/aamut_fitness/all_aamut_fitness.csv
 ```
 
 ## Pipeline Stages
@@ -111,7 +111,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | 3b. Mutation Counting | Translate mutations, count per-clade mutations (harmonized with PCP filtering) | `mutations/{clade}_mutations.tsv`, `mutation_counts/aggregated.csv` |
 | 4. Unified Count Table | Enumerate all possible mutations, join actual counts, compute masking flags once | `counts_all.csv` |
 | 5. GLM Annotation | Annotate counts with RNA structure and sequence context | `glm/annotated_counts.csv`, `glm/curated_counts.csv` |
-| 6. Rate Estimation | Estimate neutral mutation rates via GLM | `glm/master_table.csv`, `rates_table.csv` |
+| 6. Rate Estimation | Estimate neutral mutation rates via GLM, pooled **and once per era** (#137) | `glm/master_table.csv`, `rates_table.csv`, `glm/master_table_{era}.csv`, `rates_table_{era}.csv`, `glm/era_fit_summary.csv` |
 | 7a. NT Fitness | Compute nucleotide-level fitness estimates | `fitness/ntmut_fitness_aggregated.csv` |
 | 7b. AA Fitness | Compute amino acid-level fitness estimates | `aamut_fitness/all_aamut_fitness.csv` |
 | 8. Validation | Cross-validate PCP vs matUtils mutation counts (per protein) | `validation/<gene>/pcp_vs_counts_report.txt` |
@@ -132,8 +132,11 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `counts_all.csv` | Per-clade table of all possible mutations with actual counts and masking flags |
 | `glm/annotated_counts.csv` | Mutation counts annotated with RNA structure and context |
 | `glm/curated_counts.csv` | Curated counts for GLM training |
-| `glm/master_table.csv` | Full GLM rate table with light-switch boundaries |
-| `rates_table.csv` | Neutral mutation rates by context |
+| `glm/master_table.csv` | Full 512-row GLM rate table with light-switch boundaries, fitted on all clades pooled. Retained in v10 as the control arm of the per-era comparison |
+| `glm/master_table_{era}.csv` | Same grid, fitted on one era's clades only (v10+, #137). One file per era present on the tree |
+| `glm/era_fit_summary.csv` | Which eras this tree fitted and which were skipped, with each era's clade list (v10+). A skipped era leaves no rate table, so the absence is recorded here rather than being indistinguishable from a dropped one |
+| `rates_table.csv` | Neutral mutation rates by context (384 rows: the after-boundary half of the grid) |
+| `rates_table_{era}.csv` | Same, per era (v10+) |
 | `<gene>_codon_sites_to_mask.txt` | Problematic codon sites per configured protein (e.g. `S_codon_sites_to_mask.txt`) |
 | `fitness/expected_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
@@ -536,8 +539,11 @@ results/
 ├── glm/
 │   ├── annotated_counts.csv       # Counts with RNA structure context
 │   ├── clade_founder_annotated.csv # Annotated clade founder data
-│   ├── curated_counts.csv         # Curated counts for GLM
-│   └── master_table.csv           # Full GLM rate predictions
+│   ├── curated_counts.csv         # Curated counts for GLM (all clades pooled)
+│   ├── curated_counts_{era}.csv   # Curated counts for one era's clades (v10+)
+│   ├── master_table.csv           # Full GLM rate predictions (pooled)
+│   ├── master_table_{era}.csv     # Full GLM rate predictions for one era (v10+)
+│   └── era_fit_summary.csv        # Which eras were fitted, which skipped (v10+)
 ├── fitness/
 │   ├── expected_counts_by_clade.csv     # GLM-expected counts (expected_count)
 │   ├── ntmut_counts/              # Per-clade nucleotide counts

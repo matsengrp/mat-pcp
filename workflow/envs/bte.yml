@@ -3,6 +3,19 @@ channels:
   - https://prefix.dev/conda-forge
   - https://prefix.dev/bioconda
 dependencies:
-  - python>=3.9,<3.11  # bte compatibility - requires Python <3.11
-  - bte>=0.1
+  # The Python floor is what makes the bte floor enforceable, not an independent
+  # preference: bioconda's bte recipe is `skip: True  # [py < 310]` at 0.9.3, so a
+  # py3.9 solve cannot satisfy bte>=0.9.3 and would silently fall back. The two
+  # pins have to move together. The ceiling stays <3.11 for bte compatibility.
+  - python>=3.10,<3.11
+  # bte<=0.9.2 silently drops re-mutations in MATree.get_haplotype(): at a
+  # twice-mutated position it keeps the *first* mutation and discards later
+  # non-reversions, because the update branch mutates a value copy that is never
+  # re-inserted (`allm.erase` is only reached on the reversion path). Both
+  # scripts/pcp_from_tree.py:206 and modules/windowing.py:397 depend on that call,
+  # so a backwards solve corrupts parent haplotypes and window founder mutations
+  # while returning plausible sequences. v9 resolved to bte-0.9.3 by luck of the
+  # solve, not by anything the environment guaranteed. See #136 and
+  # tests/test_bte_haplotype.py.
+  - bte>=0.9.3
   - pandas>=2.0,<3.0

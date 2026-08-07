@@ -64,6 +64,23 @@ def run(
 
     # mat-pcp's GLM per-context rates, used at native scale (the per-window
     # evol_time factor T divides out any constant rate factor).
+    #
+    # This is the POOLED master table, deliberately, while the clade path moved to
+    # per-era tables in v10 (#137, EPIC #138 decision 7). The divergence is
+    # documented rather than fixed because the windowed path has no clade column to
+    # dispatch on: ``subtree_counts.csv`` / ``founder_muts.csv`` key on
+    # ``founder_id``, a bare node id. A per-window date label is wrong exactly
+    # across the pre-Omicron/Omicron transition -- the window that straddles it
+    # contains both -- and a per-founder label would break the shared-base
+    # enumeration that took this rule from ~20 h to 1.45 h in #123.
+    #
+    # What leaks through is bounded: T_window is fitted per window so it absorbs
+    # any constant rate factor, leaving only the split's *relative* structure,
+    # which is dominated by G->T (+0.62 mean log rate ratio between eras against
+    # +0.27 for the next largest). Reading a per-era table here without a correct
+    # era label would be worse than reading the pooled one, since it would apply
+    # one era's relative structure to windows from the other. Era dispatch for the
+    # windowed path is a follow-up, not a v10 item.
     rates_df = expected_counts.prepare_rates_df(master_table_csv)
 
     vcf_sites = pd.read_csv(site_mask_csv)["site"].tolist()

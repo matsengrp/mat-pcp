@@ -163,6 +163,55 @@ jobs:
       run: |
         pixi run python tests/test_pcp_gene_coordinates.py
 
+    # Fixture-only, and necessarily so: the era mapping's failure mode is a clade
+    # in the wrong list, which yields a plausible rate table rather than an error,
+    # so no pipeline assertion can see it. The test config is also single-era
+    # (max_clades: 3 -> 19A/19B/20A, all pre-Omicron), so a run exercises the
+    # empty-Omicron skip but never routes two eras. Covers what that cannot: that
+    # the mapping is total over the release tree, that an unmapped clade raises
+    # rather than defaulting the way upstream's `else 'omicron'` does, and that the
+    # year-prefix audit is *two-sided* -- the check is mutation-tested against
+    # 21K/21L/21M moved to pre_omicron, which a one-sided allowlist accepts (#137).
+    - name: Verify the pre-Omicron / Omicron era mapping and its audit
+      run: |
+        pixi run python tests/test_era_mapping.py
+
+    # The companion to the above: that mapping says which era a clade is in, this
+    # says what the pipeline does with it. **The only two-era coverage that exists.**
+    # Every shipped config is single-era, so the pipeline run below exercises the
+    # empty-Omicron skip but reduces the fit to v9's pooled one -- it cannot tell
+    # whether the curated_{era} inputs are read, matched to the right era, or
+    # dispatched through era_for_clade at all. So this drives the real
+    # curate_counts.py and the real expected_counts_by_clade.py against two
+    # constructed eras whose G->T rates differ by a known factor: one table serving
+    # everyone gives a ratio of 1.0, a swapped pair inverts it, and both are
+    # distinguished from the correct answer. Mutation-tested against four separate
+    # breaks of the shipped scripts (#137).
+    - name: Verify the two-era fit and its per-clade dispatch
+      run: |
+        pixi run python tests/test_era_rate_dispatch.py
+
+    # Half A only at this point -- the env-pin check, which is what guards against
+    # a backwards edit to bte.yml. Half B needs bte, which lives only in the
+    # Snakemake conda env, so it runs in the post-pipeline step further down. Both
+    # invocations are required: half A alone never executes get_haplotype, and half
+    # B alone would not notice the python floor being relaxed (#136).
+    - name: Verify the bte floor that closes the get_haplotype re-mutation bug
+      run: |
+        pixi run python tests/test_bte_haplotype.py
+
+    # Fixture-only, and this one has no pipeline backstop at all by design: #139's
+    # four internal-node date checks are REPORT-ONLY, so a run can never fail on
+    # them, which means a run also cannot tell you they compute the right thing.
+    # Covers the parts that would be silently wrong: that the day histograms give
+    # EXACT order statistics (the whole memory argument for binning at 21 M nodes
+    # rests on that), that negative values survive (a negative gap is the anomaly
+    # signal for checks 6 and 8), and that the descendant-minimum propagation is a
+    # real order-dependent post-order pass (#139).
+    - name: Verify the internal-node date check primitives
+      run: |
+        pixi run python tests/test_node_date_qc.py
+
     # The steps above name each test file so a failure points at a readable log.
     # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]
     # is empty, so a *new* tests/test_*.py runs zero times and CI stays green --
@@ -239,6 +288,16 @@ jobs:
         pixi run snakemake -j $(nproc) --use-conda \
           --conda-frontend conda \
           --configfile config/config_test_data.yaml
+
+    # Half B of the bte test, now that .snakemake/conda holds the bte env the
+    # pipeline just built. --require-bte makes a missing env a FAILURE rather than
+    # a skip: half B is the only check that executes the real get_haplotype against
+    # a twice-mutated site, so letting it quietly not run would leave #136 guarded
+    # by a version-string comparison alone. The test re-execs itself under the
+    # conda env's interpreter.
+    - name: Verify get_haplotype composes re-mutations (real bte)
+      run: |
+        pixi run python tests/test_bte_haplotype.py --require-bte
 
     - name: Set output directory variable
       run: |

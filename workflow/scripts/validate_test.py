@@ -886,6 +886,113 @@ def validate_orf1b_founder_slice(output_dir):
     return differences, summary
 
 
+def validate_era_rate_tables(output_dir):
+    """Check the per-era neutral rate tables against the run's own era summary.
+
+    The era split (#137) fits one model per era and skips an era with no clades.
+    Both halves of that are silent failures on their own: a missing
+    ``master_table_{era}.csv`` looks the same whether the era was legitimately
+    absent or was dropped by a wiring mistake, and a table that *is* present
+    proves nothing about whether it was fitted on the right clades.
+
+    ``glm/era_fit_summary.csv`` is the run's own record of which eras it fitted,
+    so this reconciles it against what is actually on disk in both directions:
+    every era marked ``fitted`` must have its two tables, and no era marked
+    skipped may have them. A one-directional check would pass on a run that wrote
+    every era's table and mislabelled the summary.
+
+    On a single-era tree (every shipped test config, and the BA.2/JN.1/XFG trees)
+    the era table must additionally be **identical** to the pooled one -- ISSUE-137
+    criterion 5, single-era degeneracy, which is the guard that the split did not
+    move the pre-existing fit. ``tests/test_era_rate_dispatch.py`` covers the
+    two-era dispatch as a unit test, since no shipped config exercises it.
+    """
+    import csv
+
+    differences = []
+    summary_path = Path(output_dir) / 'glm' / 'era_fit_summary.csv'
+    if not summary_path.exists():
+        # The GLM stage may not have run at all (partial pipeline target).
+        if (Path(output_dir) / 'glm' / 'master_table.csv').exists():
+            differences.append(
+                f"{summary_path} is missing although glm/master_table.csv exists, "
+                "so which eras were fitted and which were skipped cannot be "
+                "verified (#137)"
+            )
+        return differences, None
+
+    with open(summary_path, newline='') as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        differences.append(f"{summary_path} has no rows")
+        return differences, None
+
+    fitted, skipped = [], []
+    for row in rows:
+        era = row['era']
+        is_fitted = row['fitted'].strip().lower() == 'true'
+        master = Path(output_dir) / 'glm' / f'master_table_{era}.csv'
+        rates = Path(output_dir) / f'rates_table_{era}.csv'
+        if is_fitted:
+            fitted.append(era)
+            for path in (master, rates):
+                if not path.exists():
+                    differences.append(
+                        f"era {era} is marked fitted in {summary_path.name} but "
+                        f"{path} does not exist"
+                    )
+            if int(row['n_clades']) == 0:
+                differences.append(
+                    f"era {era} is marked fitted with 0 clades, which cannot be "
+                    "fitted"
+                )
+        else:
+            skipped.append(era)
+            for path in (master, rates):
+                if path.exists():
+                    differences.append(
+                        f"era {era} is marked skipped in {summary_path.name} but "
+                        f"{path} exists -- the summary and the output tree "
+                        f"disagree about which eras were fitted"
+                    )
+            if int(row['n_clades']) != 0:
+                differences.append(
+                    f"era {era} is marked skipped but claims "
+                    f"{row['n_clades']} clades"
+                )
+
+    # Single-era degeneracy (ISSUE-137 criterion 5): with one era, that era's
+    # tables must equal the pooled ones exactly. This is the check that the
+    # refactor did not move the v9 fit.
+    if len(fitted) == 1 and not differences:
+        era = fitted[0]
+        for pooled_rel, era_rel in (
+            (Path('glm') / 'master_table.csv', Path('glm') / f'master_table_{era}.csv'),
+            (Path('rates_table.csv'), Path(f'rates_table_{era}.csv')),
+        ):
+            pooled = Path(output_dir) / pooled_rel
+            per_era = Path(output_dir) / era_rel
+            if not (pooled.exists() and per_era.exists()):
+                continue
+            if pooled.read_bytes() != per_era.read_bytes():
+                differences.append(
+                    f"this tree has only the {era} era, so {era_rel} must be "
+                    f"identical to {pooled_rel} (ISSUE-137 criterion 5: "
+                    f"single-era degeneracy). They differ, which means the era "
+                    f"path is not the degenerate pooled path."
+                )
+
+    n_clades = sum(int(row['n_clades']) for row in rows)
+    summary = (
+        f"{len(fitted)} era(s) fitted ({', '.join(fitted) or 'none'}), "
+        f"{len(skipped)} skipped ({', '.join(skipped) or 'none'}), "
+        f"{n_clades} clades partitioned"
+    )
+    if len(fitted) == 1:
+        summary += "; single-era tables byte-equal the pooled ones"
+    return differences, summary
+
+
 def validate_glm_synonymous_training(output_dir):
     """Check the GLM neutral model was trained on synonymous mutations only.
 
@@ -1141,9 +1248,10 @@ def main():
     orf1b_diffs, orf1b_summary = validate_orf1b_founder_slice(output_dir)
     glm_syn_diffs, glm_syn_summary = validate_glm_synonymous_training(output_dir)
     codon_bg_diffs, codon_bg_summary = validate_founder_codon_background(output_dir)
+    era_diffs, era_summary = validate_era_rate_tables(output_dir)
     differences += (
         site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
-        + orf1ab_diffs + orf1b_diffs + glm_syn_diffs + codon_bg_diffs
+        + orf1ab_diffs + orf1b_diffs + glm_syn_diffs + codon_bg_diffs + era_diffs
     )
 
     if differences:
@@ -1182,6 +1290,8 @@ def main():
             print(f"  - {glm_syn_summary}")
         if codon_bg_summary:
             print(f"  - {codon_bg_summary}")
+        if era_summary:
+            print(f"  - Era rate tables: {era_summary}")
         sys.exit(0)
 
 

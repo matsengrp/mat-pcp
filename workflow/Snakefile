@@ -4,6 +4,7 @@ import os
 import re
 import pandas as pd
 import yaml
+from importlib import util as importlib_util
 
 # The pipeline is always run with exactly one explicit ``--configfile`` (e.g.
 # ``--configfile config/config.yaml``). There is deliberately no ``configfile:``
@@ -27,6 +28,24 @@ import yaml
 VERSION_FILE = os.path.join(workflow.basedir, "..", "VERSION")
 with open(VERSION_FILE) as f:
     PIPELINE_VERSION = f.read().strip()
+
+# =============================================================================
+# Shared workflow modules needed at parse time
+# =============================================================================
+#
+# The era partition (#137) is consulted while building the DAG -- which eras get
+# a neutral-rate fit is decided from the clade list, not at run time -- so
+# ``modules/era.py`` is imported here with the same by-path loader the scripts
+# use (#111). Importing it rather than restating the era names keeps one
+# definition of the partition: a second copy here is exactly how the
+# ``roemer_nextstrain_to_pango`` per-config duplication produced #129.
+_loader_spec = importlib_util.spec_from_file_location(
+    "workflow_loader",
+    os.path.join(workflow.basedir, "modules", "workflow_loader.py"),
+)
+_workflow_loader = importlib_util.module_from_spec(_loader_spec)
+_loader_spec.loader.exec_module(_workflow_loader)
+era_mod = _workflow_loader.load_workflow_module("era", workflow.basedir)
 
 # =============================================================================
 # Tree Table and Output Directory Template
@@ -196,6 +215,11 @@ wildcard_constraints:
     clade="[A-Za-z0-9_.+-]+",  # Valid clade name characters
     tree=TREE_LABEL_PATTERN,   # Tree label (slash-free by construction)
     gene="[A-Za-z0-9_.+-]+",   # Gene symbol (a single path segment, slash-free)
+    # Era names are enumerated, not a character class (#137). ``curated_counts``
+    # / ``master_table`` / ``rates_table`` each exist as both a pooled literal
+    # path and an ``_{era}`` wildcard path; an open-ended pattern would let the
+    # wildcard rule also claim paths it has no business building.
+    era="|".join(era_mod.ERAS),
 
 
 # Disambiguate the aggregate rules from their per-clade counterparts. The
@@ -308,6 +332,12 @@ for _gene, _spec in PCP_GENE_TO_FITNESS_GENE.items():
 # ``tree x pcp_genes`` in ``rule all`` instead.
 results_files = [
     "rates_table.csv",
+    # Per-era neutral rate models (#137). This summary is the target that pulls
+    # in glm/master_table_{era}.csv and rates_table_{era}.csv for every era
+    # present on the tree, and records which eras were skipped -- an era absent
+    # from a single-era tree is correct, but an unrecorded absence is
+    # indistinguishable from an era that went missing.
+    "glm/era_fit_summary.csv",
     "fitness/ntmut_fitness_aggregated.csv",
     "aamut_fitness/all_aamut_fitness.csv",
     # chronumental node dating (#116): the QC report transitively builds
@@ -565,14 +595,33 @@ rule chronumental_qc:
         metadata=rules.filter_metadata.output.filtered_metadata
     output:
         report=os.path.join(OUTDIR, "mat/node_dates_qc.tsv"),
-        residuals=os.path.join(OUTDIR, "mat/node_dates_residuals.csv")
+        residuals=os.path.join(OUTDIR, "mat/node_dates_residuals.csv"),
+        # Internal-node date distributions (#139). Binned, not per-branch: the
+        # per-tip residuals file above is already 1.6 GB on the production tree,
+        # and Delta-t in whole days is an integer so a histogram gives exact
+        # medians and percentiles at a few tens of kB.
+        branch_dt=os.path.join(OUTDIR, "mat/node_dates_branch_dt.csv"),
+        # Per-bin median / IQR / p95 summary of the same distributions. Derived from
+        # the same histograms as branch_dt above, so the two cannot disagree, and
+        # every statistic is exact rather than interpolated.
+        branch_dt_summary=os.path.join(
+            OUTDIR, "mat/node_dates_branch_dt_summary.csv"
+        ),
+        internal_checks=os.path.join(OUTDIR, "mat/node_dates_internal_checks.csv")
     params:
         max_median_abs_tip_residual_days=config.get(
             "chronumental_max_median_abs_tip_residual_days", 30
         )
     threads: get_threads("chronumental_qc")
     resources:
-        mem_mb=16000,
+        # Measured, not guessed: 43.4 GB max RSS over the 20,961,614 nodes of
+        # gisaid-and-public_2026-04-22 (38.2 GB before the #139 checks added
+        # their full-length per-node arrays). The previous 16000 was under the
+        # real peak by more than 2x. Production runs use a local executor with
+        # no --resources ceiling, so nothing enforced it and nothing failed --
+        # which is exactly why it needs to be right before anyone runs this
+        # under a scheduler that does enforce it.
+        mem_mb=56000,
         runtime=120
     benchmark:
         os.path.join(OUTDIR, "benchmarks/chronumental_qc.tsv")
@@ -798,6 +847,61 @@ def clades_w_adequate_counts(wildcards):
     if max_clades is not None and max_clades > 0:
         clades = clades[:max_clades]
     return clades
+
+
+def eras_present(wildcards):
+    """The eras that have at least one clade on this tree, in ``ERAS`` order.
+
+    The neutral-rate split (#137) fits one model per era. An era with no clades
+    cannot be fitted -- ``populate_rates`` raises ``No trained weights found for
+    mutation type AC ... Available mutation types: []`` on an empty partition --
+    and this is not hypothetical: ``config_test_data.yaml``'s ``max_clades: 3``
+    yields 19A/19B/20A, all pre-Omicron, and the BA.2/JN.1/XFG trees are
+    single-era by construction too.
+
+    Because a Snakemake rule must produce every output it declares, the skip
+    happens **here, at DAG-construction time**, by simply not requesting the
+    absent era's table -- rather than by having the fit rule emit a placeholder
+    (a header-only file or a ``touch()``), which would ship a rate table that
+    looks like a fit and contains nothing. Which eras were skipped is recorded in
+    ``glm/era_fit_summary.csv`` so the absence is auditable from the output tree
+    (``rule era_fit_summary``).
+
+    Raises via ``era.era_for_clade`` on a clade with no era, which is the
+    intended behaviour: an unmapped clade must stop the run rather than land in a
+    default bucket. Configs whose clade column carries non-clade values
+    (``recombinant`` in the test data) exclude them via ``clades_to_exclude``.
+    """
+    clades = clades_w_adequate_counts(wildcards)
+    partition = era_mod.partition_clades(clades)
+    return [era for era in era_mod.ERAS if era in partition]
+
+
+def era_rate_table_inputs(wildcards):
+    """Per-era master and rates tables for the eras present on this tree."""
+    outdir = tree_outdir(wildcards.tree)
+    return [
+        os.path.join(outdir, subpath.format(era=era))
+        for era in eras_present(wildcards)
+        for subpath in ("glm/master_table_{era}.csv", "rates_table_{era}.csv")
+    ]
+
+
+def curated_counts_by_era_inputs(wildcards):
+    """``{f"curated_{era}": path}`` for each era present on this tree.
+
+    Returned as a dict for ``unpack()`` so the consumer addresses each training
+    frame **by era name** rather than by position in a list. A positional pairing
+    of two lists (paths, era names) is the #133 ``gene``/``codon_site`` trap: the
+    two zip cleanly whichever way round they are, and swapping the era labels
+    would fit each era's model and serve it to the other era's clades -- a
+    plausible rate table, no error.
+    """
+    outdir = tree_outdir(wildcards.tree)
+    return {
+        f"curated_{era}": os.path.join(outdir, f"glm/curated_counts_{era}.csv")
+        for era in eras_present(wildcards)
+    }
 
 
 def per_clade_inputs(path_template, wildcards, extra_clades=()):
@@ -1335,14 +1439,44 @@ rule annotate_counts:
 
 
 rule curate_counts:
-    """Curate counts for GLM training (filter to conserved sites, exclude problematic sites)."""
+    """Curate counts for GLM training (filter to conserved sites, exclude problematic sites).
+
+    Pools every clade, as in v9. ``rule curate_counts_era`` runs the same script
+    restricted to one era; both are needed because the pooled fit is the control
+    arm of the downstream per-era experiment (#137 Task 3), not legacy baggage.
+    """
     input:
         counts=rules.annotate_counts.output.counts_csv,
         clade_founder=rules.annotate_counts.output.founder_csv
     output:
         curated=os.path.join(OUTDIR, "glm/curated_counts.csv")
+    params:
+        era=None
     log:
         os.path.join(OUTDIR, "log/curate_counts.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/curate_counts.py"
+
+
+rule curate_counts_era:
+    """Curate counts for one era's GLM training set (#137).
+
+    The same script and the same site filters as ``rule curate_counts``, with the
+    rows restricted to one era's clades. Deliberately *not* a filter applied to
+    ``glm/curated_counts.csv``: that file's ``groupby`` has already pooled the
+    clades away, so there is nothing left to partition on.
+    """
+    input:
+        counts=rules.annotate_counts.output.counts_csv,
+        clade_founder=rules.annotate_counts.output.founder_csv
+    output:
+        curated=os.path.join(OUTDIR, "glm/curated_counts_{era}.csv")
+    params:
+        era=lambda wildcards: wildcards.era
+    log:
+        os.path.join(OUTDIR, "log/curate_counts_{era}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1352,9 +1486,19 @@ rule curate_counts:
 # =============================================================================
 # Stage 6: GLM Rate Estimation & Master Table
 # =============================================================================
+#
+# Three rate tables ship per tree (#137 Task 3, EPIC #138 decision 3):
+# ``glm/master_table.csv`` (pooled, unchanged v9 meaning) plus
+# ``glm/master_table_{era}.csv`` for each era present. Three files rather than
+# one file with an ``era`` column, for two reasons specific to the consumers:
+# ``Rates.residual_variance`` zips ``groupby(...).apply(...)`` output positionally
+# against ``self.rates.loc[idx]`` (correct today only because the grid's
+# construction order happens to equal sorted order), and DASM2's
+# ``TabularRatesNeutralModel`` assigns ``wt_to_mut_rates[wt][mut]`` in a row loop,
+# so an unrecognized extra column would be read **last-row-wins, silently**.
 
 rule master_table:
-    """Create master table with predicted mutation rates via GLM."""
+    """Create master table with predicted mutation rates via GLM (pooled)."""
     input:
         curated_counts=rules.curate_counts.output.curated
     output:
@@ -1375,6 +1519,72 @@ rule master_table:
         "envs/default.yml"
     script:
         "scripts/master_table.py"
+
+
+rule master_table_era:
+    """Create one era's master rate table via GLM (#137).
+
+    Runs the *same script* as ``rule master_table`` against that era's curated
+    counts, so the two fits cannot differ in anything but their training rows --
+    the property ISSUE-137 criterion 5 (single-era degeneracy is exact) rests on.
+    """
+    input:
+        curated_counts=rules.curate_counts_era.output.curated
+    output:
+        master_table=os.path.join(OUTDIR, "glm/master_table_{era}.csv")
+    params:
+        lightswitch_boundaries=config.get("glm_lightswitch_boundaries", {
+            "CT": 13467, "AT": 21562, "CG": 21562, "GC": 21562
+        })
+    threads: get_threads("master_table")
+    resources:
+        mem_mb=8000,
+        runtime=60
+    benchmark:
+        os.path.join(OUTDIR, "benchmarks/master_table_{era}.tsv")
+    log:
+        os.path.join(OUTDIR, "log/master_table_{era}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/master_table.py"
+
+
+rule get_rates_table_era:
+    """Extract one era's rates table for sites after boundary (#137)."""
+    input:
+        master_table=rules.master_table_era.output.master_table
+    output:
+        rates_table=os.path.join(OUTDIR, "rates_table_{era}.csv")
+    log:
+        os.path.join(OUTDIR, "log/get_rates_table_{era}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/get_rates_table.py"
+
+
+rule era_fit_summary:
+    """Record which eras were fitted and which were skipped (#137).
+
+    Requesting ``era_rate_table_inputs`` here is what *builds* the per-era
+    tables: they hang off this rule rather than off ``rule all`` directly,
+    because deciding which eras exist means resolving the ``get_clades``
+    checkpoint per tree, and ``rule all`` has no ``{tree}`` wildcard to resolve
+    it with.
+    """
+    input:
+        era_rate_table_inputs
+    output:
+        summary=os.path.join(OUTDIR, "glm/era_fit_summary.csv")
+    params:
+        clades=clades_w_adequate_counts
+    log:
+        os.path.join(OUTDIR, "log/era_fit_summary.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/era_fit_summary.py"
 
 
 rule get_rates_table:
@@ -1477,10 +1687,21 @@ rule get_problematic_sites:
 # =============================================================================
 
 rule expected_counts_by_clade:
-    """Add GLM-expected counts to mutation counts for each clade."""
+    """Add GLM-expected counts to mutation counts for each clade.
+
+    Since #137 each clade is served by its **own era's** neutral model, so the
+    training inputs are the per-era curated tables rather than the pooled one.
+    ``unpack`` names them ``curated_{era}``: the script addresses each training
+    frame by era name, never by position (a swapped pair would fit both models
+    correctly and serve each to the other era's clades, with no error anywhere).
+
+    On a single-era tree exactly one file arrives and this reduces to the v9
+    pooled fit, which is why the test-data run still reproduces the v9 fitness
+    md5s and so acts as a regression check on the split.
+    """
     input:
+        unpack(curated_counts_by_era_inputs),
         counts=rules.annotate_counts.output.counts_csv,
-        curated=rules.curate_counts.output.curated
     output:
         csv=os.path.join(OUTDIR, "fitness/expected_counts_by_clade.csv")
     params:

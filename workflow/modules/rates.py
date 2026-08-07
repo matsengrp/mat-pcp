@@ -363,20 +363,31 @@ class Rates:
         return res
 
 
-def add_expected_count(train_df, count_df, clades, lightswitch_boundaries=None):
-    """
-    Add expected counts to count_df for all clades.
+#: Era key for the single pooled fit. :func:`add_expected_count` is
+#: :func:`add_expected_count_by_era` with one era under this key, so the pooled
+#: path is not a separate implementation that could drift from the per-era one.
+#: This is what makes ISSUE-137 criterion 5 ("single-era degeneracy is exact")
+#: true by construction rather than by measurement.
+POOLED = "pooled"
 
-    This function matches the SARS2-mut-fitness-v2 add_predicted_count function:
-    1. Train GLM on training data
-    2. For each clade, compute clade-specific normalization factor T
-    3. Apply normalized expectations to all mutations in the clade
 
-    Args:
-        train_df: Training DataFrame with curated synonymous mutations
-        count_df: DataFrame with mutation counts for all clades
-        clades: List of clade names to process
-        lightswitch_boundaries: Dict mapping mutation types to position boundaries
+def _fit_rates(train_df, lightswitch_boundaries):
+    """Fit one :class:`Rates` on ``train_df`` and return it with its site set.
+
+    The whole fit for one training population: GLM, per-mutation-type residual
+    variance ``tau``, genome composition, and empirical-Bayes shrunk residuals.
+    Factored out of :func:`add_expected_count` so a per-era fit is the *same*
+    code as the pooled fit rather than a copy of it.
+
+    ``train_df`` is mutated (an ``expected_count`` column is added), matching the
+    pre-#137 behaviour of :func:`add_expected_count`.
+
+    Returns:
+        ``(rate, sites)`` -- the fitted ``Rates`` and the ``nt_site`` values it
+        was trained on. The site set is returned rather than recomputed by the
+        caller because ``T`` must be normalized over *this* fit's training sites:
+        with two eras there are two site sets, and using the wrong one would
+        rescale a clade's expected counts by a plausible-looking factor.
     """
     rate = Rates(lightswitch_boundaries)
 
@@ -403,8 +414,85 @@ def add_expected_count(train_df, count_df, clades, lightswitch_boundaries=None):
     # Compute residual variance with empirical Bayes shrinkage
     rate.residual_variance(train_df, tau.to_dict())
 
-    # Process each clade
+    return rate, sites
+
+
+def add_expected_count_by_era(
+    train_by_era,
+    count_df,
+    clades,
+    era_of_clade,
+    lightswitch_boundaries=None,
+    log=None,
+):
+    """Add expected counts to ``count_df``, fitting one model per era (#137).
+
+    ``SARS2-mut-fitness-v2`` fits separate neutral models for pre-Omicron and
+    Omicron clades; mat-pcp lost that covariate in the port. This restores it.
+
+    Args:
+        train_by_era: ``{era: training DataFrame}``. One fit per key. Keys are
+            opaque here -- this function never inspects them, so the era
+            *definition* stays in ``modules/era.py`` and this stays testable
+            against synthetic era labels.
+        count_df: counts for all clades; ``expected_count`` and ``tau_squared``
+            are written in place.
+        clades: clade names to process.
+        era_of_clade: callable mapping a clade to its key in ``train_by_era``.
+            Pass ``era.era_for_clade``, which raises on an unmapped clade --
+            **never** a function with a default era. Upstream dispatches on the
+            positional slice ``clades[0:11]``, correct only while the counts file
+            happens to arrive in Nextstrain clade order; dispatching on the label
+            is the point of this function.
+        lightswitch_boundaries: passed to each :class:`Rates`.
+        log: optional ``callable(str)`` for progress. Which eras were fit, with
+            how many training rows each, is reported here because a fit on the
+            wrong partition produces a plausible rate table rather than an error.
+
+    Raises:
+        ValueError: if a clade's era has no fitted model. This is deliberately
+            *not* caught alongside the empty-era skip: an absent era is decided
+            at DAG-construction time by requesting only the non-empty eras'
+            tables (``Snakefile: eras_present``), so reaching this point means a
+            clade was routed to an era that was never fit -- a wiring bug, not a
+            legitimate skip. One ``try/except`` around both turns a broken fit
+            into a silently absent table.
+    """
+    if log is None:
+        def log(_msg):
+            pass
+
+    if not train_by_era:
+        raise ValueError(
+            "train_by_era is empty: no era has training data, so no rates can "
+            "be fitted. An era with no clades is skipped at DAG-construction "
+            "time; an empty mapping here means every era was skipped."
+        )
+
+    fits = {}
+    for era in sorted(train_by_era):
+        train_df = train_by_era[era]
+        log(f"Fitting era {era!r} on {len(train_df)} curated training rows")
+        fits[era] = _fit_rates(train_df, lightswitch_boundaries)
+        rate, sites = fits[era]
+        log(
+            f"  era {era!r}: {len(sites)} training sites, rate range "
+            f"{rate.rates['rate'].min():.6g} - {rate.rates['rate'].max():.6g}"
+        )
+
+    # Process each clade against its own era's fit.
     for c in clades:
+        era = era_of_clade(c)
+        if era not in fits:
+            raise ValueError(
+                f"clade {c!r} maps to era {era!r}, which has no fitted rate "
+                f"model (fitted eras: {sorted(fits)}). A clade must be routed to "
+                f"an era that was actually fit; an era present in the counts "
+                f"cannot be empty, so this is a wiring error rather than the "
+                f"legitimate empty-era skip."
+            )
+        rate, sites = fits[era]
+
         count_clade = count_df.loc[count_df["clade"] == c, :].copy()
         count_clade_syn = count_clade.loc[
             count_clade["mut_class"] == "synonymous"
@@ -422,3 +510,31 @@ def add_expected_count(train_df, count_df, clades, lightswitch_boundaries=None):
         # Update count_df with predicted counts and tau_squared
         count_df.loc[count_clade.index, "expected_count"] = pred_count_clade
         count_df.loc[count_clade.index, "tau_squared"] = residual_clade
+
+
+def add_expected_count(train_df, count_df, clades, lightswitch_boundaries=None):
+    """
+    Add expected counts to count_df for all clades, from one pooled fit.
+
+    This function matches the SARS2-mut-fitness-v2 add_predicted_count function:
+    1. Train GLM on training data
+    2. For each clade, compute clade-specific normalization factor T
+    3. Apply normalized expectations to all mutations in the clade
+
+    Since #137 this is :func:`add_expected_count_by_era` with a single era, so
+    the pooled and per-era paths cannot diverge: the pooled result *is* the
+    degenerate per-era result, which is ISSUE-137 criterion 5 by construction.
+
+    Args:
+        train_df: Training DataFrame with curated synonymous mutations
+        count_df: DataFrame with mutation counts for all clades
+        clades: List of clade names to process
+        lightswitch_boundaries: Dict mapping mutation types to position boundaries
+    """
+    add_expected_count_by_era(
+        train_by_era={POOLED: train_df},
+        count_df=count_df,
+        clades=clades,
+        era_of_clade=lambda _clade: POOLED,
+        lightswitch_boundaries=lightswitch_boundaries,
+    )

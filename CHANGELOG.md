@@ -18,6 +18,126 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### v10 (EPIC [#138](https://github.com/matsengrp/mat-pcp/issues/138))
+
+**The reason for the bump is [#137](https://github.com/matsengrp/mat-pcp/issues/137):
+the neutral rate model is now fitted once per era instead of once globally, so
+`fitness/` and `aamut_fitness/` move on any tree spanning both eras.** Models
+trained on v9 fitness outputs should not be mixed with v10 ones.
+
+The other three items in this release change no output on their own — #135 and
+#139 are measurement-only, #136 is an environment pin that reproduced v9's md5s
+exactly — and ride the coordinated bump rather than carrying one each.
+
+- **[#136](https://github.com/matsengrp/mat-pcp/issues/136)**: `workflow/envs/bte.yml`
+  now pins `bte>=0.9.3` with `python>=3.10,<3.11`. `bte<=0.9.2`'s
+  `MATree.get_haplotype()` keeps the *first* mutation at a twice-mutated position and
+  discards later non-reversions, which would corrupt every PCP parent haplotype
+  (`pcp_from_tree.py:206`) and every window founder mutation set
+  (`windows/founder_muts.csv`). v9 was unaffected only by luck of the solve.
+  **No output change**: the re-solved env moved (bte build `py310h184ae93_1` →
+  `py310h1153794_2`, python 3.10.19 → 3.10.20) and a full test-data run still
+  reproduced `data/test_data/expected_summary.json` exactly, including every md5.
+  So this needs no bump of its own (#138 decision 4). New guard:
+  `tests/test_bte_haplotype.py`.
+- **[#135](https://github.com/matsengrp/mat-pcp/issues/135)** (measurement only, no
+  behaviour change): `workflow/scripts/audit_off_grid_drop.py` +
+  `analysis/135-off-grid-drop/` decompose `build_count_table`'s 46,284-row /
+  210,111-count "absent from the founder grid" drop. **100%** of it is off-founder
+  background at the nucleotide level (the twin of #130's codon-level filter), of
+  which **97.8% of counts restore the founder base** -- a reversion the grid cannot
+  represent by construction. Those two are strictly *nested*, not competing causes,
+  so their ratio is decided by cascade order; and `unexplained` is unreachable by
+  construction, so its being zero is a tautology rather than a completeness result.
+  Both are stated as such in the README and the script docstring.
+  Stable v8 -> v9 (-473 rows), with 100% of the change in the five
+  clades #129 fixed. Criterion 3's disposition table is in the README; nothing
+  adopted yet.
+- **[#139](https://github.com/matsengrp/mat-pcp/issues/139)** (additive outputs,
+  report-only): `chronumental_qc` now checks the **internal** node dates, not just
+  tips. Five new `REPORT` rows in `mat/node_dates_qc.tsv` plus three new binned
+  artifacts: `mat/node_dates_branch_dt.csv`,
+  `mat/node_dates_branch_dt_summary.csv` (per-bin median / IQR / p95 for branch Δt
+  binned by branch length in mutations, plus a pooled `all` row) and
+  `mat/node_dates_internal_checks.csv`. They gate nothing — the existing
+  `tip_residual` gate and its threshold are untouched. Internal dates are what
+  `modules/windowing.py` uses to bucket every branch into a time window, and until
+  now nothing checked them; `tip_residual` passing at `p95|res|=1.0d` over 17 M tips
+  is near-circular, since tip collection dates are the priors chronumental is fit
+  to. The five rows split into two kinds, which the report now labels: the checks
+  comparing an inferred date to an *observed* one measure metadata consistency and
+  downstream impact (and `internal_date_vs_min_descendant_observed` is *bounded* by
+  the tip residuals, so it is an amplified view of their positive tail rather than
+  independent evidence about internal placement), while
+  `internal_dt_to_closest_descendant` compares two inferred dates and so tests the
+  algorithm. On the v9 tree the latter reads median 8 d, p95 37 d, max 862 d, with
+  4.45% of internal nodes dated *simultaneously* with their nearest descendant.
+  Production distributions are committed under `analysis/139-node-dates/`, since
+  #141 picks thresholds from them. New guard: `tests/test_node_date_qc.py`.
+- **[#137](https://github.com/matsengrp/mat-pcp/issues/137) Task 1** (diagnostic only,
+  no pipeline rule reads it yet): `workflow/modules/era.py` carries the explicit
+  52-clade pre-Omicron/Omicron mapping and its year-prefix audit;
+  `analysis/137-era-offsets/` records the 51 × 12 synonymous offset table. G→T
+  separates completely by era (gap +0.393), so the era split is justified. Eleven of
+  twelve types do *not* separate — see
+  [#140](https://github.com/matsengrp/mat-pcp/issues/140).
+- **[#137](https://github.com/matsengrp/mat-pcp/issues/137) Tasks 2 and 3 — the
+  neutral model is now fitted per era.** This is the change the v10 bump is for:
+  it moves `fitness/` and `aamut_fitness/` on any multi-era tree.
+
+  **New outputs** (per tree, per era present): `glm/curated_counts_{era}.csv`,
+  `glm/master_table_{era}.csv`, `rates_table_{era}.csv`, and
+  `glm/era_fit_summary.csv`. The pooled `glm/master_table.csv`,
+  `glm/curated_counts.csv` and `rates_table.csv` are **retained unchanged** — the
+  pooled fit is the control arm of the per-era comparison, not legacy baggage.
+  Three separate files rather than one with an `era` column: DASM2's
+  `TabularRatesNeutralModel` reads rates in a row loop, so an unrecognized column
+  would be applied last-row-wins with no error.
+
+  **Changed outputs**: `fitness/expected_counts_by_clade.csv` and everything
+  derived from it (`fitness/ntmut_fitness*`, `aamut_fitness/*`) now take each
+  clade's `expected_count` and `tau_squared` from its **own era's** fit, dispatched
+  on the clade label via `modules/era.py`. Upstream dispatches on the positional
+  slice `clades[0:11]`, correct only while the counts file happens to arrive in
+  Nextstrain clade order; mat-pcp does not.
+
+  **Unchanged on a single-era tree, byte-for-byte.** `add_expected_count` is now
+  `add_expected_count_by_era` with one era, so the pooled path *is* the degenerate
+  per-era path. A full test-data run reproduced every v9 md5 —
+  `curated_counts.csv`, `master_table.csv`, `rates_table.csv`,
+  `expected_counts_by_clade.csv`, `ntmut_fitness_aggregated.csv`,
+  `all_aamut_fitness.csv` — and `data/test_data/expected_summary.json` is
+  unchanged. That makes the CI run a regression check on the split rather than a
+  new path with no baseline.
+
+  **Empty era → the rule is skipped, and the skip is recorded.** The GLM cannot
+  fit an empty partition, and single-era trees are normal (the test config's three
+  clades are all pre-Omicron; the BA.2/JN.1/XFG trees are single-era by
+  construction). `eras_present` resolves the `get_clades` checkpoint and requests
+  only non-empty eras, rather than emitting a header-only placeholder that would
+  look like a fit. Because a missing file cannot distinguish "legitimately absent"
+  from "dropped by a wiring mistake", `glm/era_fit_summary.csv` names every era
+  with `fitted` true/false and its clade list.
+
+  **Conserved sites are computed over all clades before the partition**, matching
+  upstream. Computing conservation within era would give each era a different
+  training site set and break comparability with the pooled fit.
+
+  **`window_expected_counts` deliberately stays on the pooled table** (EPIC #138
+  decision 7). The windowed path keys on `founder_id` with no clade to dispatch on,
+  and a per-window date label is wrong exactly across the transition. `T_window`
+  absorbs any constant rate factor, so only the split's relative structure leaks
+  through. Documented at the call site; era dispatch there is a follow-up.
+
+  **`OUTPUT_SCHEMA.md` now documents `glm/master_table.csv`**, which had shipped
+  since v1 with no schema entry.
+
+  New guards: `tests/test_era_rate_dispatch.py` (the *only* two-era coverage — no
+  shipped config is two-era, so CI's pipeline run cannot exercise the dispatch; it
+  execs the real `curate_counts.py` and `expected_counts_by_clade.py`, and is
+  mutation-tested against four separate breaks of them) and
+  `validate_test.py::validate_era_rate_tables`.
+
 ### v9
 
 **Three of these fix outputs that were silently wrong in v8, so v9 is not an optional
