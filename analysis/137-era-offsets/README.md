@@ -209,14 +209,8 @@ Those two coexist because `T` is a **single scalar per clade** balancing *all*
 synonymous types together. G→T can be under-predicted while other types are
 over-predicted and the clade total still nets to zero by construction. So the residual
 is a **within-era, per-mutation-type** bias in the GLM's relative rates — a different
-defect from the one this issue addressed, and one an era split cannot reach.
-
-The likely mechanism, flagged in ISSUE-137's own criterion 6: `glm.py` fits
-`log(count + 0.5)` by least squares and exponentiates the prediction, so it recovers a
-conditional *geometric* mean where the offset compares *arithmetic* sums. By Jensen
-that under-predicts, worst for the most over-dispersed type — which G→T is. Worth a
-follow-up issue; it is not a regression, and v10 is strictly better than v9 on this
-measure.
+defect from the one this issue addressed, and one an era split cannot reach. It is not
+a regression: v10 is strictly better than v9 on this measure.
 
 ### Four types gained era-structured offsets
 
@@ -224,7 +218,7 @@ measure.
 started near zero, so percentage reductions are meaningless for them. Note mat-pcp's
 *fitted* AT era ratio (+0.1306) matches upstream's (+0.1294) almost exactly — so by
 upstream's standard these rates are right, and the new offset says the pooled model
-had been accidentally well-calibrated for AT. Same follow-up.
+had been accidentally well-calibrated for AT.
 
 ### The other criteria
 
