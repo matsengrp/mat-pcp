@@ -2,7 +2,7 @@
 """Pin the pre-Omicron / Omicron era mapping and its year-prefix audit (#137).
 
 ``modules/era.py`` restores the ``pre_omicron_or_omicron`` covariate that mat-pcp
-lost when it ported ``SARS2-mut-fitness-v2``'s GLM. The mapping is 52
+lost when it ported ``SARS2-mut-fitness-v2``'s GLM. The mapping is 58
 hand-maintained entries, and its failure mode is a clade in the *wrong list*,
 which produces a plausible rate table rather than an error. Nothing downstream can
 see it: both estimators would be consistently wrong, exactly the #129/#130/#133
@@ -70,11 +70,20 @@ ERA_MODULE = REPO_ROOT / "workflow" / "modules" / "era.py"
 PRODUCTION_CLADES = (
     REPO_ROOT / "tests" / "data" / "production_clade_counts_2026-04-22.csv"
 )
+# The 2026-08-06 trees add 25D-25I. Frozen separately rather than replacing the
+# 2026-04-22 fixture, so the "CLADE_ERA maps nothing extra" direction of the check
+# stays two-sided: a clade on neither shipped tree is still a drift failure.
+# Both 2026-08-06 trees carry identical clade sets, so one fixture covers them.
+PRODUCTION_CLADES_NEW = (
+    REPO_ROOT / "tests" / "data" / "production_clade_counts_2026-08-06.csv"
+)
 
 # The 2026-04-22 tree's split, stated here so a mapping edit that keeps the
 # partition total but moves a clade across the boundary still fails.
 EXPECTED_N_PRE_OMICRON = 22
 EXPECTED_N_OMICRON = 30
+# The 2026-08-06 trees add six Omicron clades and no pre-Omicron ones.
+EXPECTED_N_OMICRON_NEW = 36
 
 # Single-entry mutations the audit must reject. All three 2021-named Omicron
 # clades are included because the year prefix alone cannot separate them from
@@ -100,44 +109,56 @@ def _load_era():
     return module
 
 
-def _production_clades():
-    with open(PRODUCTION_CLADES, newline="") as handle:
+def _production_clades(path=PRODUCTION_CLADES):
+    with open(path, newline="") as handle:
         return [row["Nextstrain_clade_usher"] for row in csv.DictReader(handle)]
 
 
 def check_mapping_covers_production_tree():
-    """Every clade on the release tree must be mapped, with the right split."""
+    """Every clade on every shipped tree must be mapped, with the right split."""
     failures = []
     era = _load_era()
     clades = _production_clades()
+    clades_new = _production_clades(PRODUCTION_CLADES_NEW)
 
-    if len(clades) != EXPECTED_N_PRE_OMICRON + EXPECTED_N_OMICRON:
-        failures.append(
-            f"the frozen clade_counts.csv has {len(clades)} clades but this test "
-            f"expects {EXPECTED_N_PRE_OMICRON + EXPECTED_N_OMICRON}; if the tree "
-            f"changed, update both the fixture and the expected split"
-        )
+    for label, got, expected in (
+        ("2026-04-22", clades, EXPECTED_N_PRE_OMICRON + EXPECTED_N_OMICRON),
+        ("2026-08-06", clades_new, EXPECTED_N_PRE_OMICRON + EXPECTED_N_OMICRON_NEW),
+    ):
+        if len(got) != expected:
+            failures.append(
+                f"the frozen {label} clade_counts.csv has {len(got)} clades but "
+                f"this test expects {expected}; if the tree changed, update both "
+                f"the fixture and the expected split"
+            )
 
-    missing = sorted(set(clades) - set(era.CLADE_ERA))
-    if missing:
-        failures.append(
-            f"clades on gisaid-and-public_2026-04-22 with no era: {missing}"
-        )
-    extra = sorted(set(era.CLADE_ERA) - set(clades))
+    for label, got in (("2026-04-22", clades), ("2026-08-06", clades_new)):
+        missing = sorted(set(got) - set(era.CLADE_ERA))
+        if missing:
+            failures.append(f"clades on {label} with no era: {missing}")
+
+    # Two-sided: a CLADE_ERA entry on neither shipped tree is drift, even though a
+    # superset is harmless at runtime. Checked against the union so that adding a
+    # newer tree does not require deleting the older tree's fixture.
+    extra = sorted(set(era.CLADE_ERA) - set(clades) - set(clades_new))
     if extra:
         failures.append(
-            f"CLADE_ERA maps clades absent from the release tree: {extra} "
+            f"CLADE_ERA maps clades absent from every shipped tree: {extra} "
             f"(harmless, but the fixture and mapping have drifted)"
         )
 
-    n_pre = sum(1 for c in clades if era.CLADE_ERA.get(c) == era.PRE_OMICRON)
-    n_omi = sum(1 for c in clades if era.CLADE_ERA.get(c) == era.OMICRON)
-    if (n_pre, n_omi) != (EXPECTED_N_PRE_OMICRON, EXPECTED_N_OMICRON):
-        failures.append(
-            f"era split is {n_pre} pre-Omicron / {n_omi} Omicron, expected "
-            f"{EXPECTED_N_PRE_OMICRON}/{EXPECTED_N_OMICRON} -- a clade has moved "
-            f"across the boundary"
-        )
+    for label, got, exp_pre, exp_omi in (
+        ("2026-04-22", clades, EXPECTED_N_PRE_OMICRON, EXPECTED_N_OMICRON),
+        ("2026-08-06", clades_new, EXPECTED_N_PRE_OMICRON, EXPECTED_N_OMICRON_NEW),
+    ):
+        n_pre = sum(1 for c in got if era.CLADE_ERA.get(c) == era.PRE_OMICRON)
+        n_omi = sum(1 for c in got if era.CLADE_ERA.get(c) == era.OMICRON)
+        if (n_pre, n_omi) != (exp_pre, exp_omi):
+            failures.append(
+                f"{label} era split is {n_pre} pre-Omicron / {n_omi} Omicron, "
+                f"expected {exp_pre}/{exp_omi} -- a clade has moved across the "
+                f"boundary"
+            )
 
     bad = sorted(c for c, e in era.CLADE_ERA.items() if e not in era.ERAS)
     if bad:

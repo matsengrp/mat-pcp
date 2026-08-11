@@ -24,7 +24,7 @@ upstream notebook did. This module is the mapping that restores it.
    #129/#130/#133 silent-drop shape: the wrong era produces a plausible fit, not
    an error.
 
-**Why the mapping is audited rather than derived.** :data:`CLADE_ERA` is 52
+**Why the mapping is audited rather than derived.** :data:`CLADE_ERA` is 58
 hand-maintained entries whose failure mode is a clade in the wrong list, which no
 internal cross-check can see. :func:`era_from_label` is a total predicate over
 the Nextstrain naming convention (year of emergence + letter) that
@@ -41,7 +41,7 @@ Four properties of that predicate are load-bearing, and each is asserted by
   ``era_from_label`` calls every ``21x`` clade pre-Omicron, so auditing the
   shipped mapping raises on ``21K``, ``21L`` and ``21M`` — three failures whose
   obvious "fix" is to move all three into ``pre_omicron``, after which the audit
-  passes over all 52 entries with the three Omicron founders in the wrong era.
+  passes over all 58 entries with the three Omicron founders in the wrong era.
   (Moving ``21K`` alone does *not* pass: ``21L``/``21M`` then disagree. The
   vacuity needs all three, which is exactly what a maintainer clearing three
   audit failures would do.)
@@ -61,7 +61,7 @@ recording because it looks like a better check. On the test data it nearly does
 (``21K (Omicron)``, ``21L (Omicron)``, ``21M (Omicron)``), but on the production
 tree ``Nextstrain_clade_usher`` gives WHO names through ``21J`` and Pango
 lineages from ``21K`` on — ``21K (BA.1)``, ``21L (BA.2)``, ``22A (BA.4)``,
-``23I (BA.2.86)`` — and ``21M (Omicron)`` is the only one of 52 values that names
+``23I (BA.2.86)`` — and ``21M (Omicron)`` is the only one of 58 values that names
 the era at all. The awk normalization above strips it in any case.
 """
 
@@ -72,10 +72,13 @@ OMICRON = "omicron"
 ERAS = (PRE_OMICRON, OMICRON)
 
 #: Every ``Nextstrain_clade_usher`` value on ``gisaid-and-public_2026-04-22``
-#: (52 clades, ``mat/clade_counts.csv``). ``21A`` is mapped but not processed by
-#: the pipeline — it is the one 19A-22F clade absent from the Neher founder JSON,
-#: so ``clades_to_exclude`` drops it (#129). It is kept here so the audit covers
-#: it and so re-adding a founder does not silently reintroduce an unmapped clade.
+#: (52 clades, ``mat/clade_counts.csv``), plus the six ``25D``-``25I`` that the
+#: 2026-08-06 trees add. ``21A`` and ``25I`` are mapped but not processed by the
+#: pipeline — neither resolves to a clade founder (``21A`` is the one 19A-22F
+#: clade absent from the Neher founder JSON; ``25I``'s lineage ``BA.3.2`` is
+#: absent from the frozen Roemer JSON), so ``clades_to_exclude`` drops both
+#: (#129). They are kept here so the audit covers them and so re-adding a founder
+#: does not silently reintroduce an unmapped clade.
 CLADE_ERA = {
     # Pre-Omicron: 19A-19B, 20A-20J, 21A-21J (22 clades, 21 processed).
     "19A": PRE_OMICRON,
@@ -131,6 +134,13 @@ CLADE_ERA = {
     "25A": OMICRON,
     "25B": OMICRON,
     "25C": OMICRON,
+    # New in the 2026-08-06 trees. 25I is excluded from processing (see above).
+    "25D": OMICRON,
+    "25E": OMICRON,
+    "25F": OMICRON,
+    "25G": OMICRON,
+    "25H": OMICRON,
+    "25I": OMICRON,
 }
 
 #: The three 2021-named clades that are Omicron. ``21K`` is BA.1, ``21L`` is
