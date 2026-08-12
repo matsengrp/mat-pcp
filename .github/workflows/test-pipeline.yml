@@ -212,6 +212,20 @@ jobs:
       run: |
         pixi run python tests/test_node_date_qc.py
 
+    # Fixture-only. Both of filter_metadata's date failure modes are silent and
+    # neither is reachable from a shipped config, so a pipeline run cannot cover
+    # them: a row value the parser cannot read must become NaT and be dropped
+    # (through v10 it aborted the run instead, which is how the 2026-08-06
+    # metadata's `[2022 TO 2024]` killed a 10-hour job 90 s in), while a *config*
+    # date that cannot be read must raise -- min_leaf_date is used only as
+    # `date < parsed`, and every comparison against NaT is False, so returning
+    # NaT there silently disables the min-date QC filter at exit 0. The two
+    # directions have to be checked together: "the Solr range no longer raises"
+    # alone passes on a parser that returns NaT for everything.
+    - name: Verify the metadata date parser and the config-date strictness split
+      run: |
+        pixi run python tests/test_date_parsing.py
+
     # The steps above name each test file so a failure points at a readable log.
     # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]
     # is empty, so a *new* tests/test_*.py runs zero times and CI stays green --

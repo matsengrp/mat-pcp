@@ -103,7 +103,8 @@ CLADE_ERA = {
     "21H": PRE_OMICRON,
     "21I": PRE_OMICRON,
     "21J": PRE_OMICRON,
-    # Omicron: 21K (BA.1), 21L (BA.2), 21M (basal B.1.1.529), then 22A+ (30).
+    # Omicron: 21K (BA.1), 21L (BA.2), 21M (basal B.1.1.529), then 22A+ (36, of
+    # which 35 are processed: 25I is excluded, see above).
     "21K": OMICRON,
     "21L": OMICRON,
     "21M": OMICRON,

@@ -82,6 +82,34 @@ def robust_fromisoformat(date_string: str) -> pd.Timestamp:
         return pd.NaT
 
 
+def config_date(date_string: str, key: str) -> pd.Timestamp:
+    """Parse a *config-supplied* date, raising rather than returning NaT.
+
+    ``robust_fromisoformat`` is lenient by design because it reads external
+    per-row metadata, where an unrecognized value is data to be dropped. A date
+    from the config is the opposite case: a typo there is a maintainer error, and
+    a run must not proceed on it.
+
+    Without this, widening ``robust_fromisoformat``'s guard to all four branches
+    silently disabled a QC filter. ``min_leaf_date`` is used only as
+    ``meta_df["date"] < robust_fromisoformat(MIN_LEAF_DATE)``, and every
+    comparison against ``NaT`` is ``False`` -- so a malformed value made
+    ``invalid_time`` all-False and dropped zero samples, at exit 0 with no
+    warning. ``max_leaf_date`` is parsed with a bare ``datetime.fromisoformat``
+    and so kept failing loudly; the two date knobs must not differ in strictness.
+    The accepted formats are unchanged -- this only converts an unparseable value
+    from a silent no-op back into an error.
+    """
+    parsed = robust_fromisoformat(date_string)
+    if pd.isna(parsed):
+        raise ValueError(
+            f"qc_filter_options.{key} = {date_string!r} is not a parseable date. "
+            f"Unlike a metadata row, a config date is not dropped when it fails "
+            f"to parse: {key} would silently filter nothing. Fix the config."
+        )
+    return parsed
+
+
 def main():
     """Main filtering function."""
     # Get parameters from snakemake
@@ -147,7 +175,7 @@ def main():
             meta_df = meta_df[valid_dates]
 
         invalid_resolution = meta_df["date_resolution_str"].isin(INVALID_DATE_RES)
-        invalid_time = meta_df["date"] < robust_fromisoformat(MIN_LEAF_DATE)
+        invalid_time = meta_df["date"] < config_date(MIN_LEAF_DATE, "min_leaf_date")
         invalid_date = meta_df[invalid_resolution | invalid_time]
         qc_1_strain_to_drop = invalid_date["strain"].to_list()
         meta_df.drop(invalid_date.index, inplace=True)

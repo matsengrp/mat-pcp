@@ -73,7 +73,10 @@ PRODUCTION_CLADES = (
 # The 2026-08-06 trees add 25D-25I. Frozen separately rather than replacing the
 # 2026-04-22 fixture, so the "CLADE_ERA maps nothing extra" direction of the check
 # stays two-sided: a clade on neither shipped tree is still a drift failure.
-# Both 2026-08-06 trees carry identical clade sets, so one fixture covers them.
+# Frozen from public_2026-08-06's mat/clade_counts.csv. Both 2026-08-06 trees
+# carry identical clade *labels* (verified; only the counts differ), so one
+# fixture covers them -- but name the source tree, since a future regeneration
+# from the other tree would still pass and the provenance would be lost.
 PRODUCTION_CLADES_NEW = (
     REPO_ROOT / "tests" / "data" / "production_clade_counts_2026-08-06.csv"
 )
@@ -165,9 +168,15 @@ def check_mapping_covers_production_tree():
         failures.append(f"clades mapped to an era outside ERAS: {bad}")
 
     if not failures:
+        # Per tree, not once: reusing the loop's last n_pre/n_omi alongside the
+        # first fixture's length printed "all 52 clades mapped (22 / 36)", which
+        # does not add up and invites a maintainer to "fix" a real count.
         print(
-            f"  all {len(clades)} release-tree clades mapped "
-            f"({n_pre} pre-Omicron / {n_omi} Omicron)"
+            f"  all clades mapped on both shipped trees: "
+            f"2026-04-22 {len(clades)} "
+            f"({EXPECTED_N_PRE_OMICRON} pre-Omicron / {EXPECTED_N_OMICRON} Omicron), "
+            f"2026-08-06 {len(clades_new)} "
+            f"({EXPECTED_N_PRE_OMICRON} pre-Omicron / {EXPECTED_N_OMICRON_NEW} Omicron)"
         )
     return failures
 

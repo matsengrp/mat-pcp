@@ -55,6 +55,14 @@ artifact, built with the v10 mask file, and is not rebuilt.
   an unparseable date means an unfamiliar metadata format rather than an ordinary
   missing value. Verified over every distinct date value in all three trees: no
   previously-parsed value changes.
+  A **config** date is held to the opposite standard: `config_date` parses
+  `min_leaf_date` and raises rather than returning `NaT`. Widening the row
+  parser's guard had made a malformed `min_leaf_date` silently disable the
+  min-date filter -- it is used only as `date < parsed`, and every comparison
+  against `NaT` is False, so zero samples were dropped at exit 0 -- while
+  `max_leaf_date`, parsed with a bare `datetime.fromisoformat`, still failed
+  loudly. The accepted formats are unchanged. Both halves are pinned by the
+  new `tests/test_date_parsing.py`, which execs the real script.
 - **New trees**: `config/config-2026-08-06-six-genes.yaml` adds
   `public_2026-08-06` and `gisaid-and-public_2026-08-06`. Kept as a separate config
   from the 2026-04-22 one — `roemer_nextstrain_to_pango` is passed whole as a rule
