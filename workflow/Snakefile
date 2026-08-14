@@ -84,6 +84,12 @@ TREE_LABEL_PATTERN = r"[A-Za-z0-9_.+-]+"
 # ``extract_pcps_by_clade`` site because that rule is parsed later in the file.
 CLADE_FOUNDER_FASTA = os.path.join(OUTDIR, "clade_founders/{clade}.fa")
 
+# Same, for a clade's founder sliced down to one gene (produced by rule
+# ``slice_founder_gene``; consumed by ``gene_founders_all_clades`` and
+# ``censor_table``). Defined once for the same reason: three hand-built copies
+# of this shape were one edit away from drifting apart.
+GENE_FOUNDER_FASTA = os.path.join(OUTDIR, "clade_founders/{gene}/{clade}.fa")
+
 
 def _normalize_trees(cfg):
     """Read and validate the ``trees:`` mapping from the config.
@@ -1219,7 +1225,7 @@ rule slice_founder_gene:
         fasta=rules.clade_founder_fasta.output.fasta,
         gtf=rules.edit_ref_gtf.output.gtf
     output:
-        gene_fasta=os.path.join(OUTDIR, "clade_founders/{gene}/{clade}.fa")
+        gene_fasta=GENE_FOUNDER_FASTA
     params:
         pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
     log:
@@ -1233,8 +1239,7 @@ rule slice_founder_gene:
 def _gene_founder_slices(wildcards):
     """Every adequate-count clade's founder slice for one gene."""
     return per_clade_inputs(
-        os.path.join(OUTDIR, "clade_founders", wildcards.gene, "{clade}.fa"),
-        wildcards,
+        GENE_FOUNDER_FASTA.replace("{gene}", wildcards.gene), wildcards
     )
 
 
@@ -1701,8 +1706,8 @@ def _gene_founder_slice_map(wildcards):
     clade's founder and still produce a well-formed table.
     """
     return {
-        clade: os.path.join(
-            tree_outdir(wildcards.tree), "clade_founders", wildcards.gene, f"{clade}.fa"
+        clade: GENE_FOUNDER_FASTA.format(
+            tree=wildcards.tree, gene=wildcards.gene, clade=clade
         )
         for clade in clades_w_adequate_counts(wildcards)
     }

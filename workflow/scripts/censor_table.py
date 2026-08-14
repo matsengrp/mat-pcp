@@ -198,6 +198,9 @@ for clade in roster:
     for nt_site in clade_sites.get(clade, ()):
         expected_rows += occurrences[nt_site]
     for mutation in clade_mutations.get(clade, ()):
+        # Re-parsed rather than carried over from the emit loop on purpose: this
+        # count has to be derived independently to be worth anything. Parsing is
+        # already known to succeed, since the emit loop ran first.
         expected_rows += occurrences[parse_mutation(mutation, clade)[1]]
 
 if len(rows) != expected_rows:
@@ -268,7 +271,8 @@ for clade, nt_site, nt_index, _, _ in rows:
 # branch relative to its parent -- not to the clade founder. So from_nt need not
 # equal the founder base: a mask can legitimately sit on a derived background,
 # including a reversion back toward the founder. Measured on the v11
-# gisaid-and-public tree, of 1,126 directional masks across 41 clades:
+# gisaid-and-public tree, of the 1,126 directional masks carried by the 32
+# clades that have any (41 of the tree's clades carry a mask of some kind):
 # 1,083 have founder == from_nt, 36 have founder == to_nt (a reversion toward
 # the founder, exactly the artifact class UShER masking targets), and 7 have
 # neither (a twice-derived background, e.g. 25A A22896T where the founder is G).
@@ -282,6 +286,14 @@ for clade, nt_site, nt_index, from_nt, to_nt in rows:
     if not from_nt:
         continue
     if clade not in founder_cache:
+        if clade not in founder_fastas:
+            raise ValueError(
+                f"no {gene} founder slice was passed for clade {clade!r}, which "
+                f"the roster names. params.clades and params.founder_fastas are "
+                f"built from the same checkpoint call in the Snakefile, so this "
+                f"means the two have been decoupled; a bare KeyError here would "
+                f"not say that. Known keys: {sorted(founder_fastas)}"
+            )
         founder_cache[clade] = read_fasta(founder_fastas[clade])
     founder = founder_cache[clade]
     if len(founder) != len(positions):

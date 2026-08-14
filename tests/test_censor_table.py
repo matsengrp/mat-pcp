@@ -258,6 +258,12 @@ def check_single_block_known_answer():
 # ---------------------------------------------------------------------------
 
 
+# Carries a directional mask on the shared nucleotide as well as whole-site
+# masks across it. The two emit loops in censor_table.py are separate blocks of
+# code with their own `for nt_index in indices`, so a yaml with only `sites`
+# pins the one-to-many behaviour for whole-site masks and leaves the directional
+# loop free to collapse to a single index -- which would silently censor one of
+# the two codons the shared nucleotide sits in.
 SYNTHETIC_JUNCTION_YAML = """\
 junction_block:
   clades:
@@ -266,7 +272,16 @@ junction_block:
     - 13467
     - 13468
     - 13469
+  mutations:
+    - A13468G
 """
+
+# (nt_site, nt_index) for the whole-site masks and for the directional mask.
+# 13468 is read at BOTH index 26 and index 27 -- ORF1b's two blocks share it so
+# the -1 frameshift stays in frame -- and the two indices fall in codons 9 and
+# 10, so collapsing either loop to one index loses a codon.
+JUNCTION_SITE_ROWS = [(13467, 25), (13468, 26), (13468, 27), (13469, 28)]
+JUNCTION_MUT_ROWS = [(13468, 26), (13468, 27)]
 
 
 def check_frameshift_junction_emits_two_rows():
@@ -295,15 +310,44 @@ def check_frameshift_junction_emits_two_rows():
             gtf_genes={"ORF1ab": ORF1AB_BLOCKS},
         )
 
-        if len(rows) != 4:
+        if len(rows) != len(JUNCTION_SITE_ROWS) + len(JUNCTION_MUT_ROWS):
             failures.append(
-                f"three masked sites spanning the frameshift junction should "
-                f"emit 4 rows (13468 is read twice), got {len(rows)}"
+                f"three masked sites plus one directional mask spanning the "
+                f"frameshift junction should emit "
+                f"{len(JUNCTION_SITE_ROWS) + len(JUNCTION_MUT_ROWS)} rows "
+                f"(13468 is read twice by each loop), got {len(rows)}"
             )
 
-        got = sorted((int(r["nt_site"]), int(r["nt_index"])) for r in rows)
-        if got != [(13467, 25), (13468, 26), (13468, 27), (13469, 28)]:
-            failures.append(f"junction indices wrong: {got}")
+        # Checked per emit loop, not pooled: censor_table.py walks whole-site
+        # masks and directional masks in two separate blocks, each with its own
+        # index expansion, so a pooled count can stay right while one loop
+        # collapses and the other over-emits.
+        site_rows = sorted(
+            (int(r["nt_site"]), int(r["nt_index"])) for r in rows if not r["from_nt"]
+        )
+        if site_rows != JUNCTION_SITE_ROWS:
+            failures.append(
+                f"whole-site junction indices wrong: {site_rows} != "
+                f"{JUNCTION_SITE_ROWS}"
+            )
+
+        mut_rows = sorted(
+            (int(r["nt_site"]), int(r["nt_index"])) for r in rows if r["from_nt"]
+        )
+        if mut_rows != JUNCTION_MUT_ROWS:
+            failures.append(
+                f"directional junction indices wrong: {mut_rows} != "
+                f"{JUNCTION_MUT_ROWS}. A directional mask on the shared "
+                f"nucleotide must emit both indices, exactly as a whole-site "
+                f"mask does."
+            )
+
+        bases = {(r["from_nt"], r["to_nt"]) for r in rows if r["from_nt"]}
+        if bases != {("A", "G")}:
+            failures.append(
+                f"the directional junction rows should carry A->G on both "
+                f"indices, got {bases}"
+            )
 
         positions = sequences.cds_nt_positions(ORF1B_BLOCKS)
         if not (positions[26] == positions[27] == 13468):
@@ -341,16 +385,31 @@ def check_flat_offset_is_caught():
         yaml_path.write_text(SYNTHETIC_JUNCTION_YAML)
 
         text = CENSOR_SCRIPT.read_text()
-        corrupted = text.replace(
-            "        for nt_index in indices:\n            rows.append((clade, nt_site, nt_index, \"\", \"\"))",
-            "        for nt_index in indices[:1]:\n            rows.append((clade, nt_site, nt_index, \"\", \"\"))",
-        )
-        if corrupted == text:
-            failures.append(
-                "the mutation test could not find the site-mask emit loop to "
-                "corrupt; it is no longer testing anything. Update the patch."
+
+        # Both emit loops, separately. They are two distinct blocks of code with
+        # their own index expansion, so corrupting only the whole-site one leaves
+        # the guard unexercised against a directional mask -- and the directional
+        # rows are the half a training loss keys on.
+        emit_loops = {
+            "whole-site": (
+                '        for nt_index in indices:\n'
+                '            rows.append((clade, nt_site, nt_index, "", ""))'
+            ),
+            "directional": (
+                "        for nt_index in indices:\n"
+                "            rows.append((clade, nt_site, nt_index, from_nt, to_nt))"
+            ),
+        }
+        for label, original in emit_loops.items():
+            corrupted = text.replace(
+                original, original.replace("indices:", "indices[:1]:")
             )
-        else:
+            if corrupted == text:
+                failures.append(
+                    f"the mutation test could not find the {label} emit loop to "
+                    f"corrupt; it is no longer testing anything. Update the patch."
+                )
+                continue
             try:
                 run_censor_table(
                     tmpdir,
@@ -363,14 +422,15 @@ def check_flat_offset_is_caught():
                     script_text=corrupted,
                 )
                 failures.append(
-                    "dropping the second index at the frameshift junction did "
-                    "NOT raise; the row-count reconciliation guard is vacuous"
+                    f"dropping the second index at the frameshift junction in "
+                    f"the {label} emit loop did NOT raise; the row-count "
+                    f"reconciliation guard is vacuous for that loop"
                 )
             except ValueError as exc:
                 if "account for" not in str(exc):
                     failures.append(
-                        f"flat offset raised, but not from the reconciliation "
-                        f"guard: {exc}"
+                        f"flat offset in the {label} emit loop raised, but not "
+                        f"from the reconciliation guard: {exc}"
                     )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -521,9 +581,9 @@ def check_swapped_direction_is_caught():
     Individually, ``from_nt != founder`` is legitimate: matUtils reports each
     branch's mutations relative to its *parent*, not to the clade founder, so a
     mask can sit on a derived background -- including a reversion back toward the
-    founder. Measured on the v11 gisaid-and-public tree, of 1,126 directional
-    masks across 41 clades, 1,083 have founder == from_nt, 36 have
-    founder == to_nt and 7 have neither. Asserting equality (as #144 originally
+    founder. Measured on the v11 gisaid-and-public tree, of the 1,126 directional
+    masks carried by the 32 clades that have any, 1,083 have founder == from_nt,
+    36 have founder == to_nt and 7 have neither. Asserting equality (as #144 originally
     specified) would fail on real data, so the guard is on the *ratio*, which a
     swap inverts wholesale.
     """

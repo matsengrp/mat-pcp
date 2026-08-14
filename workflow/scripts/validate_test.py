@@ -1170,7 +1170,10 @@ def validate_censor_table(output_dir, yaml_path="data/usher_masked_sites.yaml"):
     asserted here. What a run *can* assert, and what is non-vacuous even when the
     table is empty, is the roster: a clade with nothing censored contributes zero
     rows, so the sidecar is the only thing that distinguishes it from a mistyped
-    clade name. It must name every clade the run processed.
+    clade name. It must name every clade the run processed -- checked as an
+    equality against ``clade_founders/{gene}/*.fa`` rather than as a subset of
+    clade_counts.csv, since the latter is a superset of what any run processes
+    and so cannot see a roster that drops a clade.
 
     Also checks that the two masking outputs are both present. They carry
     different exclusion reasons at different granularity, and a training run must
@@ -1193,20 +1196,51 @@ def validate_censor_table(output_dir, yaml_path="data/usher_masked_sites.yaml"):
     if not genes:
         return [], f"SKIPPED: no per-gene PCP directories under {pcps_root}"
 
+    # Two clade sets, checked in two different directions, because they fail
+    # differently.
+    #
+    # `adequate_clades` is every clade clade_counts.csv calls adequate. It is a
+    # *superset* of what a run processes -- `clades_w_adequate_counts` then
+    # applies `clades_to_exclude` and truncates to `max_clades`, and both are set
+    # in shipped configs (config.yaml excludes 21A; config_test_data.yaml caps at
+    # 3) -- so it can only be used to catch a roster naming a clade that is not a
+    # clade at all. Asserting the roster equals it would fail every correct run.
+    #
+    # `clade_founders/{gene}/*.fa` is the set the run actually processed for this
+    # gene: the Snakefile materializes one founder slice per
+    # `clades_w_adequate_counts` clade, which is the same list `censor_table.py`
+    # writes as its roster. That admits an *equality* check, and equality is the
+    # point -- the roster's whole job is to make "clade processed, nothing
+    # censored" distinguishable from "clade never processed", which a
+    # subset-of-a-superset test cannot see. Without it a roster silently missing
+    # a processed clade passes, which is the vacuity this function exists to
+    # prevent.
     clade_counts = os.path.join(output_dir, "mat", "clade_counts.csv")
-    expected_clades = None
+    adequate_clades = None
     if os.path.isfile(clade_counts):
         counts = pd.read_csv(clade_counts)
         clade_col = next(
             (c for c in counts.columns if c.startswith("Nextstrain_clade")), None
         )
         if clade_col is not None:
-            expected_clades = set(
+            adequate_clades = set(
                 counts[counts["adequate_sample_counts"] == True][clade_col].dropna()
             )
 
+    def processed_clades_for(gene):
+        """The clades this run built founder slices for, or None if unavailable."""
+        gene_founders = os.path.join(output_dir, "clade_founders", gene)
+        if not os.path.isdir(gene_founders):
+            return None
+        return {
+            name[: -len(".fa")]
+            for name in os.listdir(gene_founders)
+            if name.endswith(".fa")
+        }
+
     differences = []
     total_rows = 0
+    roster_size = 0
     for gene in genes:
         table_path = os.path.join(pcps_root, gene, "censored_mutations.csv")
         roster_path = os.path.join(pcps_root, gene, "censored_mutations.clades.txt")
@@ -1247,14 +1281,35 @@ def validate_censor_table(output_dir, yaml_path="data/usher_masked_sites.yaml"):
             )
 
         roster = [line for line in open(roster_path).read().splitlines() if line]
+        roster_size = max(roster_size, len(roster))
         if roster != sorted(roster):
             differences.append(f"{gene} censor clade roster is not sorted")
         if len(roster) != len(set(roster)):
             differences.append(f"{gene} censor clade roster has duplicates")
-        if expected_clades is not None and set(roster) - expected_clades:
+        if adequate_clades is not None and set(roster) - adequate_clades:
             differences.append(
                 f"{gene} censor clade roster names clades absent from "
-                f"clade_counts.csv: {sorted(set(roster) - expected_clades)}"
+                f"clade_counts.csv: {sorted(set(roster) - adequate_clades)}"
+            )
+
+        processed = processed_clades_for(gene)
+        if processed is None:
+            differences.append(
+                f"{gene} has a censor table but no clade_founders/{gene}/ "
+                f"directory, so its roster cannot be checked for completeness. "
+                f"The rule declares those founders as inputs, so they must exist "
+                f"wherever the table does."
+            )
+        elif set(roster) != processed:
+            missing = sorted(processed - set(roster))
+            extra = sorted(set(roster) - processed)
+            differences.append(
+                f"{gene} censor clade roster does not match the clades this run "
+                f"processed (clade_founders/{gene}/*.fa): missing {missing}, "
+                f"unexpected {extra}. A clade omitted from the roster is "
+                f"indistinguishable to a consumer from one that was never "
+                f"processed, so 'nothing censored here' would read as 'unknown "
+                f"clade'."
             )
         missing_from_roster = set(table["clade"]) - set(roster)
         if missing_from_roster:
@@ -1265,8 +1320,11 @@ def validate_censor_table(output_dir, yaml_path="data/usher_masked_sites.yaml"):
                 f"be a superset of the rows."
             )
 
+    # The roster size is reported alongside the row count so that "0 rows" reads
+    # as "checked N clades and none had a mask" rather than as "checked nothing".
     return differences, (
-        f"Censor tables: {len(genes)} gene(s), {total_rows} row(s) total"
+        f"Censor tables: {len(genes)} gene(s), {total_rows} row(s) total, "
+        f"{roster_size} clade(s) per roster"
         + (" (empty on the test clades, as expected)" if total_rows == 0 else "")
     )
 
