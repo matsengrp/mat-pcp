@@ -490,9 +490,10 @@ mat-pcp/
     A directional mask's `from_nt` therefore need **not** equal the clade
     founder's base: the mask can legitimately sit on a derived background,
     including a reversion back toward the founder, which is exactly the artifact
-    class UShER masking targets. Of 1,126 directional masks across 41 clades on
-    the v11 gisaid-and-public tree, 1,083 have `founder == from_nt`, 36 have
-    `founder == to_nt` and 7 have neither (e.g. 25A `A22896T`, founder `G`). An
+    class UShER masking targets. Of the 1,126 directional masks carried by the
+    32 clades that have any on the v11 gisaid-and-public tree, 1,083 have
+    `founder == from_nt`, 36 have `founder == to_nt` and 7 have neither (e.g.
+    25A `A22896T`, founder `G`). An
     equality assertion — the obvious guard, and the one #144 originally
     specified — fails on real data. The sensitive property is the *ratio*: a
     `from_nt`/`to_nt` swap inverts the distribution wholesale, so that is what
