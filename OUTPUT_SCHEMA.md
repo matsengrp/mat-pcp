@@ -75,6 +75,30 @@ Aggregated list of all filtered branch IDs across all clades. Not gzipped, as ab
 | `child_name` | string | Tree node identifier for filtered branches. |
 | `clade` | string | Clade from which the branch was filtered. |
 
+### `pcps/{gene}/censored_mutations.csv` and `pcps/{gene}/censored_mutations.clades.txt` (v11+)
+
+Per-clade, per-nucleotide censor table for DASM training (#144), plus the clade roster it was built over. Additive: no existing output changed, and nothing in this repository reads it — the consumer is [matsengrp/dasm2-experiments#1079](https://github.com/matsengrp/dasm2-experiments/issues/1079).
+
+UShER masking does not mark a site ambiguous; it **deletes** the mutations from the MAT, so the node inherits its parent's state. A masked site is therefore *censored, not ambiguous* — the state is known, the event was destroyed — which is why this is a table of coordinates for the loss rather than an `N` written into the PCP sequence.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `clade` | string | Nextstrain clade. Matches the `clade` column of `pcps/{gene}/all_pcps_dasm_ready.csv.gz`; note that column exists **only** in the aggregate, so a per-clade consumer must key on the filename. |
+| `nt_site` | int | 1-based genomic coordinate, as it appears in `data/usher_masked_sites.yaml`. |
+| `nt_index` | int | 0-based index into this gene's PCP nucleotide sequence. |
+| `from_nt` | string | Empty for a whole-site mask; the required parent base for a directional mask. |
+| `to_nt` | string | Empty for a whole-site mask; the censored destination base for a directional mask. |
+
+Sorted by `(clade, nt_index, to_nt)`. The sort is required, not cosmetic: `masking.load_usher_masks` returns unordered *sets*, and `data-central` manifests pin `md5`/`xxh3` per file.
+
+**CSV contract.** A whole-site mask writes the empty string in both `from_nt` and `to_nt`; a row has both populated or neither. Read with `keep_default_na=False`, or pandas turns the empty cells into `NaN` and a `from_nt == ""` test silently matches nothing.
+
+**`nt_index` is one-to-many.** Coordinates are gene-local because the consumer has no CDS knowledge — the PCP sequence *is* the gene. Where two CDS blocks share a nucleotide at a −1 ribosomal frameshift, `slice_cds` reads it twice, so one `nt_site` yields **two rows**. ORF1b's blocks `[[13442, 13468], [13468, 21552]]` put genomic 13468 at both index 26 and index 27, in different codons. A masked site outside the gene is dropped silently and counted in the per-gene log.
+
+**This table does not replace `{gene}_codon_sites_to_mask.txt`.** It carries two of `masking.compute_exclusions`' five reasons — `usher_clade_sites` and `usher_clade_mutations`, the clade-specific ones. The ProblematicSites VCF, the config `sites_to_exclude` and the `site_include_range` bound remain in the codon mask at codon granularity, and founder→reference reversions are in neither (they are a selection filter, not an artifact mask). A training run must apply **both** files. The two are *not* disjoint by site: a site can be both clade-masked in the yaml and in the VCF (32 such `(clade, nt_site)` pairs on the v11 gisaid-and-public tree).
+
+**The roster sidecar is part of the deliverable.** A clade with nothing censored contributes zero rows, so in the CSV alone it is indistinguishable from a mistyped clade name. `censored_mutations.clades.txt` lists every clade the run processed, one per line, sorted; a consumer materializes `{clade: [] for clade in roster}` before filling from the CSV so that absence-from-roster (an error) and absence-from-rows (normal) stay distinguishable.
+
 ## Fitness Estimates
 
 ### `aamut_fitness/all_aamut_fitness.csv`

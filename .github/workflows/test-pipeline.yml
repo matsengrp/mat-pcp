@@ -226,6 +226,21 @@ jobs:
       run: |
         pixi run python tests/test_date_parsing.py
 
+    # Fixture-only, and necessarily so: the test clades are 19A/19B/20A and the
+    # earliest clade in usher_masked_sites.yaml is 20B, so the censor table is
+    # EMPTY for every gene in CI and a pipeline run asserts nothing about its
+    # coordinates, its directionality or its guards. No yaml entry falls in
+    # ORF1b's leading block 13442-13468 either, so the frameshift junction -- the
+    # one place the genomic->index map is one-to-many -- is unreachable from any
+    # run and must be synthetic. Covers what a green run cannot: that a mask on
+    # the shared nucleotide emits BOTH indices, that a directional mask is not
+    # collapsed to a whole-site mask, and that the reconciliation and orientation
+    # guards actually fire on deliberately corrupted copies of the shipped
+    # script (#144).
+    - name: Verify the DASM censor table coordinates and guards
+      run: |
+        pixi run python tests/test_censor_table.py
+
     # The steps above name each test file so a failure points at a readable log.
     # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]
     # is empty, so a *new* tests/test_*.py runs zero times and CI stays green --

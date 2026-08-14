@@ -45,6 +45,23 @@ artifact, built with the v10 mask file, and is not rebuilt.
   No existing clade's era changes. `tests/test_era_mapping.py` now checks a frozen
   fixture per tree, with the "maps nothing extra" direction taken against the union
   so it stays two-sided.
+- **Per-clade censor table for DASM training** (#144, additive): new per-gene
+  `pcps/{gene}/censored_mutations.csv` plus a `censored_mutations.clades.txt`
+  roster sidecar, giving the training loss the clade-specific UShER masks at
+  nucleotide and direction granularity. UShER masking *deletes* mutations from
+  the MAT rather than marking sites ambiguous, so a masked site is censored, not
+  ambiguous — the correction belongs in the observation model, not in the
+  sequence. The existing `{gene}_codon_sites_to_mask.txt` cannot serve: it never
+  reaches the loss, it is codon-granular, and `site_all_excluded` keeps only the
+  reasons holding in *every* clade, so the whole clade-specific half of
+  `data/usher_masked_sites.yaml` was invisible to training. Both files must be
+  applied — this one carries two of `compute_exclusions`' five reasons, and the
+  two are not disjoint by site. No existing output changes and no current
+  consumer reads it, so the additive-output carve-out applies; it ships inside
+  v11 rather than forcing a further bump. New `sequences.cds_nt_positions` /
+  `sequences.genomic_to_pcp_indices`, and `tests/test_censor_table.py`, which is
+  the only non-vacuous coverage: the CI clades (19A/19B/20A) predate the yaml's
+  earliest clade (20B), so the table is empty in every CI run.
 - **Unparseable dates no longer abort the run**: `filter_metadata.py`'s
   `robust_fromisoformat` guards all four branches, not only the exact-length-10 one.
   The 2026-08-06 metadata carries 231 rows per tree with the Solr-style range
