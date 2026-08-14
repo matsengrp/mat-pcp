@@ -396,8 +396,7 @@ def check_round_trip_is_a_sequence_identity():
     tmpdir = tempfile.mkdtemp()
     genome = synthetic_genome()
     try:
-        _, clade_mutations = masking.load_usher_masks(USHER_YAML)
-        clade_sites, _ = masking.load_usher_masks(USHER_YAML)
+        clade_sites, clade_mutations = masking.load_usher_masks(USHER_YAML)
         clades = sorted(set(clade_sites) | set(clade_mutations))
 
         for gene, blocks, overrides, gtf_genes in [
