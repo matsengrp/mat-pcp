@@ -120,7 +120,7 @@ pixi run snakemake -j 2 --use-conda \
 pixi run python workflow/scripts/validate_test.py
 ```
 
-> **`CLAUDE.md` and `CHANGELOG.md` use CRLF line endings.** Edit them in place. A
+> **`CLAUDE.md`, `CHANGELOG.md` and `workflow/Snakefile` use CRLF line endings.** Edit them in place. A
 > Python `read_text()` / `write_text()` round-trip normalizes them to LF, which
 > rewrites every line and buries a three-line content edit in a ~2,200-line
 > whitespace diff. Nothing errors and the rendered text is identical, so it is only
@@ -528,6 +528,70 @@ mat-pcp/
     the end-to-end counterpart and checks the roster, which stays non-vacuous
     even when the table is empty.
     See [#144](https://github.com/matsengrp/mat-pcp/issues/144).
+
+13. **An incremental slope and an aggregate rate are different statistics, and only
+    one of them can see duration inflation.** chronumental's durations are free
+    parameters under `dist.Uniform(0, 365 * 10000)` with a `Delta` guide -- nothing
+    penalises a long branch -- while every day-resolved leaf date is asserted to
+    **sd 0.3 days** (`--variance_dates` defaults to 0.3 and multiplies a per-leaf
+    error of 1 day; the flag name is a misnomer, numpyro's second positional is a
+    scale). So the fit can buy leaf-date accuracy by stretching internal branches,
+    and on both v11 production trees it did: the fitted rate landed **4.3-4.4x below
+    chronumental's own pre-fit root-to-tip estimate**, `length_cor` fell
+    monotonically from 0.995 to ~0.38 and was still falling at the last step, and
+    57% of branches carry zero mutations while holding **46% of the tree's total
+    elapsed time**. mat-pcp's learned clock does not protect against this; the rate
+    simply follows the durations down (38.2 -> 8.87).
+
+    *Three of the four gates cannot see it, for structural reasons rather than
+    threshold reasons.* Tip residuals are the fitting target, so passing them is
+    close to circular (`median|res| = 1.0 d` against a 30 d gate); monotonicity holds
+    by construction, since durations are drawn non-negative and cumsummed; and
+    coverage is unrelated. The one check that does measure branch Delta-t against
+    mutation count, check 5, reported only the **incremental** slope between adjacent
+    single-count bins -- deliberately intercept-free, because `median(Delta-t)/n`
+    carries the zero-mutation intercept and decays 9x across the bins for reasons
+    that are arithmetic rather than biological. But the inflation lives *entirely* in
+    that intercept, so differencing adjacent medians cancels exactly the term that
+    carries it: the slope read 11 d/mutation against a ~15.3 d nominal and looked
+    healthy. Check 5 now also reports `Sigma mutations / Sigma branch-years`, which is
+    the statistic the slope cannot see. Both are kept -- the slope is still the right
+    way to ask whether the clock is linear, and the aggregate is the right way to ask
+    whether the total elapsed time is real.
+
+    Three traps in the aggregate itself. It must include the **zero-mutation
+    branches** in both sums, since dropping them reproduces the slope's blindness
+    (the unit test's fixture is built so the two statistics *must* disagree, and a
+    version computing either one the other's way fails it). It is computed over the
+    **per-branch arrays**, not reconstructed from `node_dates_branch_dt_summary.csv`,
+    whose ranged bins (`6-10`, `11-20`, `21-50`, `51+`) need invented representative
+    counts that move the answer ~+/-7%. And the zero-mutation share is reported as a
+    share of branch-**time**, not of branches: most branches carrying no mutations is
+    normal under dense sampling, whereas those branches holding half the elapsed time
+    is duration with no mutational support.
+
+    *The reference matters more than the statistic.* Comparing the aggregate to *the
+    rate chronumental reported* is near-identity under a learned clock -- measured
+    **1.027** -- so a "ratio near 1 means fine" rule passes on a 4.3x-inflated tree.
+    The reference has to be independent: chronumental's own root-to-tip regression
+    line from `log/chronumental.stdout`, or `DAYS_PER_MUTATION_NOMINAL`. That log is
+    a Snakemake `log:` entry rather than a declared output, so it is passed as a
+    **param** (an input would drag the multi-hour dating rule back into the DAG when
+    a log is rotated away) and its absence is **reported with the path it looked
+    at**, never silently dropped -- a detail line missing the comparison reads
+    exactly like one where the comparison passed.
+
+    `scripts/chronumental_sweep.py` measures prior settings by executing the **real**
+    `chronumental_qc.py` per arm, including the tip-residual gate verdict, rather
+    than re-implementing the metrics: a sweep whose own "median absolute tip
+    residual" disagreed with the gate the pipeline enforces would be measuring the
+    wrong quantity with total confidence. The QC script writes its report *before*
+    raising, so a gate-breaching arm still yields a complete row -- breaching the
+    gate is a result, not an error. Note also that adopting a prior setting is **not**
+    a free flag change: it moves `mat/node_dates.tsv` -> `windows/subtree_counts.csv`
+    -> `windows/fitness_trajectory.csv`, so it needs a `VERSION` bump.
+    See [#145](https://github.com/matsengrp/mat-pcp/issues/145) and
+    [#146](https://github.com/matsengrp/mat-pcp/issues/146).
 
 ### Configuration Sections
 
