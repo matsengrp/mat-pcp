@@ -578,8 +578,20 @@ rule chronumental:
         chronumental_kwargs=config.get("chronumental_kwargs", "")
     threads: get_threads("chronumental")
     resources:
-        mem_mb=16000,
-        runtime=240
+        # Measured, not guessed: 46.6 GB max RSS over 282 minutes on
+        # gisaid-and-public_2026-08-06 (20,992,217 branches) at --steps 1000, and
+        # 22.4 GB / 110 min on public_2026-08-06. The previous 16000 / 240 was under
+        # the real peak on BOTH axes, and this rule is the one that makes every
+        # windowed output -- production runs use a local executor with no
+        # --resources ceiling, so nothing enforced it and nothing failed. Same
+        # correction, and the same reason, as chronumental_qc below (#139).
+        #
+        # These cover --steps 1000. The five configs that set no chronumental_kwargs
+        # inherit chronumental's own --steps 20000 default, which extrapolates to
+        # ~37 h on public and ~94 h on gisaid; pinning --steps across configs is
+        # deliberately out of scope here (#146).
+        mem_mb=64000,
+        runtime=480
     benchmark:
         os.path.join(OUTDIR, "benchmarks/chronumental.tsv")
     log:
@@ -625,7 +637,13 @@ rule chronumental_qc:
     params:
         max_median_abs_tip_residual_days=config.get(
             "chronumental_max_median_abs_tip_residual_days", 30
-        )
+        ),
+        # Check 5 compares the tree's own implied rate against chronumental's
+        # pre-fit root-to-tip estimate, which it prints to stdout. A param rather
+        # than an input on purpose: this is a ``log:`` entry, not a declared output,
+        # so a missing file must not drag the multi-hour dating rule back into the
+        # DAG. The script reports its absence explicitly instead (#146).
+        chronumental_stdout=rules.chronumental.log.stdout
     threads: get_threads("chronumental_qc")
     resources:
         # Measured, not guessed: 43.4 GB max RSS over the 20,961,614 nodes of

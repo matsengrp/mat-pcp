@@ -54,6 +54,11 @@ branch_dt_summary_path = snakemake.output.branch_dt_summary
 max_median_abs_tip_residual_days = float(
     snakemake.params.max_median_abs_tip_residual_days
 )
+# A params path, deliberately NOT an input: chronumental's stdout is a Snakemake
+# ``log:`` entry rather than a declared output, so making it an input would put the
+# whole (multi-hour) dating rule back in the DAG whenever a log was rotated away.
+# Absent is therefore a legitimate state, and check 5 reports it as such.
+chronumental_stdout_path = snakemake.params.chronumental_stdout
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 # The by-path module loader is defined once in workflow/modules/workflow_loader.py.
@@ -411,10 +416,23 @@ if steps:
         + (f" on a {intercept} d zero-mutation intercept" if intercept is not None else "")
         + f" (nominal ~{node_date_qc.DAYS_PER_MUTATION_NOMINAL:.1f} d/mutation)"
     )
+# The aggregate the incremental slope above cannot see (#146). The slope cancels
+# the zero-mutation intercept by construction, and on the v11 trees that intercept
+# is where all of the duration inflation confirmed in #145 lives -- so check 5 read
+# 11 d/mutation against a ~15.3 d nominal and looked healthy while the tree's own
+# implied rate sat 4.3x below chronumental's pre-fit root-to-tip estimate. Computed
+# from the per-branch arrays, so it is exact rather than reconstructed from the
+# ranged bins of the summary CSV (which moves the answer ~+/-7%).
+clock_summary = node_date_qc.implied_clock_summary(branch_dt, branch_muts)
+aggregate_note = node_date_qc.implied_clock_note(
+    clock_summary,
+    node_date_qc.parse_root_to_tip_rate(chronumental_stdout_path),
+    chronumental_stdout_path,
+)
 record_report(
     "branch_dt_vs_mutations",
     f"{len(dt_by_bin)} mutation-count bins over {total_branches} dated branches"
-    f"{clock_note}; median Delta-t by bin: "
+    f"{clock_note}{aggregate_note}; median Delta-t by bin: "
     + ", ".join(f"{median_labels[n]}mut:{medians[n]}d" for n in sorted(medians))
     + f"; full per-bin day distributions in {os.path.basename(branch_dt_path)}",
 )

@@ -69,6 +69,8 @@ histogram over it gives **exact** medians and percentiles at a few tens of kB --
 there is no accuracy/memory tradeoff being made here.
 """
 
+import os
+
 import numpy as np
 
 #: Mutation-count bins for check A. Upper bounds inclusive; the last is open.
@@ -90,6 +92,136 @@ DAYS_PER_MUTATION_NOMINAL = 365.25 / (8e-4 * 29903)
 #: Plausible window for the SARS-CoV-2 MRCA. Deliberately wide -- this is a
 #: tripwire for a mis-scaled time axis, not an estimate.
 ROOT_DATE_PLAUSIBLE = ("2019-10-01", "2020-02-29")
+
+#: Days per year for converting summed branch Delta-t into branch-years.
+DAYS_PER_YEAR = 365.25
+
+#: The line chronumental prints before fitting, carrying its own root-to-tip
+#: regression estimate of the clock. That number is the ideal reference for
+#: :func:`implied_clock_summary`: chronumental computes it from the same tree and the
+#: same dates, before any duration is optimized, so comparing the two isolates what
+#: the fit did to the durations from every other difference between this tree and a
+#: nominal expectation.
+ROOT_TO_TIP_PREFIX = "Root to tip regression: got rate of:"
+
+
+def implied_clock_summary(branch_dt_days, branch_mutations):
+    """The clock rate the timetree implies about itself: sum(mut) / sum(branch-years).
+
+    Check A reports the **incremental** slope between adjacent single-count bins,
+    which is deliberately intercept-free (see the note at its call site). That makes
+    it blind to the failure mode #145 confirmed: chronumental's durations are free
+    parameters under a flat prior while every day-resolved leaf date is asserted to
+    sd 0.3 days, so the fit can buy leaf-date accuracy by inflating durations -- and
+    the inflation lands almost entirely in the intercept. On
+    ``public_2026-08-06_v11``, 56.7% of branches carry zero mutations yet hold 45.9%
+    of the tree's total branch-time. Differencing adjacent bin medians cancels
+    exactly that term: the incremental slope read 11 d/mutation against a ~15.3 d
+    nominal and looked healthy while the aggregate rate sat 4.3x below chronumental's
+    own root-to-tip estimate.
+
+    So this is the aggregate the slope cannot see. Two properties matter:
+
+    * **It is exact, not binned.** The sums run over the per-branch arrays, not over
+      :data:`MUT_COUNT_BINS` midpoints. Reconstructing it from
+      ``node_dates_branch_dt_summary.csv`` requires guessing representative counts
+      for the ranged bins (``6-10``, ``11-20``, ``21-50``, ``51+``), which moves the
+      answer by about +/-7% -- enough to argue about, and unnecessary here since the
+      arrays are already in hand.
+    * **The zero-mutation share is reported as a share of branch-*time*, not of
+      branches.** A tree can legitimately have most branches carry no mutations
+      (dense sampling); what indicts the fit is those branches holding a large
+      fraction of the total elapsed time, which is duration with no mutational
+      support.
+
+    ``branch_dt_days`` may carry NaN where Delta-t is undefined; those branches leave
+    both sums, and ``n_branches`` counts what was actually used.
+    """
+    dt = np.asarray(branch_dt_days, dtype=float)
+    muts = np.asarray(branch_mutations, dtype=float)
+    if dt.shape != muts.shape:
+        raise ValueError(
+            f"branch Delta-t and mutation counts must be parallel arrays; got "
+            f"{dt.shape} and {muts.shape}"
+        )
+    defined = ~np.isnan(dt)
+    dt = dt[defined]
+    muts = muts[defined]
+    total_days = float(dt.sum())
+    total_muts = float(muts.sum())
+    branch_years = total_days / DAYS_PER_YEAR
+    zero = muts == 0
+    return {
+        "n_branches": int(dt.size),
+        "total_mutations": total_muts,
+        "total_branch_days": total_days,
+        "branch_years": branch_years,
+        # None rather than inf or NaN: a zero-span tree is a different failure (a
+        # collapsed time axis), and inf would render as a number in the report.
+        "subs_per_year": (total_muts / branch_years) if branch_years > 0 else None,
+        "n_zero_mut_branches": int(zero.sum()),
+        "frac_branches_zero_mut": (float(zero.mean()) if dt.size else None),
+        "frac_branch_time_zero_mut": (
+            float(dt[zero].sum() / total_days) if total_days > 0 else None
+        ),
+    }
+
+
+def implied_clock_note(summary, root_to_tip_rate, stdout_path):
+    """The report fragment for :func:`implied_clock_summary`.
+
+    Lives here rather than at the call site so the one property that makes this
+    diagnostic trustworthy is unit-testable: **the root-to-tip comparison is either
+    made or its absence is stated**, never quietly dropped. A detail line that just
+    omits the ratio when the log is missing reads exactly like one where the ratio
+    was fine, which is the failure shape this whole check exists to end.
+    """
+    nominal = DAYS_PER_YEAR / DAYS_PER_MUTATION_NOMINAL
+    rate = summary["subs_per_year"]
+    if rate is None:
+        return "; aggregate rate undefined: the dated branches span zero total time"
+    note = (
+        f"; aggregate {summary['total_mutations']:.0f} mutations over "
+        f"{summary['branch_years']:.0f} branch-years = {rate:.2f} subs/yr "
+        f"({rate / nominal:.2f}x the nominal {nominal:.1f})"
+    )
+    if root_to_tip_rate:
+        note += (
+            f", {rate / root_to_tip_rate:.2f}x chronumental's own pre-fit "
+            f"root-to-tip {root_to_tip_rate:.2f} subs/yr"
+        )
+    else:
+        note += (
+            f", root-to-tip reference unavailable (no parsable "
+            f"'{ROOT_TO_TIP_PREFIX}' line at {stdout_path})"
+        )
+    if summary["frac_branch_time_zero_mut"] is not None:
+        note += (
+            f"; zero-mutation branches hold "
+            f"{100 * summary['frac_branch_time_zero_mut']:.1f}% of total branch-time "
+            f"({100 * summary['frac_branches_zero_mut']:.1f}% of branches)"
+        )
+    return note
+
+
+def parse_root_to_tip_rate(stdout_path):
+    """chronumental's own pre-fit clock estimate from its stdout, or ``None``.
+
+    ``None`` means "no reference available", which the caller must **report** rather
+    than pass over: the log is a Snakemake ``log:`` entry rather than a declared
+    output (it is not in ``OUTPUT_SCHEMA.md``), so it can legitimately be absent on
+    a re-run or an archived tree, and a detail line that silently drops the
+    comparison is indistinguishable from one where the comparison passed. Same shape
+    as the era skip in ``Snakefile: eras_present``: absent is fine, absent-and-quiet
+    is not.
+    """
+    if not stdout_path or not os.path.exists(stdout_path):
+        return None
+    with open(stdout_path) as f:
+        for line in f:
+            if line.startswith(ROOT_TO_TIP_PREFIX):
+                return float(line[len(ROOT_TO_TIP_PREFIX):].strip())
+    return None
 
 
 def mutation_count_bin(n_mutations):

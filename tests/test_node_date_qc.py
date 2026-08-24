@@ -510,6 +510,201 @@ def check_constants_are_sane():
     return failures
 
 
+
+def check_aggregate_sees_what_the_slope_cannot():
+    """The whole point of #146's addition, on a tree built to fool the old report.
+
+    Branch durations here are constructed so the **incremental** slope between
+    adjacent single-count bins is 15 d/mutation -- indistinguishable from the
+    nominal clock, exactly what check 5 reported on the v11 trees -- while a large
+    zero-mutation intercept inflates total elapsed time. If the aggregate were
+    computed the way the slope is (differences, intercept cancelled) or over only
+    the mutation-carrying branches, it would come out at 10.4 subs/yr and agree that
+    the tree is fine. Over all branches it is 6.64, a 1.57x deficit that is entirely
+    the intercept.
+
+    So this pins the discrimination, not just the arithmetic: the two statistics
+    must **disagree** on this input. A version of ``implied_clock_summary`` that
+    dropped the zero-mutation branches from either sum would leave every other
+    assertion in this file green.
+    """
+    failures = []
+    qc = _load()
+    dt = np.array([30.0] * 1000 + [45.0] * 500 + [60.0] * 500)
+    muts = np.array([0] * 1000 + [1] * 500 + [2] * 500)
+    summary = qc.implied_clock_summary(dt, muts)
+
+    # The old report's statistic, computed the way check 5 computes it.
+    incremental_slope = 60.0 - 45.0
+    if not 10 <= incremental_slope <= 25:
+        failures.append(
+            "the fixture is not adversarial: its incremental slope must look "
+            "healthy against the nominal clock for this check to mean anything"
+        )
+
+    total_days = 1000 * 30 + 500 * 45 + 500 * 60
+    expected_rate = 1500 / (total_days / qc.DAYS_PER_YEAR)
+    if abs(summary["subs_per_year"] - expected_rate) > 1e-9:
+        failures.append(
+            f"aggregate rate is {summary['subs_per_year']:.4f}, expected "
+            f"{expected_rate:.4f} = 1500 mutations / {total_days} branch-days; the "
+            f"sums must run over ALL branches including zero-mutation ones"
+        )
+    rate_excluding_intercept = 1500 / ((500 * 45 + 500 * 60) / qc.DAYS_PER_YEAR)
+    if abs(summary["subs_per_year"] - rate_excluding_intercept) < 1e-6:
+        failures.append(
+            "the aggregate matches the intercept-excluded rate, so it is blind to "
+            "the same term the incremental slope cancels -- the addition is vacuous"
+        )
+    nominal = qc.DAYS_PER_YEAR / qc.DAYS_PER_MUTATION_NOMINAL
+    if summary["subs_per_year"] / nominal > 0.5:
+        failures.append(
+            f"the fixture should read as badly depressed against nominal; got "
+            f"{summary['subs_per_year'] / nominal:.2f}x"
+        )
+    expected_time_share = (1000 * 30) / total_days
+    if abs(summary["frac_branch_time_zero_mut"] - expected_time_share) > 1e-9:
+        failures.append(
+            f"zero-mutation branch-time share is "
+            f"{summary['frac_branch_time_zero_mut']:.4f}, expected "
+            f"{expected_time_share:.4f}"
+        )
+    # Share of TIME, not of branches: the two differ here (36.4% vs 50%), and only
+    # the former indicts the fit -- most branches carrying no mutations is normal
+    # under dense sampling.
+    if abs(summary["frac_branches_zero_mut"] - 0.5) > 1e-9:
+        failures.append(
+            f"zero-mutation branch COUNT share is "
+            f"{summary['frac_branches_zero_mut']:.4f}, expected 0.5"
+        )
+    if not failures:
+        print(
+            f"  slope {incremental_slope:.0f} d/mut looks nominal while the "
+            f"aggregate reads {summary['subs_per_year']:.2f} subs/yr "
+            f"({summary['subs_per_year'] / nominal:.2f}x nominal), "
+            f"{100 * summary['frac_branch_time_zero_mut']:.1f}% of time on "
+            f"zero-mutation branches"
+        )
+    return failures
+
+
+def check_aggregate_is_exact_not_binned():
+    """Exact per-branch sums, not a reconstruction from the ranged bins.
+
+    ``node_dates_branch_dt_summary.csv`` reports ``6-10``, ``11-20``, ``21-50`` and
+    ``51+``, so recovering the aggregate from it requires inventing a representative
+    count per bin -- which moved the answer by ~+/-7% on the production tree. The
+    arrays are in hand at the call site, so the exact sum is free; this asserts the
+    exact value and that it is distinguishable from the midpoint reconstruction.
+    """
+    failures = []
+    qc = _load()
+    muts = np.array([7, 10, 60])
+    dt = np.array([100.0, 100.0, 100.0])
+    summary = qc.implied_clock_summary(dt, muts)
+    if summary["total_mutations"] != 77.0:
+        failures.append(
+            f"total_mutations is {summary['total_mutations']}, expected 77 = 7+10+60"
+        )
+    # Both 7 and 10 fall in the "6-10" bin, so a reconstruction has one number to
+    # spend on them; 8 is the midpoint. The exact sum differs by 1.
+    midpoint_total = 8 + 8 + 60
+    if summary["total_mutations"] == midpoint_total:
+        failures.append(
+            "total_mutations equals the binned reconstruction, so the fixture "
+            "cannot tell exact from binned; pick counts that differ from midpoints"
+        )
+    if not failures:
+        print(f"  exact 77 mutations, distinguishable from binned {midpoint_total}")
+    return failures
+
+
+def check_undefined_branches_and_zero_span():
+    """NaN Delta-t is excluded, and a zero-span tree yields no rate at all."""
+    failures = []
+    qc = _load()
+    summary = qc.implied_clock_summary([10.0, np.nan, 20.0], [1, 99, 1])
+    if summary["n_branches"] != 2:
+        failures.append(
+            f"n_branches is {summary['n_branches']}, expected 2: a NaN Delta-t "
+            f"branch has no duration and must leave both sums"
+        )
+    if summary["total_mutations"] != 2.0:
+        failures.append(
+            f"total_mutations is {summary['total_mutations']}, expected 2 -- the "
+            f"NaN branch's 99 mutations must not enter the numerator while its "
+            f"(undefined) duration stays out of the denominator"
+        )
+    collapsed = qc.implied_clock_summary([0.0, 0.0], [1, 2])
+    if collapsed["subs_per_year"] is not None:
+        failures.append(
+            f"a zero-span tree reported a rate of {collapsed['subs_per_year']}; it "
+            f"must be None, since inf or NaN would render as a number in the report"
+        )
+    note = qc.implied_clock_note(collapsed, 39.36, "irrelevant.stdout")
+    if "undefined" not in note:
+        failures.append(f"the zero-span note must say so; got {note!r}")
+    if not failures:
+        print("  NaN branches excluded from both sums; zero-span gives no rate")
+    return failures
+
+
+def check_root_to_tip_reference_is_never_silently_dropped():
+    """Absent reference must be *stated*. This is the non-vacuity guard.
+
+    ``log/chronumental.stdout`` is a Snakemake ``log:`` entry, not a declared
+    output, so it is legitimately absent on an archived or re-run tree. The failure
+    mode is not the parse returning ``None`` -- it is a report line that omits the
+    comparison, which reads identically to one where the comparison was fine.
+    """
+    failures = []
+    qc = _load()
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        good = Path(tmp) / "chronumental.stdout"
+        good.write_text(
+            "Doing a rough initial fit\n"
+            f"{qc.ROOT_TO_TIP_PREFIX} 39.3631189049384\n"
+            "step:0\tloss:1.0\tlength_cor:0.9949\n"
+        )
+        if qc.parse_root_to_tip_rate(str(good)) != 39.3631189049384:
+            failures.append(
+                f"failed to parse the real stdout line format; got "
+                f"{qc.parse_root_to_tip_rate(str(good))}"
+            )
+        empty = Path(tmp) / "no-such-line.stdout"
+        empty.write_text("step:0\tloss:1.0\n")
+        for label, path in (
+            ("a missing file", str(Path(tmp) / "absent.stdout")),
+            ("a log without the line", str(empty)),
+        ):
+            if qc.parse_root_to_tip_rate(path) is not None:
+                failures.append(f"{label} must parse to None")
+            summary = qc.implied_clock_summary([100.0], [1])
+            note = qc.implied_clock_note(summary, None, path)
+            if "unavailable" not in note or path not in note:
+                failures.append(
+                    f"with {label} the note must say the reference is unavailable "
+                    f"and name the path it looked at; got {note!r}"
+                )
+            if "x chronumental's own" in note:
+                failures.append(
+                    f"with {label} the note claims a root-to-tip ratio: {note!r}"
+                )
+        present = qc.implied_clock_note(
+            qc.implied_clock_summary([365.25], [1]), 4.0, str(good)
+        )
+        if "0.25x chronumental's own pre-fit root-to-tip 4.00" not in present:
+            failures.append(
+                f"with a reference available the note must carry the ratio; got "
+                f"{present!r}"
+            )
+    if not failures:
+        print("  reference present -> ratio; absent -> stated, with the path")
+    return failures
+
+
 CHECKS = [
     ("histogram order statistics are exact", check_histogram_matches_exact_quantiles),
     ("quantile is exact at integer targets", check_quantile_boundary_is_exact),
@@ -519,6 +714,10 @@ CHECKS = [
     ("a violated node ordering raises", check_ordering_precondition_matters),
     ("min_child_delta vs min descendant", check_min_child_delta_equals_min_descendant),
     ("constants are sane", check_constants_are_sane),
+    ("aggregate rate sees the intercept", check_aggregate_sees_what_the_slope_cannot),
+    ("aggregate is exact, not binned", check_aggregate_is_exact_not_binned),
+    ("NaN branches and zero-span trees", check_undefined_branches_and_zero_span),
+    ("root-to-tip absence is reported", check_root_to_tip_reference_is_never_silently_dropped),
 ]
 
 
