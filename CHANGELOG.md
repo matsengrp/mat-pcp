@@ -18,6 +18,76 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### v11
+
+**The reason for the bump is `data/usher_masked_sites.yaml`: the UShER clade mask
+is regenerated against the 2026-08-06 tree, so masking flags in `counts_all.csv`
+move, and with them the GLM training set, `fitness/` and `aamut_fitness/`.** Models
+trained on v10 fitness outputs should not be mixed with v11 ones.
+
+The mask file is a generated artifact (see
+[`s2-clade-mask`](https://github.com/matsengrp/s2-clade-mask)) whose masks are
+accumulated down the tree topology, so regenerating it against a newer MAT can move
+masks for clades that already existed, not only add the new ones. The vendored UCSC
+spec `branchSpecificMask.yml` is unchanged (25 lineages, same pinned commit) — every
+difference comes from the tree.
+
+This is what forces the bump rather than the two script fixes below, neither of
+which moves an existing output on its own: once the mask file differs, the
+`results/*_v10` trees are no longer reproducible from `HEAD`, and the version is the
+only thing distinguishing them. `gisaid-and-public_2026-04-22` remains a **v10**
+artifact, built with the v10 mask file, and is not rebuilt.
+
+- **Clade era mapping**: `workflow/modules/era.py`'s `CLADE_ERA` gains `25D`-`25I`
+  (all Omicron). The 2026-08-06 trees carry 58 Nextstrain clades against the
+  2026-04-22 tree's 52, and `era_for_clade` raises on an unmapped clade rather than
+  defaulting (#137), so the run stopped at `era_fit_summary` until they were added.
+  No existing clade's era changes. `tests/test_era_mapping.py` now checks a frozen
+  fixture per tree, with the "maps nothing extra" direction taken against the union
+  so it stays two-sided.
+- **Per-clade censor table for DASM training** (#144, additive): new per-gene
+  `pcps/{gene}/censored_mutations.csv` plus a `censored_mutations.clades.txt`
+  roster sidecar, giving the training loss the clade-specific UShER masks at
+  nucleotide and direction granularity. UShER masking *deletes* mutations from
+  the MAT rather than marking sites ambiguous, so a masked site is censored, not
+  ambiguous — the correction belongs in the observation model, not in the
+  sequence. The existing `{gene}_codon_sites_to_mask.txt` cannot serve: it never
+  reaches the loss, it is codon-granular, and `site_all_excluded` keeps only the
+  reasons holding in *every* clade, so the whole clade-specific half of
+  `data/usher_masked_sites.yaml` was invisible to training. Both files must be
+  applied — this one carries two of `compute_exclusions`' five reasons, and the
+  two are not disjoint by site. No existing output changes and no current
+  consumer reads it, so the additive-output carve-out applies; it ships inside
+  v11 rather than forcing a further bump. New `sequences.cds_nt_positions` /
+  `sequences.genomic_to_pcp_indices`, and `tests/test_censor_table.py`, which is
+  the only non-vacuous coverage: the CI clades (19A/19B/20A) predate the yaml's
+  earliest clade (20B), so the table is empty in every CI run.
+- **Unparseable dates no longer abort the run**: `filter_metadata.py`'s
+  `robust_fromisoformat` guards all four branches, not only the exact-length-10 one.
+  The 2026-08-06 metadata carries 231 rows per tree with the Solr-style range
+  `[2022 TO 2024]`, which raised `ValueError` and killed the run in `filter_metadata`.
+  `determine_resolution` already classifies such a value `MISSING`, which every
+  config lists in `invalid_date_resolutions`, so the intended disposition was always
+  to drop it. The count and the distinct offending values are now reported, because
+  an unparseable date means an unfamiliar metadata format rather than an ordinary
+  missing value. Verified over every distinct date value in all three trees: no
+  previously-parsed value changes.
+  A **config** date is held to the opposite standard: `config_date` parses
+  `min_leaf_date` and raises rather than returning `NaT`. Widening the row
+  parser's guard had made a malformed `min_leaf_date` silently disable the
+  min-date filter -- it is used only as `date < parsed`, and every comparison
+  against `NaT` is False, so zero samples were dropped at exit 0 -- while
+  `max_leaf_date`, parsed with a bare `datetime.fromisoformat`, still failed
+  loudly. The accepted formats are unchanged. Both halves are pinned by the
+  new `tests/test_date_parsing.py`, which execs the real script.
+- **New trees**: `config/config-2026-08-06-six-genes.yaml` adds
+  `public_2026-08-06` and `gisaid-and-public_2026-08-06`. Kept as a separate config
+  from the 2026-04-22 one — `roemer_nextstrain_to_pango` is passed whole as a rule
+  param to `clade_founder_fasta`, so adding an entry for a new clade invalidates
+  every clade founder of every tree sharing the config. `25I` (BA.3.2) is excluded:
+  it resolves in neither founder source, and since #129 that is a hard failure
+  rather than a silent fallback to the reference.
+
 ### v10 (EPIC [#138](https://github.com/matsengrp/mat-pcp/issues/138))
 
 **The reason for the bump is [#137](https://github.com/matsengrp/mat-pcp/issues/137):

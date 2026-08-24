@@ -84,6 +84,12 @@ TREE_LABEL_PATTERN = r"[A-Za-z0-9_.+-]+"
 # ``extract_pcps_by_clade`` site because that rule is parsed later in the file.
 CLADE_FOUNDER_FASTA = os.path.join(OUTDIR, "clade_founders/{clade}.fa")
 
+# Same, for a clade's founder sliced down to one gene (produced by rule
+# ``slice_founder_gene``; consumed by ``gene_founders_all_clades`` and
+# ``censor_table``). Defined once for the same reason: three hand-built copies
+# of this shape were one edit away from drifting apart.
+GENE_FOUNDER_FASTA = os.path.join(OUTDIR, "clade_founders/{gene}/{clade}.fa")
+
 
 def _normalize_trees(cfg):
     """Read and validate the ``trees:`` mapping from the config.
@@ -378,6 +384,14 @@ rule all:
         # Per-gene DASM codon masks (tree x gene).
         expand(
             os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
+        ),
+        # Per-gene DASM training censor tables (tree x gene). Nothing inside this
+        # repo consumes them -- the consumer is dasm2-experiments#1079 -- so
+        # without this wiring they would never build (#144).
+        expand(
+            os.path.join(OUTDIR, "pcps/{gene}/censored_mutations.csv"),
             tree=TREE_LABELS,
             gene=PCP_GENES,
         ),
@@ -1211,7 +1225,7 @@ rule slice_founder_gene:
         fasta=rules.clade_founder_fasta.output.fasta,
         gtf=rules.edit_ref_gtf.output.gtf
     output:
-        gene_fasta=os.path.join(OUTDIR, "clade_founders/{gene}/{clade}.fa")
+        gene_fasta=GENE_FOUNDER_FASTA
     params:
         pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
     log:
@@ -1225,8 +1239,7 @@ rule slice_founder_gene:
 def _gene_founder_slices(wildcards):
     """Every adequate-count clade's founder slice for one gene."""
     return per_clade_inputs(
-        os.path.join(OUTDIR, "clade_founders", wildcards.gene, "{clade}.fa"),
-        wildcards,
+        GENE_FOUNDER_FASTA.replace("{gene}", wildcards.gene), wildcards
     )
 
 
@@ -1680,6 +1693,64 @@ rule get_problematic_sites:
         "envs/default.yml"
     script:
         "scripts/get_problematic_sites.py"
+
+
+def _gene_founder_slice_map(wildcards):
+    """``{clade: founder-slice path}`` for one gene, over this tree's clades.
+
+    One definition feeding two rule fields: ``input`` takes the values (so the
+    slices are built), ``params`` takes the mapping (so the script keys by clade
+    name). Passing only the input list would make the script pair paths against
+    ``params.clades`` *positionally*, which is the class of bug CLAUDE.md
+    pattern 11 documents -- a reordering would check every mask against the wrong
+    clade's founder and still produce a well-formed table.
+    """
+    return {
+        clade: GENE_FOUNDER_FASTA.format(
+            tree=wildcards.tree, gene=wildcards.gene, clade=clade
+        )
+        for clade in clades_w_adequate_counts(wildcards)
+    }
+
+
+rule censor_table:
+    """Emit one gene's per-clade, per-nucleotide censor table for DASM training.
+
+    UShER masking deletes mutations from the MAT rather than marking sites
+    ambiguous, so a masked site is *censored, not ambiguous*: the state is known,
+    the event was destroyed. Training therefore needs the coordinates in the
+    loss, not an ``N`` in the sequence. ``{gene}_codon_sites_to_mask.txt`` cannot
+    serve: it never reaches the loss, it is codon-granular, and it is
+    clade-independent by construction (#144).
+
+    Carries the two clade-specific reasons of ``masking.compute_exclusions``'
+    five; the other three stay in the codon mask, so a training run applies
+    **both** files. Additive output -- no existing schema is read and no current
+    consumer reads it, so the CLAUDE.md carve-out applies and it ships no-bump
+    inside v11.
+
+    Cheap: a pure function of the UShER yaml, the edited GTF, the reference, and
+    the ``get_clades`` checkpoint. The founder slices are inputs only for the
+    orientation guard.
+    """
+    input:
+        usher_masked_sites=config["usher_masked_sites"],
+        gtf=rules.edit_ref_gtf.output.gtf,
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta,
+        founders=lambda wc: list(_gene_founder_slice_map(wc).values())
+    output:
+        table=os.path.join(OUTDIR, "pcps/{gene}/censored_mutations.csv"),
+        clades=os.path.join(OUTDIR, "pcps/{gene}/censored_mutations.clades.txt")
+    params:
+        clades=clades_w_adequate_counts,
+        founder_fastas=_gene_founder_slice_map,
+        pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
+    log:
+        os.path.join(OUTDIR, "log/censor_table_{gene}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/censor_table.py"
 
 
 # =============================================================================

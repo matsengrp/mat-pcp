@@ -39,3 +39,10 @@ workflow/scripts/test_v2_regression.py
 
 # Local issue drafts; GitHub holds the canonical text
 ISSUE-*.md
+
+# Production-run transcripts. Disposable: how a release was run is recorded in
+# CHANGELOG.md and the release PR, not in a log at the repo root. New runs write
+# into log/ rather than here.
+log/
+run-*.log
+run-*.exit

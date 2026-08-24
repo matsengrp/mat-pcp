@@ -1160,6 +1160,175 @@ def validate_founder_codon_background(output_dir):
     )
 
 
+def validate_censor_table(output_dir, yaml_path="data/usher_masked_sites.yaml"):
+    """Every PCP gene's censor table is well formed and its roster is complete.
+
+    The censor table (#144) carries the two *clade-specific* UShER reasons for
+    DASM training. On the test data it is **empty for every gene** -- ``max_clades:
+    3`` gives 19A/19B/20A and the yaml's earliest clade is 20B -- so the row-level
+    properties are covered by ``tests/test_censor_table.py`` and cannot be
+    asserted here. What a run *can* assert, and what is non-vacuous even when the
+    table is empty, is the roster: a clade with nothing censored contributes zero
+    rows, so the sidecar is the only thing that distinguishes it from a mistyped
+    clade name. It must name every clade the run processed -- checked as an
+    equality against ``clade_founders/{gene}/*.fa`` rather than as a subset of
+    clade_counts.csv, since the latter is a superset of what any run processes
+    and so cannot see a roster that drops a clade.
+
+    Also checks that the two masking outputs are both present. They carry
+    different exclusion reasons at different granularity, and a training run must
+    apply **both** -- the censor table is not a replacement for
+    ``{gene}_codon_sites_to_mask.txt``. Note the two are deliberately *not*
+    asserted disjoint: a site can be both clade-masked in the yaml and in the
+    ProblematicSites VCF (32 such pairs on the v11 gisaid-and-public tree), so
+    disjointness is false on real data.
+    """
+    import pandas as pd
+
+    pcps_root = os.path.join(output_dir, "pcps")
+    if not os.path.isdir(pcps_root):
+        return [], f"SKIPPED: no {pcps_root}, so no censor tables to validate"
+
+    genes = sorted(
+        name for name in os.listdir(pcps_root)
+        if os.path.isdir(os.path.join(pcps_root, name))
+    )
+    if not genes:
+        return [], f"SKIPPED: no per-gene PCP directories under {pcps_root}"
+
+    # Two clade sets, checked in two different directions, because they fail
+    # differently.
+    #
+    # `adequate_clades` is every clade clade_counts.csv calls adequate. It is a
+    # *superset* of what a run processes -- `clades_w_adequate_counts` then
+    # applies `clades_to_exclude` and truncates to `max_clades`, and both are set
+    # in shipped configs (config.yaml excludes 21A; config_test_data.yaml caps at
+    # 3) -- so it can only be used to catch a roster naming a clade that is not a
+    # clade at all. Asserting the roster equals it would fail every correct run.
+    #
+    # `clade_founders/{gene}/*.fa` is the set the run actually processed for this
+    # gene: the Snakefile materializes one founder slice per
+    # `clades_w_adequate_counts` clade, which is the same list `censor_table.py`
+    # writes as its roster. That admits an *equality* check, and equality is the
+    # point -- the roster's whole job is to make "clade processed, nothing
+    # censored" distinguishable from "clade never processed", which a
+    # subset-of-a-superset test cannot see. Without it a roster silently missing
+    # a processed clade passes, which is the vacuity this function exists to
+    # prevent.
+    clade_counts = os.path.join(output_dir, "mat", "clade_counts.csv")
+    adequate_clades = None
+    if os.path.isfile(clade_counts):
+        counts = pd.read_csv(clade_counts)
+        clade_col = next(
+            (c for c in counts.columns if c.startswith("Nextstrain_clade")), None
+        )
+        if clade_col is not None:
+            adequate_clades = set(
+                counts[counts["adequate_sample_counts"] == True][clade_col].dropna()
+            )
+
+    def processed_clades_for(gene):
+        """The clades this run built founder slices for, or None if unavailable."""
+        gene_founders = os.path.join(output_dir, "clade_founders", gene)
+        if not os.path.isdir(gene_founders):
+            return None
+        return {
+            name[: -len(".fa")]
+            for name in os.listdir(gene_founders)
+            if name.endswith(".fa")
+        }
+
+    differences = []
+    total_rows = 0
+    roster_size = 0
+    for gene in genes:
+        table_path = os.path.join(pcps_root, gene, "censored_mutations.csv")
+        roster_path = os.path.join(pcps_root, gene, "censored_mutations.clades.txt")
+        codon_mask = os.path.join(output_dir, f"{gene}_codon_sites_to_mask.txt")
+
+        if not os.path.isfile(table_path):
+            differences.append(f"censor table missing for {gene}: {table_path}")
+            continue
+        if not os.path.isfile(roster_path):
+            differences.append(f"censor clade roster missing for {gene}: {roster_path}")
+            continue
+        if not os.path.isfile(codon_mask):
+            differences.append(
+                f"{gene} has a censor table but no {codon_mask}. A training run "
+                f"must apply both -- the censor table carries only the two "
+                f"clade-specific UShER reasons, not the VCF/config/range ones."
+            )
+
+        # keep_default_na=False is the file's contract: a whole-site mask writes
+        # empty strings, and pandas' defaults would turn them into NaN so that a
+        # `from_nt == ""` test silently matches nothing.
+        table = pd.read_csv(table_path, keep_default_na=False)
+        expected_columns = ["clade", "nt_site", "nt_index", "from_nt", "to_nt"]
+        if list(table.columns) != expected_columns:
+            differences.append(
+                f"{gene} censor table columns are {list(table.columns)}, expected "
+                f"{expected_columns}"
+            )
+            continue
+        total_rows += len(table)
+
+        blank_from = table["from_nt"] == ""
+        blank_to = table["to_nt"] == ""
+        if not (blank_from == blank_to).all():
+            differences.append(
+                f"{gene} censor table has rows with exactly one of from_nt/to_nt "
+                f"populated; a row must have both or neither"
+            )
+
+        roster = [line for line in open(roster_path).read().splitlines() if line]
+        roster_size = max(roster_size, len(roster))
+        if roster != sorted(roster):
+            differences.append(f"{gene} censor clade roster is not sorted")
+        if len(roster) != len(set(roster)):
+            differences.append(f"{gene} censor clade roster has duplicates")
+        if adequate_clades is not None and set(roster) - adequate_clades:
+            differences.append(
+                f"{gene} censor clade roster names clades absent from "
+                f"clade_counts.csv: {sorted(set(roster) - adequate_clades)}"
+            )
+
+        processed = processed_clades_for(gene)
+        if processed is None:
+            differences.append(
+                f"{gene} has a censor table but no clade_founders/{gene}/ "
+                f"directory, so its roster cannot be checked for completeness. "
+                f"The rule declares those founders as inputs, so they must exist "
+                f"wherever the table does."
+            )
+        elif set(roster) != processed:
+            missing = sorted(processed - set(roster))
+            extra = sorted(set(roster) - processed)
+            differences.append(
+                f"{gene} censor clade roster does not match the clades this run "
+                f"processed (clade_founders/{gene}/*.fa): missing {missing}, "
+                f"unexpected {extra}. A clade omitted from the roster is "
+                f"indistinguishable to a consumer from one that was never "
+                f"processed, so 'nothing censored here' would read as 'unknown "
+                f"clade'."
+            )
+        missing_from_roster = set(table["clade"]) - set(roster)
+        if missing_from_roster:
+            differences.append(
+                f"{gene} censor table has rows for clades absent from its roster: "
+                f"{sorted(missing_from_roster)}. The roster is what lets a "
+                f"consumer tell an empty clade from a mistyped one, so it must "
+                f"be a superset of the rows."
+            )
+
+    # The roster size is reported alongside the row count so that "0 rows" reads
+    # as "checked N clades and none had a mask" rather than as "checked nothing".
+    return differences, (
+        f"Censor tables: {len(genes)} gene(s), {total_rows} row(s) total, "
+        f"{roster_size} clade(s) per roster"
+        + (" (empty on the test clades, as expected)" if total_rows == 0 else "")
+    )
+
+
 def default_output_dir():
     """Best-guess test output dir when none is given.
 
@@ -1249,9 +1418,11 @@ def main():
     glm_syn_diffs, glm_syn_summary = validate_glm_synonymous_training(output_dir)
     codon_bg_diffs, codon_bg_summary = validate_founder_codon_background(output_dir)
     era_diffs, era_summary = validate_era_rate_tables(output_dir)
+    censor_diffs, censor_summary = validate_censor_table(output_dir)
     differences += (
         site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
         + orf1ab_diffs + orf1b_diffs + glm_syn_diffs + codon_bg_diffs + era_diffs
+        + censor_diffs
     )
 
     if differences:
@@ -1292,6 +1463,8 @@ def main():
             print(f"  - {codon_bg_summary}")
         if era_summary:
             print(f"  - Era rate tables: {era_summary}")
+        if censor_summary:
+            print(f"  - {censor_summary}")
         sys.exit(0)
 
 

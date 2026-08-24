@@ -45,29 +45,69 @@ def robust_fromisoformat(date_string: str) -> pd.Timestamp:
 
     Returns:
         Corresponding datetime object or NaT for invalid inputs.
+
+    Every branch is guarded, not just the exact-length-10 one. Through the
+    2026-04-22 trees only that last branch caught ValueError, so any string the
+    other three branches could not parse aborted the whole run -- which is what
+    the 2026-08-06 metadata does: 231 rows of each tree carry the Solr-style
+    range ``[2022 TO 2024]``, no ``-`` and length 14, so it reaches the
+    ``len != 10`` branch and raises there. ``determine_resolution`` already
+    classifies such a value MISSING, which every shipped config lists in
+    ``invalid_date_resolutions``, so the intended disposition was always "drop
+    it"; only the parser disagreed. Returning NaT lets the existing
+    ``valid_dates`` filter do that, and ``main`` reports the count so the drop
+    is visible rather than silent.
     """
     if pd.isna(date_string) or date_string == "?":
         return pd.NaT
 
     date_string = str(date_string)
 
-    if "-" not in date_string and len(date_string) == 4:
-        return datetime.fromisoformat(f"{date_string}-06-01")
-    elif date_string.count("-") == 1:
-        mid_date = f"{date_string}-15"
-        if len(mid_date) == 10:
-            return datetime.fromisoformat(mid_date)
-        else:
-            padded_date_string = "-".join(i.zfill(2) for i in mid_date.split("-"))
+    try:
+        if "-" not in date_string and len(date_string) == 4:
+            return datetime.fromisoformat(f"{date_string}-06-01")
+        elif date_string.count("-") == 1:
+            mid_date = f"{date_string}-15"
+            if len(mid_date) == 10:
+                return datetime.fromisoformat(mid_date)
+            else:
+                padded_date_string = "-".join(i.zfill(2) for i in mid_date.split("-"))
+                return datetime.fromisoformat(padded_date_string)
+        elif len(date_string) != 10:
+            padded_date_string = "-".join(i.zfill(2) for i in date_string.split("-"))
             return datetime.fromisoformat(padded_date_string)
-    elif len(date_string) != 10:
-        padded_date_string = "-".join(i.zfill(2) for i in date_string.split("-"))
-        return datetime.fromisoformat(padded_date_string)
-    else:
-        try:
+        else:
             return datetime.fromisoformat(date_string)
-        except ValueError:
-            return pd.NaT
+    except ValueError:
+        return pd.NaT
+
+
+def config_date(date_string: str, key: str) -> pd.Timestamp:
+    """Parse a *config-supplied* date, raising rather than returning NaT.
+
+    ``robust_fromisoformat`` is lenient by design because it reads external
+    per-row metadata, where an unrecognized value is data to be dropped. A date
+    from the config is the opposite case: a typo there is a maintainer error, and
+    a run must not proceed on it.
+
+    Without this, widening ``robust_fromisoformat``'s guard to all four branches
+    silently disabled a QC filter. ``min_leaf_date`` is used only as
+    ``meta_df["date"] < robust_fromisoformat(MIN_LEAF_DATE)``, and every
+    comparison against ``NaT`` is ``False`` -- so a malformed value made
+    ``invalid_time`` all-False and dropped zero samples, at exit 0 with no
+    warning. ``max_leaf_date`` is parsed with a bare ``datetime.fromisoformat``
+    and so kept failing loudly; the two date knobs must not differ in strictness.
+    The accepted formats are unchanged -- this only converts an unparseable value
+    from a silent no-op back into an error.
+    """
+    parsed = robust_fromisoformat(date_string)
+    if pd.isna(parsed):
+        raise ValueError(
+            f"qc_filter_options.{key} = {date_string!r} is not a parseable date. "
+            f"Unlike a metadata row, a config date is not dropped when it fails "
+            f"to parse: {key} would silently filter nothing. Fix the config."
+        )
+    return parsed
 
 
 def main():
@@ -111,7 +151,21 @@ def main():
             lambda x: x.name
         )
         meta_df.drop(columns=["date_resolution"], inplace=True)
-        meta_df["date"] = meta_df["date"].apply(robust_fromisoformat)
+        raw_dates = meta_df["date"]
+        meta_df["date"] = raw_dates.apply(robust_fromisoformat)
+
+        # Values that were present but could not be parsed at all. They are dropped
+        # by `valid_dates` below like any other invalid date; reported here so the
+        # drop is attributable, since an unparseable date means a metadata format
+        # this parser has not seen rather than an ordinary missing value.
+        unparseable = raw_dates.notna() & (raw_dates != "?") & meta_df["date"].isna()
+        if unparseable.any():
+            examples = raw_dates[unparseable].value_counts()
+            print(
+                f"Unparseable date values: {int(unparseable.sum())} rows across "
+                f"{len(examples)} distinct value(s); dropped as invalid dates. "
+                f"Most common: {examples.head(5).to_dict()}"
+            )
 
         valid_dates = ~pd.isna(meta_df["date"])
         if MAX_LEAF_DATE is not None:
@@ -121,7 +175,7 @@ def main():
             meta_df = meta_df[valid_dates]
 
         invalid_resolution = meta_df["date_resolution_str"].isin(INVALID_DATE_RES)
-        invalid_time = meta_df["date"] < robust_fromisoformat(MIN_LEAF_DATE)
+        invalid_time = meta_df["date"] < config_date(MIN_LEAF_DATE, "min_leaf_date")
         invalid_date = meta_df[invalid_resolution | invalid_time]
         qc_1_strain_to_drop = invalid_date["strain"].to_list()
         meta_df.drop(invalid_date.index, inplace=True)

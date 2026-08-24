@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Stage | Description | Key Rules |
 |-------|-------------|-----------|
 | 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `export_newick`, `chronumental`, `chronumental_qc` (tips **and** internal nodes, #139), `window_subtree_counts`, `get_ref_fasta`, `ref_coding_sites` |
-| 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade` |
+| 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade`, `censor_table` (per-clade DASM censor table, #144) |
 | 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
 | 5 | Unified Count Table | `build_count_table` (full mutation grid + actual counts + masking flags, via `modules/masking.py`) |
 | 6 | GLM Rate Estimation | `annotate_counts`, `curate_counts`, `master_table`, `get_rates_table`, plus their per-era counterparts `curate_counts_era`, `master_table_era`, `get_rates_table_era` and `era_fit_summary` (#137), `window_expected_counts` (windowed expected counts + `delta_fitness_ratio`; stays on the **pooled** table) |
@@ -29,7 +29,7 @@ The pipeline uses simple integer versioning (v1, v2, v3, etc.) for reproducibili
 ### Version Management
 
 - **Version File**: `VERSION` in the repository root contains the current pipeline version
-- **Automatic Versioning**: The Snakefile derives each tree's output directory as `{output_root}/{label}_{version}` (e.g., `results/public_2022-06-01_v10`)
+- **Automatic Versioning**: The Snakefile derives each tree's output directory as `{output_root}/{label}_{version}` (e.g., `results/public_2022-06-01_v11`)
 - **Git Tags**: Each version should be tagged in git (e.g., `git tag v1`) when the branch is ready to merge
 - **Changelog**: All output schema changes must be documented in `CHANGELOG.md`
 
@@ -85,7 +85,7 @@ pixi run snakemake -n --configfile config/config.yaml
 
 # Run specific target (per-tree output path)
 pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
-  results/public_2022-06-01_v10/aamut_fitness/all_aamut_fitness.csv
+  results/public_2022-06-01_v11/aamut_fitness/all_aamut_fitness.csv
 
 # Clean all outputs
 pixi run snakemake --delete-all-output --configfile config/config.yaml
@@ -94,7 +94,7 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 ### Testing
 ```bash
 # Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
-# all nine before the pipeline steps)
+# all twelve before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 pixi run python tests/test_clade_founder_guards.py
 pixi run python tests/test_founder_codon_background.py
@@ -105,6 +105,8 @@ pixi run python tests/test_era_mapping.py
 pixi run python tests/test_era_rate_dispatch.py
 pixi run python tests/test_bte_haplotype.py   # half A (env pin) only without bte
 pixi run python tests/test_node_date_qc.py
+pixi run python tests/test_date_parsing.py
+pixi run python tests/test_censor_table.py
 
 # Half B of the bte test needs the Snakemake-built bte env, so it runs after a
 # pipeline run; --require-bte makes a missing env a failure rather than a skip.
@@ -463,6 +465,70 @@ mat-pcp/
     both directions.
     See [#137](https://github.com/matsengrp/mat-pcp/issues/137).
 
+12. **UShER masking censors, and a censored mutation is not relative to the
+    clade founder.** Two facts about `pcps/{gene}/censored_mutations.csv`, each
+    of which makes a plausible guard wrong.
+
+    *Masked sites are censored, not ambiguous.* UShER does not write `N`; it
+    **deletes** the mutations from the MAT, so the node inherits its parent's
+    state. The state is known, the *event* was destroyed. That rules out
+    representing the mask in the sequence — an `N` tokenizes its whole codon to
+    `AA_AMBIG_IDX` and would throw away a state we have — so the correction
+    belongs in the observation model, and mat-pcp's job is to emit coordinates.
+    `{gene}_codon_sites_to_mask.txt` cannot serve: it never reaches the loss
+    (only the PCP drop filter and the dashboards read it), it is codon-granular,
+    and `get_problematic_sites.py`'s `site_all_excluded` keeps by construction
+    only the reasons holding in *every* clade, so the entire clade-specific half
+    of the yaml is invisible to training. The two files carry disjoint *reasons*
+    (two of `compute_exclusions`' five here, three there) but **not** disjoint
+    sites — a site can be both clade-masked in the yaml and in the
+    ProblematicSites VCF, 32 such `(clade, nt_site)` pairs on the v11
+    gisaid-and-public tree — so a training run applies both and neither file may
+    assert disjointness against the other.
+
+    *matUtils reports each branch relative to its parent, not to the founder.*
+    A directional mask's `from_nt` therefore need **not** equal the clade
+    founder's base: the mask can legitimately sit on a derived background,
+    including a reversion back toward the founder, which is exactly the artifact
+    class UShER masking targets. Of the 1,126 directional masks carried by the
+    32 clades that have any on the v11 gisaid-and-public tree, 1,083 have
+    `founder == from_nt`, 36 have `founder == to_nt` and 7 have neither (e.g.
+    25A `A22896T`, founder `G`). An
+    equality assertion — the obvious guard, and the one #144 originally
+    specified — fails on real data. The sensitive property is the *ratio*: a
+    `from_nt`/`to_nt` swap inverts the distribution wholesale, so that is what
+    raises, with the three-way counts logged as the diagnostic. This is the same
+    observation as pattern 7, one level up: a clade's observed mutations are not
+    all off its founder.
+
+    Two further traps. The genomic→`nt_index` map is **one-to-many** at a −1
+    frameshift (ORF1b reads genomic 13468 at indices 26 *and* 27, in different
+    codons), so a mask there emits two rows and a flat `nt_site - cds_start`
+    offset is wrong for every position past the junction — pattern 10's trap
+    again. And the clade **roster sidecar is part of the deliverable**: a clade
+    with nothing censored contributes zero rows, so in the CSV alone it is
+    indistinguishable from a mistyped clade name, and the consumer cannot
+    implement "unknown clade raises, empty clade passes" without it.
+
+    `sequences.slice_cds` deliberately keeps its per-block string slice rather
+    than gathering over `cds_nt_positions`, even though sharing the code would
+    be tidier: it runs twice per PCP over millions of PCPs and the gather
+    measured ~900× slower on ORF1ab (1.3 µs vs 1166 µs), which caching the
+    position list does not rescue. The anti-drift guarantee is a test, not
+    shared code.
+
+    Guarded by `tests/test_censor_table.py`, which is the **only** non-vacuous
+    coverage: the CI clades are 19A/19B/20A and the yaml's earliest clade is
+    20B, so the table is empty for every gene in every CI run, and no yaml entry
+    falls in ORF1b's leading block 13442–13468, so the junction case is
+    unreachable from any pipeline run. It execs the real script — including
+    deliberately corrupted copies, so a guard that never fires is caught —
+    because a test that re-implements the inversion and asserts against its own
+    copy is pattern 10's vacuity. `validate_test.py::validate_censor_table` is
+    the end-to-end counterpart and checks the roster, which stays non-vacuous
+    even when the table is empty.
+    See [#144](https://github.com/matsengrp/mat-pcp/issues/144).
+
 ### Configuration Sections
 
 The configuration (`config/config.yaml`) is organized into:
@@ -539,7 +605,7 @@ The configuration (`config/config.yaml`) is organized into:
 Results are stored per tree in `{output_root}/{label}_{version}/`:
 - `mat/`: Filtered trees, clade subtrees
 - `windows/`: Sliding-window subtree counts + founders (Phase 2) + per-window expected counts / `delta_fitness_ratio` trajectory (Phase 3)
-- `pcps/`: Curated parent-child pairs
+- `pcps/`: Curated parent-child pairs, plus each gene's `censored_mutations.csv` DASM training censor table and its `.clades.txt` roster (#144)
 - `ref/`: Reference genome, coding sites
 - `mutation_counts/`: Per-clade and aggregated counts
 - `clade_founders/`: Founder sequences and mutations

@@ -67,15 +67,15 @@ global `qc_filter_options.max_leaf_date`.
 
 ```yaml
 # Optional; defaults to "results". Each tree writes to
-# {output_root}/{label}_{version}, e.g. results/public_2022-06-01_v10.
+# {output_root}/{label}_{version}, e.g. results/public_2022-06-01_v11.
 output_root: "results"
 
 trees:
-  public_2022-06-01:                       # -> results/public_2022-06-01_v10
+  public_2022-06-01:                       # -> results/public_2022-06-01_v11
     mat: "path/to/2022-06-01/tree.pb.gz"
     metadata: "path/to/2022-06-01/metadata.tsv.gz"
     max_leaf_date: "2022-06-01"            # per-tree override
-  public_2023-01-01:                       # -> results/public_2023-01-01_v10
+  public_2023-01-01:                       # -> results/public_2023-01-01_v11
     mat: "path/to/2023-01-01/tree.pb.gz"
     metadata: "path/to/2023-01-01/metadata.tsv.gz"
     # max_leaf_date omitted -> inherits the global default
@@ -97,7 +97,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml
 
 # Run specific target (per-tree output path)
 pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
-  results/public_2022-06-01_v10/aamut_fitness/all_aamut_fitness.csv
+  results/public_2022-06-01_v11/aamut_fitness/all_aamut_fitness.csv
 ```
 
 ## Pipeline Stages
@@ -138,6 +138,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `rates_table.csv` | Neutral mutation rates by context (384 rows: the after-boundary half of the grid) |
 | `rates_table_{era}.csv` | Same, per era (v10+) |
 | `<gene>_codon_sites_to_mask.txt` | Problematic codon sites per configured protein (e.g. `S_codon_sites_to_mask.txt`) |
+| `pcps/{gene}/censored_mutations.csv` | Per-clade, per-nucleotide censor table for DASM training (v11+, #144), with a `censored_mutations.clades.txt` clade roster alongside. Carries the clade-specific UShER masks the codon mask drops; a training run applies **both** |
 | `fitness/expected_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
 | `aamut_fitness/all_aamut_fitness.csv` | Amino acid-level fitness estimates |
@@ -434,6 +435,17 @@ this table but include **only sites masked across all clades** — i.e. every mu
 site is excluded (the clade-independent reasons: `site_include_range`, `sites_to_exclude`, and
 the ProblematicSites VCF). Clade-specific masks (UShER per-clade `sites`/`mutations` and
 founder→reference reversions) are intentionally excluded from the codon mask.
+
+The clade-specific UShER masks are instead emitted, at nucleotide and direction granularity,
+as `pcps/{gene}/censored_mutations.csv` (v11+, #144) with a `censored_mutations.clades.txt`
+roster alongside. UShER masking **deletes** the mutations from the MAT rather than marking the
+sites ambiguous, so the node inherits its parent's state: the site is *censored, not
+ambiguous*, and the correction belongs in the training loss rather than in the sequence. The
+codon mask cannot serve that purpose — it never reaches the loss, it is codon-granular, and it
+is clade-independent by construction. The two files carry **disjoint reasons but not disjoint
+sites** (a site can be both clade-masked in the yaml and in the ProblematicSites VCF), so a
+training run applies both. Nothing in this pipeline consumes the censor table; see
+[matsengrp/dasm2-experiments#1079](https://github.com/matsengrp/dasm2-experiments/issues/1079).
 
 #### UShER masks: source
 
