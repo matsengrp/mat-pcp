@@ -241,6 +241,18 @@ jobs:
       run: |
         pixi run python tests/test_censor_table.py
 
+    # The date-cutoff PCP subtrees (#149). The CI pipeline run does cover the
+    # roster (its 2020-06-01 arm drops 19A below min_clade_size) and the
+    # degenerate arm's byte-equality, but not the *boundary*: every test-data
+    # date is interior to both arms, so a `<` written for `<=` changes nothing
+    # observable. Nor can a run see the ordering guarantee the byte-equality
+    # rests on, since the test data's clade lists are already sorted. Both are
+    # checked here on a fixture built so each failure moves a sample, against
+    # deliberately corrupted copies of the shipped scripts.
+    - name: Verify the date-cutoff PCP boundary, ordering and guards
+      run: |
+        pixi run python tests/test_pcp_date_cutoffs.py
+
     # The steps above name each test file so a failure points at a readable log.
     # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]
     # is empty, so a *new* tests/test_*.py runs zero times and CI stays green --

@@ -18,6 +18,116 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### v12
+
+**The reason for the bump is `chronumental_kwargs: --variance_dates 30`
+([#146](https://github.com/matsengrp/mat-pcp/issues/146)): every node date moves,
+and with it `windows/subtree_counts.csv` and `windows/fitness_trajectory.csv`.**
+Trajectories built on v11 node dates should not be mixed with v12 ones.
+
+#### Adopted `--variance_dates 30`
+
+[#145](https://github.com/matsengrp/mat-pcp/issues/145) established that
+chronumental buys leaf-date accuracy with inflated branch durations: durations are
+free parameters under a flat `Uniform(0, 365 * 10000)` prior while every
+day-resolution leaf date is asserted to sd `0.3 * 1 day`, three orders of magnitude
+tighter than the Poisson term on a 0–1 mutation branch. #146 swept the prior. The
+adopted arm is A3:
+
+| metric | v11 (`0.3`, the default) | v12 (`30`) |
+|---|---|---|
+| root-to-tip / fitted rate | 4.31x | **1.48x** |
+| fitted rate vs the 23.9 subs/yr nominal | 0.40x | **1.14x** |
+| final `length_cor` | 0.40 | **0.85** |
+| zero-mutation share of total branch-time | 45.9% | **1.4%** |
+| branches longer than `window_size` (90 d) | 2.87% | **0.51%** |
+| median \|tip residual\| (gate: 30 d) | 1.0 d | 10.0 d |
+| p95 \|tip residual\| | 1.0 d | 35.0 d |
+| root date (window `[2019-10-01, 2020-02-29]`) | 2019-12-10 | 2019-12-11 |
+
+Measured on `public_2026-08-06_v11` at `--steps 1000`; the full six-arm table,
+including the two `HorseShoeLike` arms blocked by
+[#147](https://github.com/matsengrp/mat-pcp/issues/147), is in #146.
+
+**What this spends is tip-residual margin.** The gate
+(`chronumental_max_median_abs_tip_residual_days`) reads the *median*, which moves
+1 d → 10 d against a 30 d bound, so it still passes with 3x headroom — but the p95
+lands at 35 d, above the bound the median clears. The gate value is deliberately
+unchanged: retuning it in the same version that changes the prior would leave
+nothing measuring whether the change was affordable.
+
+**A caveat on the framing.** #145 and #146 quote the deficit against
+chronumental's own pre-fit root-to-tip slope (40.38 subs/yr on the public tree,
+r=0.94 over 8.37 M tips), and that slope is itself **1.69x the nominal** 23.9
+subs/yr. Nothing measured here explains that gap — saltational stems plus the
+tip-weighting of heavily sampled post-jump lineages are the plausible mechanisms,
+but that is a hypothesis — so the root-to-tip line is not a neutral yardstick.
+Against the nominal instead, v11's aggregate implied rate is 9.47 subs/yr (0.40x)
+and v12's is 27.25 (1.14x). Both references agree on the direction and on which
+arm to adopt; the nominal is the fairer one for judging magnitude.
+
+What the choice of reference does *not* affect is where the deficit lives. On the
+v11 public tree, 91.1% of all mutations sit on branches carrying 1–5 of them, and
+the cumulative implied rate over exactly those branches is 8.88 subs/yr — so this
+is not a tail artifact. The high-count bins run the other way (57.9 and 72.0
+subs/yr above 20 mutations): the default fit *compresses* the saltational branches
+while parking 45.9% of the tree's elapsed time on zero-mutation ones.
+
+`--variance_dates 30` is added to every config that runs chronumental, including
+`config_test_data.yaml`. The test tree was already healthy (it is 3,204 nodes and
+cannot show the inflation), and its aggregate rate moves only 24.17 → 24.89
+subs/yr with the zero-mutation share of branch-time going 1.4% → 0.1%.
+
+#### Added: date-cutoff PCP subtrees
+
+New per-tree config key `pcp_date_cutoffs`
+([#149](https://github.com/matsengrp/mat-pcp/issues/149)). For each cutoff, the
+whole per-gene PCP family is rebuilt under `pcps/{gene}/upto_{cutoff}/` from the
+subtree of samples collected **at or before** that date, so DASM can be trained on
+what was knowable then. Filenames inside the cutoff directory are identical to the
+full-tree ones, so a consumer points at a different root and its existing globbing
+works unchanged. New outputs:
+
+- `pcps/{gene}/upto_{cutoff}/{clade}_pcps.csv.gz`, `all_pcps.csv.gz`
+- `pcps/{gene}/upto_{cutoff}/{clade}_filtered_branches.csv`,
+  `filtered_branch_ids.csv`, `pcp_curation_report.txt`
+- `pcps/{gene}/upto_{cutoff}/*_pcps_dasm_ready.csv.gz` + `*_dasm_filter_report.txt`
+  + `*_dasm_filter_stats.json`, and `dasm_ready_per_clade.done`
+- `pcps/cutoff_summary.csv` — the roster (one row per (cutoff, clade))
+- `mat/clade_counts_by_cutoff.csv` — the checkpoint's counts
+- `mat/cutoffs/upto_{cutoff}/{clade}_samples.txt`, `{clade}_tree.pb`
+
+`config-2026-08-06-six-genes.yaml` carries one cutoff, `2023-01-01`.
+
+**The truncated PCPs are re-extracted, not filtered — and this is measurable, not
+theoretical.** `matUtils extract -s` returns the subtree *induced* on the retained
+samples, so internal nodes that lose all but one child are collapsed and their
+mutations merged onto the surviving branch. On the test data's `2020-06-01` arm, 2
+of 7 ORF1ab cutoff PCPs have a (parent, child) sequence pair that occurs nowhere in
+the full-tree table: sample `MEX/SEARCH-3636-TIJ/2020` has parent `node_13` at
+branch length 1 in the full tree and parent `node_1` at branch length **4** at the
+cutoff. A row filter over `all_pcps.csv.gz` would therefore have kept a PCP whose
+parent is not reconstructible from pre-cutoff samples *and* dropped three mutations
+outright, leaving a set of parent-child pairs that is the branch set of no tree.
+
+**The degenerate case is the ordinary path.** A cutoff equal to the tree's
+`max_leaf_date` selects every sample, so its outputs are **byte-identical** to the
+full-tree ones — verified on the test data across all four genes for both
+`all_pcps.csv.gz` and `all_pcps_dasm_ready.csv.gz`.
+`config_test_data.yaml` carries that arm alongside a truncating one.
+
+**Known leakage, stated rather than hidden.** `{gene}_codon_sites_to_mask.txt` and
+`pcps/{gene}/censored_mutations.csv` are *not* recomputed per cutoff; they come
+from the full tree's count table and from `data/usher_masked_sites.yaml`. A strict
+holdout would rebuild the mask from pre-cutoff data only, which means re-running
+the whole counting and GLM path per cutoff. The leak is confined to which sites are
+flagged as sequencing artifacts — not to any fitness signal — and the censor table
+is keyed by clade, so extra post-cutoff clades in it are inert for a consumer that
+looks masks up per clade.
+
+Clade founders are likewise not recomputed: a clade's founder is a property of its
+defining mutations, not of which of its samples have been collected yet.
+
 ### v11
 
 **The reason for the bump is `data/usher_masked_sites.yaml`: the UShER clade mask

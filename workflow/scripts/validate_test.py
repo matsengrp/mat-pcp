@@ -1342,6 +1342,209 @@ def validate_founder_codon_background(output_dir):
     )
 
 
+def validate_cutoff_pcps(output_dir):
+    """The date-cutoff PCP families reconcile with their roster, in both directions.
+
+    Three properties, each of which fails silently without a check (#149).
+
+    **The skip is real, not just recorded.** ``pcps/cutoff_summary.csv`` names
+    every (cutoff, clade) pair with ``included`` true/false, and a false row must
+    have *no* per-clade files while a true row must have all of them. Checking
+    only the true rows would pass a run that also published a clade the
+    checkpoint said to skip -- a subtree below ``min_clade_size``, or empty.
+    Checking only the file tree would pass a run whose roster omitted a clade it
+    built, which is the ambiguity ("no clade yet" vs "wiring mistake") the roster
+    exists to resolve.
+
+    **No cutoff PCP may involve a sample collected after its cutoff.** This is
+    the property the whole feature is for, and nothing else here can see it: a
+    date filter applied one comparison operator off, or against the wrong column,
+    still yields plausible per-clade counts. Only leaf children can be checked --
+    internal node names are not in the metadata -- but leaves are where the dates
+    live.
+
+    **The degenerate arm is byte-identical to the full tree.** An arm where every
+    clade's ``n_samples_upto`` equals its ``n_samples_full`` selected everything,
+    so it must reproduce the full-tree aggregates exactly. That is detected from
+    the summary rather than read from the config, so this function needs no
+    knowledge of ``pcp_date_cutoffs``. Byte-equality (not row-equality) is the
+    available check because ``pcpio.PCP_CSV_COMPRESSION`` pins ``mtime=0``
+    (pattern 9); asserting only equal row counts would miss a reordering, and
+    order is exactly what ``clades_w_adequate_counts_upto`` is written to
+    preserve.
+
+    If every arm turns out degenerate the result is reported as such rather than
+    as a success, for #133's reason: "all cutoffs agreed" is true of a comparison
+    that truncated nothing.
+    """
+    import pandas as pd
+
+    summary_path = os.path.join(output_dir, "pcps", "cutoff_summary.csv")
+    if not os.path.isfile(summary_path):
+        return [], (
+            f"SKIPPED: no {summary_path}; this config sets no pcp_date_cutoffs"
+        )
+
+    diffs = []
+    summary = pd.read_csv(summary_path)
+    expected_cols = {
+        "cutoff", "clade", "output_subdir", "n_samples_full", "n_samples_upto",
+        "adequate_sample_counts", "included",
+    }
+    missing_cols = expected_cols - set(summary.columns)
+    if missing_cols:
+        return [
+            f"cutoff_summary.csv is missing column(s) {sorted(missing_cols)}"
+        ], None
+    if summary.empty:
+        return [f"{summary_path} has no rows, but the file was requested"], None
+
+    pcps_root = os.path.join(output_dir, "pcps")
+    genes = sorted(
+        name for name in os.listdir(pcps_root)
+        if os.path.isdir(os.path.join(pcps_root, name))
+    )
+    if not genes:
+        return [f"no per-gene PCP directories under {pcps_root}"], None
+
+    # Directories on disk vs cutoffs in the roster, both ways. An orphan
+    # ``upto_*`` directory is a stale output tree from a config that listed a
+    # cutoff since removed, and its files would look as current as any other.
+    roster_dirs = set(summary["output_subdir"])
+    for gene in genes:
+        on_disk = {
+            name for name in os.listdir(os.path.join(pcps_root, gene))
+            if name.startswith("upto_")
+            and os.path.isdir(os.path.join(pcps_root, gene, name))
+        }
+        for orphan in sorted(on_disk - roster_dirs):
+            diffs.append(
+                f"pcps/{gene}/{orphan}/ exists but {orphan} is not in "
+                f"cutoff_summary.csv (stale output tree from a removed cutoff?)"
+            )
+        for absent in sorted(roster_dirs - on_disk):
+            diffs.append(
+                f"cutoff_summary.csv names {absent} but pcps/{gene}/{absent}/ "
+                f"does not exist"
+            )
+
+    # Sample dates, for the after-the-cutoff check below.
+    meta_path = os.path.join(output_dir, "mat", "filtered_metadata.tsv.gz")
+    strain_dates = None
+    if os.path.isfile(meta_path):
+        meta = pd.read_csv(
+            meta_path, sep="\t", usecols=["strain", "date"], low_memory=False
+        )
+        strain_dates = dict(zip(meta["strain"], pd.to_datetime(meta["date"])))
+
+    n_checked_pcps = 0
+    n_late = 0
+    for _, row in summary.iterrows():
+        cutoff, clade, subdir = row["cutoff"], row["clade"], row["output_subdir"]
+        included = bool(row["included"])
+        if int(row["n_samples_upto"]) > int(row["n_samples_full"]):
+            diffs.append(
+                f"{cutoff}/{clade}: n_samples_upto "
+                f"{row['n_samples_upto']} exceeds n_samples_full "
+                f"{row['n_samples_full']}, which is arithmetically impossible"
+            )
+
+        samples_path = os.path.join(
+            output_dir, "mat", "cutoffs", subdir, f"{clade}_samples.txt"
+        )
+        if included:
+            if not os.path.isfile(samples_path):
+                diffs.append(f"{cutoff}/{clade}: included but {samples_path} absent")
+            else:
+                with open(samples_path) as handle:
+                    n_lines = sum(1 for line in handle if line.strip())
+                if n_lines != int(row["n_samples_upto"]):
+                    diffs.append(
+                        f"{cutoff}/{clade}: sample list has {n_lines} strains but "
+                        f"cutoff_summary.csv says {row['n_samples_upto']}"
+                    )
+        for gene in genes:
+            pcp_path = os.path.join(pcps_root, gene, subdir, f"{clade}_pcps.csv.gz")
+            if included and not os.path.isfile(pcp_path):
+                diffs.append(f"{cutoff}/{clade}: included but {pcp_path} absent")
+                continue
+            if not included:
+                if os.path.isfile(pcp_path):
+                    diffs.append(
+                        f"{cutoff}/{clade}: recorded included=False, yet "
+                        f"{pcp_path} was published -- the skip was recorded but "
+                        f"not performed"
+                    )
+                continue
+            if strain_dates is None:
+                continue
+            pcps = pd.read_csv(pcp_path)
+            bound = pd.Timestamp(cutoff)
+            for name in pcps["child_name"]:
+                date = strain_dates.get(name)
+                if date is not None and date > bound:
+                    n_late += 1
+                    if n_late <= 5:
+                        diffs.append(
+                            f"{cutoff}/{clade}/{gene}: PCP child {name!r} was "
+                            f"collected {date.date()}, after the cutoff"
+                        )
+            n_checked_pcps += len(pcps)
+
+    # The degenerate arm(s), detected from the roster rather than the config.
+    degenerate, truncating = [], []
+    for cutoff, arm in summary.groupby("cutoff"):
+        if (arm["n_samples_upto"] == arm["n_samples_full"]).all():
+            degenerate.append(str(cutoff))
+        else:
+            truncating.append(str(cutoff))
+
+    n_byte_equal = 0
+    for cutoff in degenerate:
+        subdir = f"upto_{cutoff}"
+        for gene in genes:
+            for name in ("all_pcps.csv.gz", "all_pcps_dasm_ready.csv.gz"):
+                full = os.path.join(pcps_root, gene, name)
+                cut = os.path.join(pcps_root, gene, subdir, name)
+                if not (os.path.isfile(full) and os.path.isfile(cut)):
+                    continue
+                with open(full, "rb") as a, open(cut, "rb") as b:
+                    if a.read() != b.read():
+                        diffs.append(
+                            f"{cutoff} selected every sample, so "
+                            f"pcps/{gene}/{subdir}/{name} must byte-equal "
+                            f"pcps/{gene}/{name}; it does not"
+                        )
+                    else:
+                        n_byte_equal += 1
+
+    # Truncating arms must actually shrink something, or the after-the-cutoff
+    # check above ran over sets identical to the full tree's.
+    for cutoff in truncating:
+        arm = summary[summary["cutoff"].astype(str) == cutoff]
+        if not (arm["n_samples_upto"] < arm["n_samples_full"]).any():
+            diffs.append(
+                f"{cutoff} is classed as truncating but no clade lost a sample"
+            )
+
+    if not truncating:
+        note = (
+            f"VACUOUS: all {len(degenerate)} cutoff arm(s) selected every sample, "
+            f"so nothing was truncated and the after-the-cutoff check compared "
+            f"the full tree with itself"
+        )
+    else:
+        skipped = summary[~summary["included"].astype(bool)]
+        note = (
+            f"{len(truncating)} truncating + {len(degenerate)} degenerate arm(s) "
+            f"over {len(genes)} gene(s); {n_checked_pcps} PCP(s) checked, "
+            f"{n_late} collected after their cutoff; {len(skipped)} "
+            f"(cutoff, clade) pair(s) skipped and recorded; "
+            f"{n_byte_equal} degenerate file(s) byte-equal the full tree"
+        )
+    return diffs, note
+
+
 def validate_censor_table(output_dir, yaml_path="data/usher_masked_sites.yaml"):
     """Every PCP gene's censor table is well formed and its roster is complete.
 
@@ -1602,10 +1805,11 @@ def main():
     era_diffs, era_summary = validate_era_rate_tables(output_dir)
     censor_diffs, censor_summary = validate_censor_table(output_dir)
     rtt_diffs, rtt_summary = validate_root_to_tip_cloud(output_dir)
+    cutoff_diffs, cutoff_summary = validate_cutoff_pcps(output_dir)
     differences += (
         site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
         + orf1ab_diffs + orf1b_diffs + glm_syn_diffs + codon_bg_diffs + era_diffs
-        + censor_diffs + rtt_diffs
+        + censor_diffs + rtt_diffs + cutoff_diffs
     )
 
     if differences:
@@ -1650,6 +1854,8 @@ def main():
             print(f"  - {censor_summary}")
         if rtt_summary:
             print(f"  - {rtt_summary}")
+        if cutoff_summary:
+            print(f"  - Date-cutoff PCPs: {cutoff_summary}")
         sys.exit(0)
 
 

@@ -127,6 +127,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `pcps/{gene}/pcp_curation_report.txt` | Report showing PCP filtering statistics |
 | `pcps/{gene}/filtered_branch_ids.csv` | Branch IDs dropped during PCP curation, aggregated across clades. Retained for inspection only — nothing in the pipeline reads it; harmonization with mutation counting comes from the shared `max_nt_mutations` / `max_reversions_*` config keys. Not gzipped |
 | `mat/clade_counts.csv` | Sample counts per clade |
+| `mat/clade_counts_by_cutoff.csv` | Per-(cutoff, clade) sample counts and adequacy, the checkpoint behind the date-cutoff PCPs (v12+) |
 | `clade_founder_nts.csv` | Nucleotide at each coding site for all clade founders |
 | `mutation_counts/aggregated.csv` | Aggregated mutation counts across all clades |
 | `counts_all.csv` | Per-clade table of all possible mutations with actual counts and masking flags |
@@ -139,6 +140,8 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `rates_table_{era}.csv` | Same, per era (v10+) |
 | `<gene>_codon_sites_to_mask.txt` | Problematic codon sites per configured protein (e.g. `S_codon_sites_to_mask.txt`) |
 | `pcps/{gene}/censored_mutations.csv` | Per-clade, per-nucleotide censor table for DASM training (v11+, #144), with a `censored_mutations.clades.txt` clade roster alongside. Carries the clade-specific UShER masks the codon mask drops; a training run applies **both** |
+| `pcps/{gene}/upto_{cutoff}/…` | The whole per-gene PCP family rebuilt from the subtree of samples collected at or before `{cutoff}` (v12+, [#149](https://github.com/matsengrp/mat-pcp/issues/149)). Filenames match the full-tree ones, so a consumer just points at a different root. Re-extracted, **not** a row filter — `matUtils` collapses unifurcations and merges their mutations, so a cutoff table is not a subset of the full one |
+| `pcps/cutoff_summary.csv` | The cutoff roster: one row per (cutoff, clade) **including the pairs that were not built**, so a clade skipped for being below `min_clade_size` at that date is distinguishable from a wiring mistake (v12+) |
 | `fitness/expected_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
 | `aamut_fitness/all_aamut_fitness.csv` | Amino acid-level fitness estimates |
@@ -307,8 +310,14 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `chronumental_kwargs` | Extra flags passed verbatim to `chronumental` (e.g. `--steps N`) | `""` |
+| `chronumental_kwargs` | Extra flags passed verbatim to `chronumental` (e.g. `--steps N`). Every shipped config sets `--variance_dates 30` as of v12 — the 0.3 default asserts each day-resolution leaf date to sd 0.3 d, three orders of magnitude tighter than the Poisson term on a 0–1 mutation branch, which lets the fit buy leaf-date accuracy with inflated branch durations ([#145](https://github.com/matsengrp/mat-pcp/issues/145), [#146](https://github.com/matsengrp/mat-pcp/issues/146)) | `""` |
 | `chronumental_max_median_abs_tip_residual_days` | `chronumental_qc` gate: the run fails if the median absolute tip-date residual (predicted − collection date, days) exceeds this | `30` |
+
+### Date-Cutoff PCP Subtrees
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `pcp_date_cutoffs` | List of `YYYY-MM-DD` dates. For each, the whole per-gene PCP family is rebuilt under `pcps/{gene}/upto_{cutoff}/` from the samples collected at or before it ([#149](https://github.com/matsengrp/mat-pcp/issues/149)). Per-tree overridable, like `max_leaf_date`. Each entry must postdate `min_leaf_date` and must not exceed the tree's `max_leaf_date`; a cutoff *equal* to `max_leaf_date` is the degenerate case and reproduces the full tree byte-for-byte | `[]` |
 
 ### Window Fitness (sliding time windows)
 
@@ -501,6 +510,7 @@ Results are organized in the output directory:
 results/
 ├── mat/
 │   ├── clades/                    # Per-clade subtrees and sample lists
+│   ├── cutoffs/upto_{cutoff}/     # Date-truncated per-clade subtrees + sample lists (v12+)
 │   │   ├── {clade}_tree.pb        # Clade-specific MAT subtree
 │   │   └── {clade}_samples.txt    # Sample names in each clade
 │   ├── mat_tree.pb.gz             # Symlink to input MAT
@@ -515,7 +525,8 @@ results/
 │   ├── node_dates_rtt.csv         # Exact (date x root-to-tip divergence) cloud (#146)
 │   ├── node_dates_rtt_anchor.csv  # Root's fitted date: the fitted-clock line's origin
 │   ├── node_dates_rtt_scatter.png # That cloud, vs chronumental's pre-fit and fitted clocks
-│   └── clade_counts.csv           # Sample counts per clade
+│   ├── clade_counts.csv           # Sample counts per clade
+│   └── clade_counts_by_cutoff.csv # Per-(cutoff, clade) counts + adequacy (v12+, #149)
 ├── windows/                       # Sliding-window fitness (EPIC #115 Phases 2-3)
 │   ├── subtree_counts.csv         # Per-window per-mutation actual counts (coding)
 │   ├── founder_muts.csv           # Per-window subtree founders + haplotypes
@@ -530,7 +541,9 @@ results/
 │       ├── all_pcps.csv.gz            # Aggregated curated PCPs across all clades
 │       ├── all_pcps_dasm_ready.csv.gz # DASM-training-ready aggregate (v2+)
 │       ├── pcp_curation_report.txt    # PCP curation statistics
-│       └── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
+│       ├── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
+│       └── upto_{cutoff}/             # The same family, samples collected <= {cutoff} (v12+, #149)
+│   └── cutoff_summary.csv         # Cutoff roster, including the (cutoff, clade) pairs skipped
 ├── ref/
 │   ├── ref.fa                     # Reference genome (FASTA)
 │   ├── original_ref.gtf           # Original GTF annotations

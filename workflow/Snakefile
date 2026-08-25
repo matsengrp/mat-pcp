@@ -1,5 +1,6 @@
 """Top-level Snakemake file that runs the unified MAT pipeline."""
 
+import collections
 import os
 import re
 import pandas as pd
@@ -46,6 +47,12 @@ _loader_spec = importlib_util.spec_from_file_location(
 _workflow_loader = importlib_util.module_from_spec(_loader_spec)
 _loader_spec.loader.exec_module(_workflow_loader)
 era_mod = _workflow_loader.load_workflow_module("era", workflow.basedir)
+# ``modules/cutoffs.py`` is imported for the same reason: which (cutoff, clade)
+# pairs get a truncated PCP set is a DAG-construction decision (#149), and the
+# ``{cutoff}`` wildcard constraint is the module's own ``CUTOFF_PATTERN`` so the
+# pattern that validates a configured cutoff and the pattern that matches it in a
+# path cannot drift apart.
+cutoffs_mod = _workflow_loader.load_workflow_module("cutoffs", workflow.basedir)
 
 # =============================================================================
 # Tree Table and Output Directory Template
@@ -116,7 +123,15 @@ def _normalize_trees(cfg):
     # the merge and validation both iterate it, so nothing else needs touching.
     REQUIRED_TREE_KEYS = ("mat", "metadata")
     QC_OVERRIDABLE_KEYS = ("max_leaf_date",)
-    allowed_keys = {*REQUIRED_TREE_KEYS, *QC_OVERRIDABLE_KEYS}
+    # Overrides a *top-level* config key rather than one inside
+    # qc_filter_options, so it is merged separately below. Per-tree because the
+    # cutoffs a tree can carry are bounded by its own max_leaf_date (#149).
+    TREE_OVERRIDABLE_KEYS = ("pcp_date_cutoffs",)
+    allowed_keys = {
+        *REQUIRED_TREE_KEYS,
+        *QC_OVERRIDABLE_KEYS,
+        *TREE_OVERRIDABLE_KEYS,
+    }
 
     trees = cfg.get("trees")
     if not trees:
@@ -165,6 +180,19 @@ def _normalize_trees(cfg):
                 qc[key] = entry[key]
             qc.setdefault(key, None)
         entry["qc_filter_options"] = qc
+        # Top-level per-tree overrides, validated here rather than at first use.
+        # A cutoff becomes a directory name and a wildcard value, so a malformed
+        # or out-of-range one would otherwise surface as a MissingInputException
+        # naming a path nothing asked for (#149).
+        for key in TREE_OVERRIDABLE_KEYS:
+            if key not in entry:
+                entry[key] = cfg.get(key)
+        entry["pcp_date_cutoffs"] = cutoffs_mod.validate_cutoffs(
+            entry.get("pcp_date_cutoffs") or [],
+            qc["min_leaf_date"],
+            qc.get("max_leaf_date"),
+            label,
+        )
         normalized[label] = entry
     return normalized
 
@@ -226,6 +254,11 @@ wildcard_constraints:
     # path and an ``_{era}`` wildcard path; an open-ended pattern would let the
     # wildcard rule also claim paths it has no business building.
     era="|".join(era_mod.ERAS),
+    # A date cutoff (#149). Strict ISO, so the wildcard cannot swallow a path
+    # segment: with ``clade`` and ``gene`` already slash-free, this keeps
+    # ``pcps/{gene}/upto_{cutoff}/{clade}_pcps.csv.gz`` unambiguous against the
+    # full-tree ``pcps/{gene}/{clade}_pcps.csv.gz``.
+    cutoff=cutoffs_mod.CUTOFF_PATTERN,
 
 
 # Disambiguate the aggregate rules from their per-clade counterparts. The
@@ -240,6 +273,11 @@ ruleorder: aggregate_mutation_counts > count_mutations_clade
 ruleorder: aggregate_clade_pcps > extract_pcps_by_clade
 ruleorder: curate_all_pcps_for_dasm > curate_pcps_for_dasm
 ruleorder: aggregate_aamut_fitness > aamut_fitness_by_clade
+# The same tie-break, one directory down, for the date-cutoff family (#149):
+# ``upto_{cutoff}/all_pcps.csv.gz`` is a valid ``{clade}`` match for
+# ``upto_{cutoff}/{clade}_pcps.csv.gz`` with ``clade=all``.
+ruleorder: aggregate_clade_pcps_upto > extract_pcps_by_clade_upto
+ruleorder: curate_all_pcps_for_dasm_upto > curate_pcps_for_dasm_upto
 
 
 # =============================================================================
@@ -330,6 +368,40 @@ for _gene, _spec in PCP_GENE_TO_FITNESS_GENE.items():
             f"exactly the keys 'gene' and 'codon_offset'; got {_spec!r}"
         )
 
+
+def cutoffs_for_tree(label):
+    """This tree's validated ``pcp_date_cutoffs``, in config order (#149)."""
+    return tree_cfg(label)["pcp_date_cutoffs"]
+
+
+def cutoff_targets():
+    """Every date-cutoff target across all trees, for ``rule all`` (#149).
+
+    Built per tree rather than with a flat ``expand``, because ``cutoff`` is a
+    per-tree setting: a flat product would request every tree's cutoffs from
+    every tree, and a cutoff past a tree's ``max_leaf_date`` is rejected by
+    ``validate_cutoffs`` for exactly that reason.
+    """
+    targets = []
+    for label in TREE_LABELS:
+        cutoffs = cutoffs_for_tree(label)
+        if not cutoffs:
+            continue
+        outdir = tree_outdir(label)
+        targets.append(os.path.join(outdir, "pcps/cutoff_summary.csv"))
+        for cutoff in cutoffs:
+            subdir = cutoffs_mod.cutoff_dir(cutoff)
+            for gene in PCP_GENES:
+                targets += [
+                    os.path.join(outdir, "pcps", gene, subdir, name)
+                    for name in (
+                        "pcp_curation_report.txt",
+                        "all_pcps_dasm_ready.csv.gz",
+                        "dasm_ready_per_clade.done",
+                    )
+                ]
+    return targets
+
 # Terminal output files for the unified pipeline
 # (intermediate files are created automatically as dependencies)
 #
@@ -415,7 +487,11 @@ rule all:
             os.path.join(OUTDIR, "validation/{gene}/pcp_vs_counts_report.txt"),
             tree=TREE_LABELS,
             gene=PCP_GENES,
-        )
+        ),
+        # Date-cutoff PCP families (#149). Built per tree rather than as a flat
+        # product because ``pcp_date_cutoffs`` is a per-tree setting; empty for
+        # every config that does not set it.
+        cutoff_targets()
 
 
 # =============================================================================
@@ -1006,6 +1082,64 @@ def per_clade_inputs(path_template, wildcards, extra_clades=()):
     )
 
 
+def clades_w_adequate_counts_upto(wildcards):
+    """This (tree, cutoff)'s clades, in the *full roster's* order.
+
+    Order is not cosmetic. ``aggregate_clade_pcps`` concatenates its inputs in
+    order, so the aggregate's row order follows this list -- and the degenerate
+    arm (a cutoff equal to ``max_leaf_date``) is required to reproduce the
+    full-tree aggregate byte-for-byte. Filtering ``clades_w_adequate_counts``
+    rather than re-sorting the checkpoint's rows makes that identity hold by
+    construction instead of resting on the two orderings happening to agree,
+    which they do today only because both sources are sorted and ``max_clades``
+    truncates a sorted list.
+
+    Filtering the full roster also re-applies ``clades_to_exclude`` and
+    ``max_clades`` here, so a cutoff can never process a clade the full tree
+    does not.
+    """
+    counts_csv = checkpoints.get_clades_by_cutoff.get(tree=wildcards.tree).output.counts
+    counts = pd.read_csv(counts_csv)
+    arm = counts[counts["cutoff"].astype(str) == str(wildcards.cutoff)]
+    if arm.empty:
+        raise ValueError(
+            f"Cutoff {wildcards.cutoff!r} does not appear in {counts_csv}. The "
+            f"checkpoint was built against a different `pcp_date_cutoffs`; it "
+            f"needs rebuilding."
+        )
+    adequate = set(arm.loc[arm["adequate_sample_counts"] == True, "clade"])
+    return [c for c in clades_w_adequate_counts(wildcards) if c in adequate]
+
+
+def per_clade_inputs_upto(path_template, wildcards):
+    """Expand ``path_template`` over one (tree, cutoff)'s included clades."""
+    return expand(
+        path_template,
+        tree=wildcards.tree,
+        cutoff=wildcards.cutoff,
+        clade=clades_w_adequate_counts_upto(wildcards),
+    )
+
+
+def _requested_clades_by_cutoff(wildcards):
+    """``{cutoff: [clade, ...]}`` for every cutoff this tree carries.
+
+    Passed to ``cutoff_pcp_summary`` as a param so the recorded ``included``
+    column comes from the function that actually drove the fan-out, not from a
+    second read of the checkpoint's own verdict. A summary that merely copied
+    that verdict could not detect a fan-out which declined a clade the
+    checkpoint approved -- the failure the file exists to expose (#137).
+    """
+    # A plain namedtuple rather than ``type(wildcards)(...)``: Snakemake's
+    # Wildcards is built per rule with a fixed field set, so reconstructing it
+    # with a different one raises.
+    fake = collections.namedtuple("CutoffWildcards", ["tree", "cutoff"])
+    return {
+        cutoff: clades_w_adequate_counts_upto(fake(wildcards.tree, cutoff))
+        for cutoff in cutoffs_for_tree(wildcards.tree)
+    }
+
+
 rule samples_by_clade:
     """Extract sample names for a specific clade."""
     input:
@@ -1223,6 +1357,323 @@ rule dasm_ready_pcps_all_clades:
         _dasm_ready_per_clade_outputs
     output:
         sentinel=os.path.join(OUTDIR, "pcps/{gene}/dasm_ready_per_clade.done")
+    shell:
+        "touch {output.sentinel}"
+
+
+# =============================================================================
+# Date-cutoff PCP subtrees (#149)
+# =============================================================================
+# For each configured cutoff, the whole per-gene PCP family is rebuilt under
+# ``pcps/{gene}/upto_{cutoff}/`` from the subtree of samples collected at or
+# before that date -- a temporal holdout, so DASM can be trained on what was
+# knowable then. Filenames inside the cutoff directory are *identical* to the
+# full-tree ones, so a consumer points at a different root and its existing
+# globbing works unchanged.
+#
+# These are parallel rules over the same scripts rather than a ``{cutoff}``
+# wildcard threaded through the existing paths, matching how #137 added the
+# per-era rate fits alongside the pooled ones. Threading the wildcard would move
+# every existing PCP path and so break every current consumer for a purely
+# additive feature.
+#
+# **The truncated PCPs are re-extracted, not filtered.** ``matUtils extract -s``
+# returns the subtree *induced* on the retained samples, so internal nodes that
+# lose all but one child are collapsed and their mutations merged onto the
+# surviving branch. Row-filtering ``all_pcps.csv.gz`` would therefore keep PCPs
+# whose parent is not reconstructible from the pre-cutoff samples at all, *and*
+# drop every mutation on a branch whose child vanished -- leaving a set of
+# parent-child pairs that is the branch set of no tree. Re-extraction also runs
+# the same ``pcp_from_tree.py``, so there is no second implementation to drift.
+#
+# **Known leakage, stated rather than hidden.** ``{gene}_codon_sites_to_mask.txt``
+# and ``pcps/{gene}/censored_mutations.csv`` are *not* recomputed per cutoff:
+# they come from the full tree's count table and from
+# ``data/usher_masked_sites.yaml``. A strict holdout would rebuild the mask from
+# pre-cutoff data only, which means re-running the whole counting and GLM path
+# per cutoff. The leak is confined to which sites are flagged as sequencing
+# artifacts -- not to any fitness signal -- and the censor table is keyed by
+# clade, so extra post-cutoff clades in it are inert for a consumer that looks
+# masks up per clade. Documented in OUTPUT_SCHEMA.md.
+
+
+checkpoint get_clades_by_cutoff:
+    """Score every (cutoff, clade) pair, so inadequate ones can be skipped.
+
+    A checkpoint because the result decides the DAG: a clade that does not exist
+    yet at a cutoff, or that falls below ``min_clade_size`` there, gets no files
+    at all rather than an empty PCP table that would look like a real one and
+    read as a true zero everywhere downstream (#137's shape).
+
+    Takes the per-clade sample lists as input rather than the metadata's clade
+    column, so the clade vocabulary is by construction the one the full-tree path
+    already uses -- and ``clades_to_exclude`` / ``max_clades`` come along for
+    free, since those files exist only for clades the full tree processes.
+    """
+    input:
+        metadata=rules.filter_metadata.output.filtered_metadata,
+        samples=lambda wc: per_clade_inputs(
+            os.path.join(OUTDIR, "mat/clades/{clade}_samples.txt"), wc
+        )
+    output:
+        counts=os.path.join(OUTDIR, "mat/clade_counts_by_cutoff.csv")
+    params:
+        cutoffs=lambda wc: cutoffs_for_tree(wc.tree),
+        min_clade_size=config.get("min_clade_size", 100),
+        clade_column=config.get("clade_column", "Nextstrain_clade")
+    log:
+        os.path.join(OUTDIR, "log/get_clades_by_cutoff.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/clade_counts_by_cutoff.py"
+
+
+rule cutoff_pcp_summary:
+    """Record which (cutoff, clade) pairs got truncated PCPs, and which did not.
+
+    The roster half of the deliverable. A skipped clade contributes zero files,
+    which in the output tree alone is indistinguishable from a wiring mistake,
+    so the absence is written down -- and reconciled against the checkpoint in
+    both directions, raising rather than reporting a disagreement (#149).
+    """
+    input:
+        counts=rules.get_clades_by_cutoff.output.counts
+    output:
+        summary=os.path.join(OUTDIR, "pcps/cutoff_summary.csv")
+    params:
+        requested=_requested_clades_by_cutoff,
+        genes=PCP_GENES
+    log:
+        os.path.join(OUTDIR, "log/cutoff_pcp_summary.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/cutoff_pcp_summary.py"
+
+
+rule samples_upto_cutoff:
+    """One clade's samples, restricted to those collected at or before a cutoff."""
+    input:
+        samples=rules.samples_by_clade.output.samples,
+        metadata=rules.filter_metadata.output.filtered_metadata
+    output:
+        samples=os.path.join(OUTDIR, "mat/cutoffs/upto_{cutoff}/{clade}_samples.txt")
+    log:
+        os.path.join(OUTDIR, "log/samples_upto_{cutoff}_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/samples_upto_cutoff.py"
+
+
+rule mat_clade_subset_upto:
+    """One clade's date-truncated subtree.
+
+    Extracted from the **whole** filtered tree, not from
+    ``mat/clades/{clade}_tree.pb``. Induced subtrees do compose, so the two
+    routes should agree -- but the clade tree is itself already an induction, and
+    resting a published output on that identity buys nothing here: the extraction
+    costs about a minute either way, and reading this rule should not require the
+    argument.
+    """
+    input:
+        tree=get_final_tree(),
+        samples=rules.samples_upto_cutoff.output.samples
+    output:
+        tree=os.path.join(OUTDIR, "mat/cutoffs/upto_{cutoff}/{clade}_tree.pb")
+    threads: get_threads("mat_clade_subset")
+    resources:
+        mem_mb=8000,
+        runtime=60
+    benchmark:
+        os.path.join(OUTDIR, "benchmarks/mat_clade_subset_upto_{cutoff}_{clade}.tsv")
+    log:
+        stderr=os.path.join(OUTDIR, "log/mat_clade_subset_upto_{cutoff}_{clade}.stderr"),
+        stdout=os.path.join(OUTDIR, "log/mat_clade_subset_upto_{cutoff}_{clade}.stdout")
+    conda:
+        "envs/usher.yml"
+    shell:
+        """
+        echo "Extracting {wildcards.clade} subtree up to {wildcards.cutoff}..." > {log.stdout}
+        echo "Sample count: $(wc -l < {input.samples})" >> {log.stdout}
+
+        (
+            matUtils extract \
+                -i {input.tree} \
+                -s {input.samples} \
+                -o {output.tree}
+        ) >> {log.stdout} 2>> {log.stderr}
+
+        echo "Cutoff subtree created: {output.tree}" >> {log.stdout}
+        """
+
+
+rule extract_pcps_by_clade_upto:
+    """Extract and curate PCPs from one clade's date-truncated subtree.
+
+    The same ``pcp_from_tree.py`` as the full-tree path, with the same params --
+    the only difference is the tree it is handed. Clade founders are deliberately
+    *not* recomputed per cutoff: a clade's founder is a property of the clade's
+    defining mutations, not of which of its samples have been collected yet.
+    """
+    input:
+        tree=rules.mat_clade_subset_upto.output.tree,
+        gtf=rules.edit_ref_gtf.output.gtf,
+        fasta=rules.get_ref_fasta.output.ref_fasta,
+        clade_founder_fasta=CLADE_FOUNDER_FASTA,
+        coding_sites=rules.ref_coding_sites.output.csv
+    output:
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/upto_{cutoff}/{clade}_pcps.csv.gz"),
+        filtered_branches=os.path.join(
+            OUTDIR, "pcps/{gene}/upto_{cutoff}/{clade}_filtered_branches.csv"
+        )
+    params:
+        max_nt_mutations=config["max_nt_mutations"],
+        max_reversions_to_ref=config["max_reversions_to_ref"],
+        max_reversions_to_clade_founder=config["max_reversions_to_clade_founder"],
+        pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
+    threads: get_threads("extract_pcps")
+    resources:
+        mem_mb=8000,
+        runtime=120
+    benchmark:
+        os.path.join(
+            OUTDIR, "benchmarks/extract_pcps_{gene}_upto_{cutoff}_{clade}.tsv"
+        )
+    log:
+        os.path.join(OUTDIR, "log/extract_pcps_{gene}_upto_{cutoff}_{clade}.log")
+    conda:
+        "envs/bte.yml"
+    script:
+        "scripts/pcp_from_tree.py"
+
+
+rule aggregate_clade_pcps_upto:
+    """Aggregate one (gene, cutoff)'s per-clade PCPs into a single file."""
+    input:
+        pcps=lambda wc: per_clade_inputs_upto(
+            os.path.join(
+                OUTDIR, "pcps", wc.gene, "upto_{cutoff}", "{clade}_pcps.csv.gz"
+            ),
+            wc,
+        )
+    output:
+        all_pcps=os.path.join(OUTDIR, "pcps/{gene}/upto_{cutoff}/all_pcps.csv.gz")
+    log:
+        os.path.join(OUTDIR, "log/aggregate_clade_pcps_{gene}_upto_{cutoff}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/aggregate_clade_pcps.py"
+
+
+rule aggregate_filtered_branches_upto:
+    """One (gene, cutoff)'s filtered-branch IDs and curation report."""
+    input:
+        curated_pcps=rules.aggregate_clade_pcps_upto.output.all_pcps,
+        filtered_branches=lambda wc: per_clade_inputs_upto(
+            os.path.join(
+                OUTDIR, "pcps", wc.gene, "upto_{cutoff}",
+                "{clade}_filtered_branches.csv",
+            ),
+            wc,
+        )
+    output:
+        report=os.path.join(
+            OUTDIR, "pcps/{gene}/upto_{cutoff}/pcp_curation_report.txt"
+        ),
+        filtered_branches=os.path.join(
+            OUTDIR, "pcps/{gene}/upto_{cutoff}/filtered_branch_ids.csv"
+        )
+    log:
+        os.path.join(
+            OUTDIR, "log/aggregate_filtered_branches_{gene}_upto_{cutoff}.log"
+        )
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/aggregate_filtered_branches.py"
+
+
+rule curate_pcps_for_dasm_upto:
+    """DASM-ready filters and train/val split for one clade at one cutoff.
+
+    Reads the full tree's ``{gene}_codon_sites_to_mask.txt`` -- see the leakage
+    note at the top of this section. Seed 1729, matching the per-clade
+    full-tree rule, so a clade's train/val assignment differs between cutoffs
+    only where the row set does.
+    """
+    input:
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/upto_{cutoff}/{clade}_pcps.csv.gz"),
+        mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
+    output:
+        dasm_ready=os.path.join(
+            OUTDIR, "pcps/{gene}/upto_{cutoff}/{clade}_pcps_dasm_ready.csv.gz"
+        ),
+        report=os.path.join(
+            OUTDIR, "pcps/{gene}/upto_{cutoff}/{clade}_dasm_filter_report.txt"
+        ),
+        stats=os.path.join(
+            OUTDIR, "pcps/{gene}/upto_{cutoff}/{clade}_dasm_filter_stats.json"
+        )
+    params:
+        seed=1729,
+        val_fraction=0.10
+    log:
+        os.path.join(
+            OUTDIR, "log/curate_pcps_for_dasm_{gene}_upto_{cutoff}_{clade}.log"
+        )
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/curate_pcps_for_dasm.py"
+
+
+rule curate_all_pcps_for_dasm_upto:
+    """DASM-ready filters and train/val split for one cutoff's aggregate.
+
+    Seed 42, the aggregate convention, for the same guardrail reason as the
+    full-tree rule.
+    """
+    input:
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/upto_{cutoff}/all_pcps.csv.gz"),
+        mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
+    output:
+        dasm_ready=os.path.join(
+            OUTDIR, "pcps/{gene}/upto_{cutoff}/all_pcps_dasm_ready.csv.gz"
+        ),
+        report=os.path.join(
+            OUTDIR, "pcps/{gene}/upto_{cutoff}/all_dasm_filter_report.txt"
+        ),
+        stats=os.path.join(
+            OUTDIR, "pcps/{gene}/upto_{cutoff}/all_dasm_filter_stats.json"
+        )
+    params:
+        seed=42,
+        val_fraction=0.10
+    log:
+        os.path.join(OUTDIR, "log/curate_all_pcps_for_dasm_{gene}_upto_{cutoff}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/curate_pcps_for_dasm.py"
+
+
+rule dasm_ready_pcps_all_clades_upto:
+    """Collector for one (gene, cutoff)'s per-clade DASM-ready outputs."""
+    input:
+        lambda wc: per_clade_inputs_upto(
+            os.path.join(
+                OUTDIR, "pcps", wc.gene, "upto_{cutoff}",
+                "{clade}_pcps_dasm_ready.csv.gz",
+            ),
+            wc,
+        )
+    output:
+        sentinel=os.path.join(
+            OUTDIR, "pcps/{gene}/upto_{cutoff}/dasm_ready_per_clade.done"
+        )
     shell:
         "touch {output.sentinel}"
 

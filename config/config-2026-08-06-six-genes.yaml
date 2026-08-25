@@ -79,7 +79,15 @@ mat_subset_kwargs: ""
 # (EPIC #115). NOTE: "--use_gpu" requires the CUDA jaxlib wheel that is
 # commented out in envs/chronumental.yml; with the CPU-only env it silently
 # falls back to CPU, so don't add it until GPU support is enabled there.
-chronumental_kwargs: "--steps 1000"
+# --variance_dates 30 (#146): chronumental asserts each day-resolution leaf date to
+# sd `variance_dates x 1 day`, and at the 0.3 default that term is three orders of
+# magnitude tighter than the Poisson term on a 0-1 mutation branch -- so the fit buys
+# leaf-date accuracy by inflating branch durations (#145). Measured on
+# public_2026-08-06_v11, this moves root-to-tip/fitted from 4.31x to 1.48x, length_cor
+# from 0.40 to 0.85, and the zero-mutation share of total branch-time from 45.9% to
+# 1.4%, at the cost of the tip-residual margin: median |residual| 1 d -> 10 d against
+# the 30 d gate below (p95 35 d, which the median-based gate does not read).
+chronumental_kwargs: "--steps 1000 --variance_dates 30"
 # chronumental_qc gate: fail the run if the median absolute tip-date residual
 # (chronumental-predicted minus metadata collection date, in days) exceeds this.
 chronumental_max_median_abs_tip_residual_days: 30
@@ -186,6 +194,19 @@ pcp_gene_to_fitness_gene:
 # PCP branch QC reuses the shared Mutation-Counting keys (max_nt_mutations /
 # max_reversions_to_ref / max_reversions_to_clade_founder), so PCP extraction
 # and clade/window mutation counting filter branches identically.
+
+# Date-cutoff PCP subtrees (#149). For each cutoff, the whole per-gene PCP family is
+# rebuilt under `pcps/{gene}/upto_{cutoff}/` from the subtree of samples collected at
+# or before that date, so DASM can be trained on what was knowable then. Filenames
+# inside the cutoff directory are identical to the full-tree ones.
+#
+# Optional, and per-tree overridable. Each value must be strict ISO YYYY-MM-DD, must
+# postdate `qc_filter_options.min_leaf_date`, and must not exceed the tree's
+# `max_leaf_date` -- a cutoff past the tree's own horizon would silently reproduce the
+# full tree under a name claiming otherwise. A cutoff *equal* to `max_leaf_date` is
+# allowed and is the degenerate case: it must reproduce the full outputs byte-for-byte.
+pcp_date_cutoffs:
+  - "2023-01-01"
 
 # =============================================================================
 # Clade Founder Configuration

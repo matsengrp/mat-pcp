@@ -44,7 +44,15 @@ mat_subset_kwargs: ""  # Additional matUtils extract arguments
 # Node Dating (chronumental)
 # =============================================================================
 # Passed verbatim to chronumental. Few steps here for a fast test run.
-chronumental_kwargs: "--steps 100"
+# --variance_dates 30 (#146): chronumental asserts each day-resolution leaf date to
+# sd `variance_dates x 1 day`, and at the 0.3 default that term is three orders of
+# magnitude tighter than the Poisson term on a 0-1 mutation branch -- so the fit buys
+# leaf-date accuracy by inflating branch durations (#145). Measured on
+# public_2026-08-06_v11, this moves root-to-tip/fitted from 4.31x to 1.48x, length_cor
+# from 0.40 to 0.85, and the zero-mutation share of total branch-time from 45.9% to
+# 1.4%, at the cost of the tip-residual margin: median |residual| 1 d -> 10 d against
+# the 30 d gate below (p95 35 d, which the median-based gate does not read).
+chronumental_kwargs: "--steps 100 --variance_dates 30"
 # chronumental_qc gate: fail the run if the median absolute tip-date residual
 # (chronumental-predicted minus metadata collection date, in days) exceeds this.
 chronumental_max_median_abs_tip_residual_days: 30
@@ -125,6 +133,21 @@ pcp_gene_to_fitness_gene:
 # max_reversions_to_ref / max_reversions_to_clade_founder), applied to CODING
 # mutations only; noncoding mutations are excluded from quality criteria but
 # still tracked.
+
+# Date-cutoff PCP subtrees (#149). Two arms, both deliberately non-vacuous:
+#
+#   2020-06-01  truncating, and it exercises the skip-and-record path: 19A has 1
+#               sample at that date against `min_clade_size: 2` and is dropped, while
+#               19B (3) and 20A (6) survive. Without an arm that drops a clade, the
+#               roster in `pcps/cutoff_summary.csv` would never be asked to
+#               distinguish "no clade yet" from a wiring mistake.
+#   2022-06-01  equal to `max_leaf_date`, so it selects every sample and its outputs
+#               must be byte-identical to the full-tree ones. This is what makes "the
+#               cutoff machinery did not perturb the ordinary path" a measurement
+#               rather than an inspection (checked by validate_test.py).
+pcp_date_cutoffs:
+  - "2020-06-01"
+  - "2022-06-01"
 
 # =============================================================================
 # Clade Founder Configuration
