@@ -199,7 +199,16 @@ def qc_arms(tree_dir, out_dir, arms, residual_threshold):
             f"residuals={str(qc_dir / 'node_dates_residuals.csv')!r}, "
             f"branch_dt={str(qc_dir / 'node_dates_branch_dt.csv')!r}, "
             f"branch_dt_summary={str(qc_dir / 'node_dates_branch_dt_summary.csv')!r}, "
-            f"internal_checks={str(qc_dir / 'node_dates_internal_checks.csv')!r})\n"
+            f"internal_checks={str(qc_dir / 'node_dates_internal_checks.csv')!r}, "
+            # Every declared output of chronumental_qc must appear here. The stub is
+            # an NS(dict) whose __getattr__ is dict.__getitem__, so a missing key
+            # raises KeyError at the point of use -- loudly, which is the right
+            # behaviour, but it means adding an output to the rule without adding it
+            # here breaks the whole sweep. That is the cost of executing the real
+            # script instead of re-implementing it, and it is the right trade: the
+            # alternative silently measures something else.
+            f"rtt={str(qc_dir / 'node_dates_rtt.csv')!r}, "
+            f"rtt_anchor={str(qc_dir / 'node_dates_rtt_anchor.csv')!r})\n"
             f"s.params = NS(max_median_abs_tip_residual_days={residual_threshold!r}, "
             f"chronumental_stdout={str(arm_dir / 'chronumental.stdout')!r})\n"
             f"s.log = [{str(qc_dir / 'chronumental_qc.log')!r}]\n"
