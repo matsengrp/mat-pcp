@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Stage | Description | Key Rules |
 |-------|-------------|-----------|
-| 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `export_newick`, `chronumental`, `chronumental_qc` (tips **and** internal nodes, #139), `window_subtree_counts`, `get_ref_fasta`, `ref_coding_sites` |
+| 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `export_newick`, `chronumental`, `chronumental_qc` (tips **and** internal nodes, #139), `chronumental_rtt_plot` (#146), `window_subtree_counts`, `get_ref_fasta`, `ref_coding_sites` |
 | 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade`, `censor_table` (per-clade DASM censor table, #144) |
 | 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
 | 5 | Unified Count Table | `build_count_table` (full mutation grid + actual counts + masking flags, via `modules/masking.py`) |
@@ -590,6 +590,28 @@ mat-pcp/
     gate is a result, not an error. Note also that adopting a prior setting is **not**
     a free flag change: it moves `mat/node_dates.tsv` -> `windows/subtree_counts.csv`
     -> `windows/fitness_trajectory.csv`, so it needs a `VERSION` bump.
+    *The reference is now a picture, not just a number.* Because everything above
+    turns on chronumental's pre-fit root-to-tip slope, that slope had better describe
+    a line -- and chronumental computes the cloud, prints the slope and discards the
+    cloud, so nothing had ever looked. `chronumental_qc` therefore also emits
+    `mat/node_dates_rtt.csv` and a `root_to_tip_regression` REPORT row, and
+    `chronumental_rtt_plot` renders `mat/node_dates_rtt_scatter.png`. Four things
+    about the shape are load-bearing. The histogram is **exact, not a downsample**:
+    both axes are integers (a day-resolution date, a mutation count), so it *is* the
+    joint distribution and the figure's regression is bit-identical to the 17 M-point
+    cloud's -- which is asserted against an expanded point array, because a
+    key-encoding collision would move the slope only slightly and no eye could
+    falsify it. The root's own mutation list is **excluded** from divergence: on a MAT
+    it is the root's difference from the reference, so counting it offsets every tip
+    by one constant -- the cloud shifts up as a block and the slope is unchanged,
+    which is precisely the error a scatter cannot show you. The two lines run over
+    **different tip sets** (day-resolution tips here, every dated tip in
+    chronumental's own regression), so the tripwire is a wide 25% ratio rather than an
+    equality; a tight tolerance would cry wolf on a correct run. And plotting gets its
+    **own conda env**: `chronumental_qc` runs on `bte.yml` and widening a shared env
+    changes its hash, handing every rule using it a `software environment has changed`
+    trigger -- a full rebuild of a released tree for a figure.
+
     See [#145](https://github.com/matsengrp/mat-pcp/issues/145) and
     [#146](https://github.com/matsengrp/mat-pcp/issues/146).
 

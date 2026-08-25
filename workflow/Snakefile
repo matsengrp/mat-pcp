@@ -349,6 +349,10 @@ results_files = [
     # chronumental node dating (#116): the QC report transitively builds
     # mat/node_dates.tsv and gates the run on every tree.
     "mat/node_dates_qc.tsv",
+    # The root-to-tip scatter (#146), which transitively builds
+    # mat/node_dates_rtt.csv. Additive output with no consumer, so it ships
+    # no-bump; wired in here because otherwise nothing would ever build it.
+    "mat/node_dates_rtt_scatter.png",
     # Sliding-window per-mutation actual counts (#117); transitively builds
     # windows/founder_muts.csv. Additive output (no schema/consumer yet), so it
     # ships no-bump per the EPIC #115 coordinated-bump decision.
@@ -633,7 +637,13 @@ rule chronumental_qc:
         branch_dt_summary=os.path.join(
             OUTDIR, "mat/node_dates_branch_dt_summary.csv"
         ),
-        internal_checks=os.path.join(OUTDIR, "mat/node_dates_internal_checks.csv")
+        internal_checks=os.path.join(OUTDIR, "mat/node_dates_internal_checks.csv"),
+        # The exact joint histogram of (collection date, root-to-tip divergence)
+        # over day-resolution tips (#146). Integer on both axes, so this IS the
+        # joint distribution rather than a summary of it -- a few tens of kB
+        # standing in for a 17 M-point cloud, and the input to the scatter that
+        # ``chronumental_rtt_plot`` renders.
+        rtt=os.path.join(OUTDIR, "mat/node_dates_rtt.csv")
     params:
         max_median_abs_tip_residual_days=config.get(
             "chronumental_max_median_abs_tip_residual_days", 30
@@ -663,6 +673,41 @@ rule chronumental_qc:
         "envs/bte.yml"
     script:
         "scripts/chronumental_qc.py"
+
+
+rule chronumental_rtt_plot:
+    """Scatter the root-to-tip cloud behind chronumental's clock reference (#146).
+
+    Split from ``chronumental_qc`` rather than folded into it because plotting needs
+    matplotlib and that rule runs on ``envs/bte.yml``: widening a shared env changes
+    its hash and hands every rule using it a ``software environment has changed``
+    rerun trigger. This rule owns ``envs/plot.yml`` alone.
+
+    Reads the exact joint histogram, not the tree, so it costs seconds and needs no
+    bte -- and it recomputes its regression through the same
+    ``node_date_qc.weighted_linregress`` the QC report used, so the figure and the
+    report cannot disagree.
+    """
+    input:
+        rtt=rules.chronumental_qc.output.rtt
+    output:
+        plot=os.path.join(OUTDIR, "mat/node_dates_rtt_scatter.png")
+    params:
+        tree_label=lambda wildcards: wildcards.tree,
+        # Same param-not-input treatment, and the same reason, as chronumental_qc:
+        # a rotated-away log must not drag the dating rule back into the DAG. The
+        # figure states the absence on its face instead (#146).
+        chronumental_stdout=rules.chronumental.log.stdout
+    threads: get_threads("chronumental_rtt_plot")
+    resources:
+        mem_mb=4000,
+        runtime=20
+    log:
+        os.path.join(OUTDIR, "log/chronumental_rtt_plot.log")
+    conda:
+        "envs/plot.yml"
+    script:
+        "scripts/plot_rtt_scatter.py"
 
 
 rule get_ref_fasta:

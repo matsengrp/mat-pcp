@@ -365,28 +365,15 @@ def propagate_min_descendant(parent_index, leaf_values, n_nodes):
             f"parent_index ({len(parent_index)}) and leaf_values "
             f"({len(leaf_values)}) must both have length n_nodes ({n_nodes})"
         )
-    parents = np.asarray(parent_index, dtype="int64")
     # The precondition is checked, not merely documented. Violating it does not
     # raise on its own: the reverse pass simply stops propagating past the
     # offending edge and returns a smaller-but-plausible minimum (a nan where a
     # real date belonged), at exit 0 -- the #129/#130/#133 silent-drop shape. The
     # loop below cannot be vectorized because each parent depends on its
     # children, but this guard can: one O(n) comparison, which is free next to
-    # the pass it protects.
-    positions = np.arange(n_nodes)
-    has_parent = parents >= 0
-    out_of_order = has_parent & (parents >= positions)
-    if out_of_order.any():
-        bad = np.flatnonzero(out_of_order)[:5].tolist()
-        raise ValueError(
-            f"parent_index must list every parent before its children (a "
-            f"depth-first pre-order); {int(out_of_order.sum())} node(s) violate "
-            f"this, first at indices {bad} with parents "
-            f"{parents[bad].tolist()}. The single reverse pass below relies on "
-            f"this ordering, and silently under-propagates without it rather "
-            f"than failing -- so it is checked instead of assumed."
-        )
-    parents = parents.tolist()
+    # the pass it protects. Shared with root_to_tip_divergence's forward pass,
+    # which needs the identical ordering for the identical reason.
+    parents = require_parent_before_child(parent_index, n_nodes).tolist()
     values = np.asarray(leaf_values, dtype="float64")
     best = np.where(np.isnan(values), np.inf, values).tolist()
     for i in range(n_nodes - 1, 0, -1):
@@ -475,3 +462,218 @@ def format_stats(stats, unit="d", violation=None):
     sign = "<0" if violation == "negative" else ">0"
     count = round(stats[key] * stats["n"])
     return f"{text}; VIOLATING ({sign}) = {stats[key]:.4f} ({count} of {stats['n']})"
+
+
+# =============================================================================
+# Root-to-tip divergence (#146): the reference itself, as a picture.
+#
+# :func:`implied_clock_summary` compares the timetree's own implied rate against
+# chronumental's pre-fit root-to-tip slope, and that slope is the whole reason the
+# comparison means anything (see :data:`ROOT_TO_TIP_PREFIX`). But chronumental
+# prints one number and discards the cloud it fitted, so nothing showed *whether the
+# regression itself is any good*: a rate of 40.36 subs/yr summarizes a tight line
+# and a fan of recombinants and metadata errors equally well, and only one of those
+# is a reference worth dividing by. These primitives rebuild that cloud.
+# =============================================================================
+
+#: Relative gap between the root-to-tip slope recomputed here and the one
+#: chronumental logs, past which the report calls the two inconsistent. Wide on
+#: purpose: the two regressions are over **different tip sets** (see
+#: :func:`root_to_tip_histogram`), so they are not expected to agree exactly, and a
+#: tight tolerance here would fire on a correct pipeline. It is a tripwire for a
+#: gross disagreement -- a units error, a divergence array off by a tree level, a
+#: date axis in the wrong epoch -- not an equivalence test.
+RTT_SLOPE_REL_TOL = 0.25
+
+
+def require_parent_before_child(parent_index, n_nodes):
+    """Validate the pre-order precondition shared by the single-pass accumulators.
+
+    ``parent_index[i]`` is node ``i``'s parent, or ``-1`` for a root. Returns the
+    parents as an ``int64`` array.
+
+    Both the reverse pass in :func:`propagate_min_descendant` and the forward pass
+    in :func:`root_to_tip_divergence` are correct only if every parent precedes its
+    children, and *neither raises on its own when that is violated* -- they return a
+    plausible, quietly truncated answer. Hence one guard, called by both, rather
+    than two copies that could drift apart.
+    """
+    parents = np.asarray(parent_index, dtype="int64")
+    if len(parents) != n_nodes:
+        raise ValueError(
+            f"parent_index ({len(parents)}) must have length n_nodes ({n_nodes})"
+        )
+    positions = np.arange(n_nodes)
+    out_of_order = (parents >= 0) & (parents >= positions)
+    if out_of_order.any():
+        bad = np.flatnonzero(out_of_order)[:5].tolist()
+        raise ValueError(
+            f"parent_index must list every parent before its children (a "
+            f"depth-first pre-order); {int(out_of_order.sum())} node(s) violate "
+            f"this, first at indices {bad} with parents "
+            f"{parents[bad].tolist()}. The single-pass accumulators rely on this "
+            f"ordering, and silently under-propagate without it rather than "
+            f"failing -- so it is checked instead of assumed."
+        )
+    return parents
+
+
+def root_to_tip_divergence(parent_index, branch_mutations, n_nodes):
+    """Mutations on the path from the root to every node, inclusive of its own branch.
+
+    ``branch_mutations[i]`` is the count on the branch *entering* node ``i``. A
+    parentless node has no entering branch, so its divergence is **0 regardless of
+    ``branch_mutations``** there: on a MAT the root's mutation list is its
+    difference from the reference, which is not elapsed evolution within the tree
+    and would otherwise offset every tip in the plot by a constant.
+
+    One forward pass, which is the mirror of :func:`propagate_min_descendant`'s
+    reverse pass and carries the same ordering precondition (checked, via
+    :func:`require_parent_before_child`) and the same list-not-array loop for the
+    same measured reason: at 21 M nodes NumPy scalar boxing dominates.
+    """
+    muts = np.asarray(branch_mutations)
+    if len(muts) != n_nodes:
+        raise ValueError(
+            f"branch_mutations ({len(muts)}) must have length n_nodes ({n_nodes})"
+        )
+    parents = require_parent_before_child(parent_index, n_nodes).tolist()
+    counts = muts.astype("int64").tolist()
+    divergence = [0] * n_nodes
+    for i in range(n_nodes):
+        parent = parents[i]
+        if parent >= 0:
+            divergence[i] = divergence[parent] + counts[i]
+    return np.array(divergence, dtype="int64")
+
+
+def root_to_tip_histogram(day_ordinals, divergence):
+    """Exact joint histogram of (observed day, root-to-tip divergence).
+
+    Returns ``(days, rtt, counts)`` as three aligned ``int64`` arrays over the
+    non-empty cells, sorted by ``(day, rtt)``.
+
+    **Binning loses nothing here.** Both axes are already integers -- a collection
+    date at day resolution and a mutation count -- so the histogram is the joint
+    distribution, not a summary of it. Every statistic drawn from it (the regression
+    in :func:`weighted_linregress`, the rendered scatter) is therefore identical to
+    the one over the per-tip cloud, which is what lets a 17 M-tip figure ship as a
+    few tens of kB alongside a 1.6 GB per-tip residuals file that already exists.
+
+    Cells are keyed as ``day * span + rtt`` and passed to a 1-D ``np.unique``
+    rather than ``np.unique(..., axis=0)``: the 2-D form lexsorts a 17 M x 2 array
+    and measured far slower for an identical result.
+
+    Callers pass **day-resolution tips only** (see ``chronumental_qc.py`` check 4 on
+    why imputed month/year dates must not enter a residual or regression), whereas
+    chronumental regresses over every tip it dated. The two tip sets differ, so the
+    two slopes are close but not equal -- :data:`RTT_SLOPE_REL_TOL` is sized for
+    that, and the report states both numbers rather than implying one is the other.
+    """
+    days = np.asarray(day_ordinals, dtype="float64")
+    rtt = np.asarray(divergence)
+    if days.shape != rtt.shape:
+        raise ValueError(
+            f"day_ordinals {days.shape} and divergence {rtt.shape} must align"
+        )
+    keep = np.isfinite(days)
+    days = days[keep].astype("int64")
+    rtt = rtt[keep].astype("int64")
+    if not days.size:
+        empty = np.empty(0, dtype="int64")
+        return empty, empty.copy(), empty.copy()
+    # Encode with an explicit span so decoding is exact for any rtt >= 0.
+    span = int(rtt.max()) + 1
+    keys, counts = np.unique(days * span + rtt, return_counts=True)
+    return keys // span, keys % span, counts.astype("int64")
+
+
+def weighted_linregress(x, y, weights):
+    """Least squares of ``y`` on ``x`` where each point stands for ``weights`` copies.
+
+    Returns ``{"slope", "intercept", "r", "n"}`` with ``n`` the total weight.
+
+    This is *exactly* the unweighted regression over the expanded point cloud, which
+    is the property that makes :func:`root_to_tip_histogram` a lossless
+    representation rather than a downsample -- and it is asserted in the unit test
+    against an explicitly expanded array, not just documented here.
+    """
+    x = np.asarray(x, dtype="float64")
+    y = np.asarray(y, dtype="float64")
+    w = np.asarray(weights, dtype="float64")
+    if not (x.shape == y.shape == w.shape):
+        raise ValueError(
+            f"x {x.shape}, y {y.shape} and weights {w.shape} must all align"
+        )
+    n = float(w.sum())
+    if n <= 0:
+        return {"slope": None, "intercept": None, "r": None, "n": 0.0}
+    mean_x = float((w * x).sum() / n)
+    mean_y = float((w * y).sum() / n)
+    dx = x - mean_x
+    dy = y - mean_y
+    var_x = float((w * dx * dx).sum())
+    var_y = float((w * dy * dy).sum())
+    cov = float((w * dx * dy).sum())
+    if var_x <= 0:
+        # Every tip shares one date: a slope is undefined rather than infinite.
+        return {"slope": None, "intercept": None, "r": None, "n": n}
+    slope = cov / var_x
+    r = cov / np.sqrt(var_x * var_y) if var_y > 0 else None
+    return {
+        "slope": slope,
+        "intercept": mean_y - slope * mean_x,
+        "r": float(r) if r is not None else None,
+        "n": n,
+    }
+
+
+def root_to_tip_note(regression, n_excluded, logged_rate, stdout_path):
+    """The report fragment for the recomputed root-to-tip regression.
+
+    Formatted here, next to the math, for the same reason as
+    :func:`implied_clock_note`: the one property worth pinning is that the
+    comparison against chronumental's own logged slope is either **made or its
+    absence is stated**. A line that silently omits the ratio when the log has been
+    rotated away is indistinguishable from one where the two agreed.
+    """
+    slope = regression["slope"]
+    if slope is None:
+        # Two distinct ways to have no slope, and they mean different things: no
+        # day-resolution tips at all (normal on a tree whose metadata is coarse) vs
+        # tips that all share one date (a degenerate cloud). Reporting the second
+        # wording for the first case would send someone looking for a date problem
+        # that is really a resolution problem.
+        cause = (
+            "no day-resolution tips"
+            if regression["n"] == 0
+            else "all tips share one collection date"
+        )
+        return (
+            f"root-to-tip regression undefined over {regression['n']:.0f} "
+            f"day-resolution tip(s), {n_excluded} excluded: {cause}"
+        )
+    per_year = slope * DAYS_PER_YEAR
+    r = regression["r"]
+    r_text = f"{r:.4f}" if r is not None else "n/a"
+    note = (
+        f"recomputed slope {per_year:.2f} subs/yr (r={r_text}) over "
+        f"{regression['n']:.0f} day-resolution tips, {n_excluded} excluded"
+    )
+    if logged_rate:
+        ratio = per_year / logged_rate
+        note += (
+            f"; chronumental logged {logged_rate:.2f} subs/yr over all its dated "
+            f"tips, ratio {ratio:.3f}"
+        )
+        if abs(ratio - 1.0) > RTT_SLOPE_REL_TOL:
+            note += (
+                f" -- OUTSIDE the {RTT_SLOPE_REL_TOL:.0%} tripwire; the two "
+                f"regressions differ by more than differing tip sets explains"
+            )
+    else:
+        note += (
+            f"; chronumental's own slope unavailable for comparison (no parsable "
+            f"'{ROOT_TO_TIP_PREFIX}' line at {stdout_path})"
+        )
+    return note

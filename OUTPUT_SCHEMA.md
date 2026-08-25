@@ -380,6 +380,7 @@ nobody has characterised would fail production runs uninterpretably.
 | `zero_mut_leaf_vs_earliest_observed` | *Earliest observed* date among a parent's zero-mutation leaf children **minus** the parent's predicted date. Note this is the **opposite orientation** to `internal_date_vs_min_descendant_observed`: here a **negative** value is the anomaly. Also reports how many dated strains had no node in the tree and were excluded. |
 | `root_date_plausible` | Root date against a deliberately wide window (2019-10-01 … 2020-02-29). A tripwire for a mis-scaled time axis. |
 | `internal_date_vs_min_descendant_observed` | Predicted internal date minus the earliest observed descendant date. **Positive is the anomaly** (the ancestor postdates its earliest sample). Compares *inferred* against *observed*, so a violation is a three-way inconsistency between the inferred date, the topology and a collection date — and it is not independent of `tip_residual`: monotonicity forces `pred(ancestor) ≤ pred(tip)`, so a positive gap requires that tip's own residual to be at least as large. Quantifies downstream impact (how many internal nodes, hence branches, land in the wrong window) rather than testing the dating algorithm. |
+| `root_to_tip_regression` | The slope of root-to-tip divergence on collection date, recomputed from the exact cloud in `node_dates_rtt.csv` and reported in subs/**year**, with `r` and the tip count. Compared against chronumental's own logged pre-fit slope as a ratio; the two regressions run over **different tip sets** (day-resolution tips here, every dated tip there), so they are expected to be close rather than equal and only a gap beyond `RTT_SLOPE_REL_TOL` (25%) is flagged. Exists because that pre-fit slope is the only *independent* reference the QC has — comparing the tree's implied rate against the *fitted* rate is near-identity under a learned clock (measured 1.027) — and until [#146](https://github.com/matsengrp/mat-pcp/issues/146) it was a single number with nothing behind it: one slope describes a tight line and a fan of recombinants equally well. As elsewhere, an absent stdout log is stated with the path, never silently dropped. |
 | `internal_dt_to_closest_descendant` | Predicted Δt from an internal node to its **nearest descendant, both dates inferred** — so unlike the row above this *is* a test of the algorithm: given the topology it was handed, how much time does the fit put below each internal node? Equals min-over-*children* of the branch Δt, because monotonicity makes predicted dates nondecreasing along every path, so the nearest descendant is always an immediate child. Also reports how many zero-mutation branches are internal rather than terminal (0 on the v9 tree, so `zero_mut_leaf_predicted_dt` covers all of them). |
 
 Because checks 6 and 8 use opposite sign conventions, `format_stats` prints **both**
@@ -443,6 +444,42 @@ summary line.
 | `check` | string | `zero_mut_leaf_predicted_dt`, `zero_mut_leaf_vs_earliest_observed`, `internal_date_vs_min_descendant_observed`, or `internal_dt_to_closest_descendant`. |
 | `days` | int | Signed day difference. Negative values are retained — for the latter two they are the informative direction. |
 | `count` | int | Number of nodes with that value. |
+
+### `mat/node_dates_rtt.csv`
+
+The exact joint distribution of collection date and root-to-tip divergence over
+day-resolution tips (#146) — the cloud behind chronumental's pre-fit clock estimate,
+which chronumental itself computes and discards.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `observed_date` | date | Metadata collection date (day resolution only, for the same reason as `node_dates_residuals.csv`: `filter_metadata` imputes month/year dates to a fabricated day, and a fabricated date must not enter a regression). |
+| `rtt_mutations` | int | Mutations on the path from the root to that tip. The root's own mutation list is **excluded** — on a MAT it is the root's difference from the reference, not evolution inside the tree, and including it would offset every tip by the same constant. |
+| `n_tips` | int | Tips in that `(date, divergence)` cell. |
+
+**Binned, but not a summary.** Both axes are integers, so this *is* the joint
+distribution: the regression in `root_to_tip_regression` and the rendered scatter are
+identical to what the per-tip cloud would give. That is what lets a 17 M-tip figure
+ship as a few tens of kB next to a `node_dates_residuals.csv` that is already 1.6 GB,
+and it is asserted in `tests/test_node_date_qc.py` against an explicitly expanded
+point array rather than left as a claim.
+
+### `mat/node_dates_rtt_scatter.png`
+
+Rendering of the above by the `chronumental_rtt_plot` rule (#146): divergence against
+date, coloured by tips per cell on a log scale, with two lines — the regression
+recomputed here (through the same `node_date_qc.weighted_linregress` that produced the
+number in `node_dates_qc.tsv`, so the figure and the report cannot disagree) and
+chronumental's own logged pre-fit slope, anchored at the cloud's centroid because
+chronumental logs its slope but not its intercept. When that log is unavailable the
+figure says so **on its face**: a plot missing a comparison it never announces looks
+exactly like one where the comparison agreed. A tree with no day-resolution tips gets
+a figure stating that rather than a failure or a stale file.
+
+Its own conda env (`workflow/envs/plot.yml`) rather than an addition to `default.yml`
+or `bte.yml`: both are shared by many rules, and widening either changes its hash and
+hands every rule using it a `software environment has changed` rerun trigger — on a
+released tree, a full rebuild for a figure.
 
 ### `mat/node_dates_residuals.csv`
 

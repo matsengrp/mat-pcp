@@ -705,6 +705,231 @@ def check_root_to_tip_reference_is_never_silently_dropped():
     return failures
 
 
+
+def check_rtt_divergence_accumulates_and_excludes_the_root():
+    """Root-to-tip divergence sums the path, and the root's own mutations are not on it.
+
+    Three properties, and the middle one is the load-bearing surprise:
+
+    1. Divergence accumulates down a path (a two-branch chain sums both branches),
+       and a sibling's count does not leak across.
+    2. The root's ``branch_mutations`` entry is **ignored**. On a MAT the root's
+       mutation list is its difference from the reference, not evolution inside the
+       tree, so counting it would offset every tip by the same constant -- which is
+       invisible in the plot (the cloud shifts up as a block, the slope is
+       unchanged) and wrong in the regression's intercept. A constant offset is
+       exactly the kind of error a scatter cannot show you, so it is asserted here.
+    3. A child-before-parent ordering **raises** rather than returning a truncated
+       sum, via the guard shared with ``propagate_min_descendant``.
+    """
+    failures = []
+    qc = _load()
+
+    # 0 (root) -> 1 -> 3, and 0 -> 2. Root carries 7 "mutations" that must not count.
+    parent = np.array([-1, 0, 0, 1], dtype="int64")
+    muts = np.array([7, 2, 5, 3], dtype="int64")
+    div = qc.root_to_tip_divergence(parent, muts, 4)
+    expected = [0, 2, 5, 5]
+    if div.tolist() != expected:
+        failures.append(
+            f"root-to-tip divergence must be {expected} (root excluded, path "
+            f"summed, siblings independent); got {div.tolist()}"
+        )
+
+    # Same tree with a different root mutation count: every value must be unchanged.
+    div_other_root = qc.root_to_tip_divergence(
+        parent, np.array([999, 2, 5, 3], dtype="int64"), 4
+    )
+    if div_other_root.tolist() != div.tolist():
+        failures.append(
+            f"the root's own mutation count must not enter any divergence; "
+            f"changing it moved {div.tolist()} to {div_other_root.tolist()}"
+        )
+
+    bad_parent = np.array([1, 2, 3, -1], dtype="int64")
+    try:
+        got = qc.root_to_tip_divergence(bad_parent, muts, 4)
+    except ValueError as exc:
+        if "depth-first" not in str(exc):
+            failures.append(
+                f"a child-before-parent ordering raised without explaining the "
+                f"ordering requirement: {exc}"
+            )
+    else:
+        failures.append(
+            f"a child-before-parent ordering returned {got.tolist()} instead of "
+            f"raising. The forward pass truncates silently without the "
+            f"precondition, which would understate divergence for a whole subtree "
+            f"and read as a flatter clock."
+        )
+
+    if not failures:
+        print("  divergence sums the path, ignores the root's own mutations, "
+              "and raises on a bad ordering")
+    return failures
+
+
+def check_rtt_histogram_is_lossless():
+    """The binned scatter must give the SAME regression as the per-tip cloud.
+
+    This is the property the whole design rests on: the figure ships an exact joint
+    histogram (a few tens of kB) instead of 17 M points, and that is only legitimate
+    if every statistic drawn from it is identical rather than approximate. Both axes
+    are integers, so it should be exact -- but "should be" covers a key-encoding
+    error that collides two cells, and a collision would show up as a *slightly*
+    wrong slope, which is unfalsifiable by eye.
+
+    So: build a raw point cloud with deliberate duplicates, regress it unweighted,
+    regress the histogram weighted, and require agreement to floating-point
+    tolerance. The fixture also puts two tips on the same date with different
+    divergences and two tips with the same divergence on different dates, which is
+    what a bad key encoding mixes up.
+    """
+    failures = []
+    qc = _load()
+
+    days = np.array([10, 10, 10, 12, 12, 40, 40, 55], dtype="int64")
+    muts = np.array([0, 0, 3, 0, 4, 3, 9, 12], dtype="int64")
+
+    h_days, h_muts, h_counts = qc.root_to_tip_histogram(days, muts)
+    if int(h_counts.sum()) != len(days):
+        failures.append(
+            f"the histogram must account for every tip: {int(h_counts.sum())} "
+            f"counted vs {len(days)} given"
+        )
+    # (10, 0) appears twice; every other pair once -> 7 cells.
+    if len(h_days) != 7:
+        failures.append(f"expected 7 non-empty cells, got {len(h_days)}")
+    duplicated = [
+        int(c) for d, m, c in zip(h_days, h_muts, h_counts) if d == 10 and m == 0
+    ]
+    if duplicated != [2]:
+        failures.append(f"cell (10, 0) must hold 2 tips, got {duplicated}")
+
+    binned = qc.weighted_linregress(h_days, h_muts, h_counts)
+    raw = qc.weighted_linregress(days, muts, np.ones(len(days)))
+    for key in ("slope", "intercept", "r"):
+        if not np.isclose(binned[key], raw[key], rtol=1e-12, atol=1e-12):
+            failures.append(
+                f"binning changed the regression's {key}: {binned[key]} from the "
+                f"histogram vs {raw[key]} from the raw points. The histogram is "
+                f"only a legitimate stand-in for the cloud if these are equal."
+            )
+    if binned["n"] != float(len(days)):
+        failures.append(f"weighted n must be {len(days)}, got {binned['n']}")
+
+    # A NaN date (a tip with no parseable observed date) is dropped, not counted as
+    # day zero -- which would drag the slope toward 1970.
+    with_nan_days = np.array([10.0, np.nan, 12.0])
+    dropped = qc.root_to_tip_histogram(with_nan_days, np.array([1, 2, 3]))
+    if int(dropped[2].sum()) != 2:
+        failures.append(
+            f"a tip with no parseable date must be dropped, not binned at the "
+            f"epoch; got {int(dropped[2].sum())} tips instead of 2"
+        )
+
+    if not failures:
+        print("  the exact histogram reproduces the raw cloud's regression bit for bit")
+    return failures
+
+
+def check_rtt_slope_is_per_year_and_reference_is_never_dropped():
+    """The reported slope is subs/**year**, and a missing reference is stated.
+
+    A per-day slope reads as ~0.065 where the reference is ~40, so a units slip does
+    not look like a units slip -- it looks like a catastrophically slow clock, which
+    is precisely the finding this whole check exists to report. The fixture is
+    therefore a cloud with an exactly known rate.
+
+    The second half mirrors ``check_root_to_tip_reference_is_never_silently_dropped``
+    for the new note: with chronumental's slope available the note carries the ratio,
+    and without it the note says so **and names the path it looked at**.
+    """
+    failures = []
+    qc = _load()
+
+    # Exactly 24 mutations per 365.25 days, over 5 dates.
+    days = np.arange(0, 5, dtype="int64") * 365
+    muts = (24.0 / qc.DAYS_PER_YEAR) * days
+    reg = qc.weighted_linregress(days, muts, np.ones(len(days)))
+    per_year = reg["slope"] * qc.DAYS_PER_YEAR
+    if not np.isclose(per_year, 24.0, rtol=1e-9):
+        failures.append(
+            f"a cloud built at exactly 24 subs/yr must regress to 24 subs/yr "
+            f"after the DAYS_PER_YEAR conversion; got {per_year}"
+        )
+
+    note = qc.root_to_tip_note(reg, 3, 30.0, "/nonexistent/chronumental.stdout")
+    if "24.0" not in note or "ratio" not in note:
+        failures.append(
+            f"with a reference available the note must carry the recomputed slope "
+            f"and the ratio; got {note!r}"
+        )
+    if "3 excluded" not in note:
+        failures.append(
+            f"the note must say how many tips were excluded, so a regression over "
+            f"a small subset is not read as the whole tree; got {note!r}"
+        )
+    # The tripwire is two-sided, and both sides are checked: a units error or an
+    # off-by-a-tree-level divergence can land either high or low, and a guard that
+    # only fires one way is half a guard.
+    for logged, label in ((12.0, "2.00 (high)"), (40.0, "0.60 (low)")):
+        flagged = qc.root_to_tip_note(reg, 0, logged, "/nonexistent")
+        if "tripwire" not in flagged:
+            failures.append(
+                f"a ratio of {label} is outside RTT_SLOPE_REL_TOL "
+                f"({qc.RTT_SLOPE_REL_TOL}) and must be flagged; got {flagged!r}"
+            )
+    # 24 / 30 = 0.80: a 20% gap is INSIDE the tolerance and must stay quiet, because
+    # the two regressions run over different tip sets and are not expected to agree
+    # exactly. This is the case that would make the check cry wolf on a correct run.
+    if "tripwire" in note:
+        failures.append(
+            f"a 0.80 ratio is inside the {qc.RTT_SLOPE_REL_TOL} tolerance and must "
+            f"NOT be flagged; got {note!r}"
+        )
+
+    absent = qc.root_to_tip_note(reg, 0, None, "/some/rotated/away.stdout")
+    if "unavailable" not in absent or "/some/rotated/away.stdout" not in absent:
+        failures.append(
+            f"with no reference the note must say so and name the path it looked "
+            f"at; got {absent!r}"
+        )
+    if "ratio" in absent:
+        failures.append(
+            f"with no reference the note must not imply a comparison was made; "
+            f"got {absent!r}"
+        )
+
+    # A single-date cloud has no slope; that must be reported, not divided by zero.
+    flat = qc.weighted_linregress(np.zeros(4), np.arange(4.0), np.ones(4))
+    if flat["slope"] is not None:
+        failures.append(f"a single-date cloud must have no slope; got {flat}")
+    flat_note = qc.root_to_tip_note(flat, 0, 40.0, "/x")
+    if "undefined" not in flat_note or "share one collection date" not in flat_note:
+        failures.append(
+            f"a single-date cloud must report as undefined AND name that as the "
+            f"cause; got {flat_note!r}"
+        )
+
+    # An empty cloud is also slopeless, but for a different reason -- a tree whose
+    # metadata carries no day-resolution dates at all, which is a normal state and
+    # not a degenerate cloud. Reporting the wrong cause sends the reader after the
+    # wrong problem.
+    empty = qc.weighted_linregress(np.array([]), np.array([]), np.array([]))
+    empty_note = qc.root_to_tip_note(empty, 0, 40.0, "/x")
+    if "no day-resolution tips" not in empty_note:
+        failures.append(
+            f"an empty cloud must be reported as having no day-resolution tips, "
+            f"not as a single-date cloud; got {empty_note!r}"
+        )
+
+    if not failures:
+        print("  slope is subs/yr; the reference is compared, flagged, or its "
+              "absence stated")
+    return failures
+
+
 CHECKS = [
     ("histogram order statistics are exact", check_histogram_matches_exact_quantiles),
     ("quantile is exact at integer targets", check_quantile_boundary_is_exact),
@@ -718,6 +943,9 @@ CHECKS = [
     ("aggregate is exact, not binned", check_aggregate_is_exact_not_binned),
     ("NaN branches and zero-span trees", check_undefined_branches_and_zero_span),
     ("root-to-tip absence is reported", check_root_to_tip_reference_is_never_silently_dropped),
+    ("divergence accumulates, root excluded", check_rtt_divergence_accumulates_and_excludes_the_root),
+    ("the binned scatter is lossless", check_rtt_histogram_is_lossless),
+    ("slope units and reference handling", check_rtt_slope_is_per_year_and_reference_is_never_dropped),
 ]
 
 

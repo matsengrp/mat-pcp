@@ -1,0 +1,14 @@
+name: plot
+channels:
+  - https://prefix.dev/conda-forge
+  - https://prefix.dev/bioconda
+dependencies:
+  - python>=3.9,<3.13
+  - pandas>=2.0,<3.0
+  - numpy>=1.24,<2.0
+  # Plotting lives in its own environment rather than being added to default.yml or
+  # bte.yml. Both of those are shared by many rules, so widening either changes its
+  # hash and hands every one of those rules a `software environment has changed`
+  # rerun trigger -- on a released tree that is a full rebuild for a figure. This
+  # env is used by one rule, so its hash moves alone.
+  - matplotlib-base>=3.7,<4.0
