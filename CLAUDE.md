@@ -122,7 +122,11 @@ pixi run snakemake -j 2 --use-conda \
 pixi run python workflow/scripts/validate_test.py
 ```
 
-> **`CLAUDE.md`, `CHANGELOG.md` and `workflow/Snakefile` use CRLF line endings.** Edit them in place. A
+> **`CLAUDE.md`, `CHANGELOG.md`, `workflow/Snakefile`, `config/config.yaml`,
+> `config/config_test_data.yaml` and
+> `config/config-gisaid-and-public-BA2-JN1-XFG.yaml` use CRLF line endings** (the
+> other configs are LF, so a scripted edit across `config/*.yaml` must read each
+> file's ending rather than assume one). Edit them in place. A
 > Python `read_text()` / `write_text()` round-trip normalizes them to LF, which
 > rewrites every line and buries a three-line content edit in a ~2,200-line
 > whitespace diff. Nothing errors and the rendered text is identical, so it is only
