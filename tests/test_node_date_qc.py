@@ -930,6 +930,214 @@ def check_rtt_slope_is_per_year_and_reference_is_never_dropped():
     return failures
 
 
+def check_fitted_rate_comes_from_the_last_logged_step():
+    """The fitted clock must be read from the LAST progress line, not the first.
+
+    This is the whole reason the parse is tested rather than eyeballed. chronumental
+    logs ``step:0`` with the optimizer's starting value, which is its own pre-fit
+    root-to-tip estimate after one update -- so a first-match parse returns a number
+    within a few percent of the pre-fit rate. That reads as a converged clock
+    agreeing with its starting point, which is the *opposite* of the finding on every
+    real tree (fitted 9.36 against pre-fit 40.36 on ``public_2026-08-06_v11``), and
+    nothing downstream could tell the two apart: both are plausible clock rates in
+    subs/yr and both plot as a straight line.
+    """
+    import os
+    import tempfile
+
+    qc = _load()
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        good = os.path.join(tmp, "chronumental.stdout")
+        with open(good, "w") as f:
+            f.write("Loading tree\n")
+            f.write(f"{qc.ROOT_TO_TIP_PREFIX} 40.357335447508774\n")
+            # Step 0 near the pre-fit rate, the last step far below it: exactly the
+            # shape of a real run.
+            f.write("step:0\tloss:4e8\tlength_cor:0.9942\tmutation_rate:39.1646\n")
+            f.write("step:10\tloss:2e8\tlength_cor:0.9754\tmutation_rate:20.0000\n")
+            f.write("step:20\tloss:1e8\tlength_cor:0.3964\tmutation_rate:9.3575\n")
+            f.write("Fit completed. Extracting parameters.\n")
+            f.write("Writing tree to file\n")
+
+        rate, step = qc.parse_fitted_mutation_rate(good)
+        if rate is None or abs(rate - 9.3575) > 1e-9 or step != 20:
+            failures.append(
+                f"expected the last logged step (9.3575, 20), got ({rate}, {step})"
+            )
+        # State the trap as an assertion, not only as a comment: a first-match parse
+        # returns 39.1646, which is 0.97x the pre-fit rate and would pass any
+        # sanity check written in terms of "is this a plausible clock".
+        pre_fit = qc.parse_root_to_tip_rate(good)
+        if rate is not None and abs(rate / pre_fit - 1) < 0.5:
+            failures.append(
+                f"parsed rate {rate} sits within 50% of the pre-fit {pre_fit}: this "
+                f"fixture is built so the last step is 4.3x below it, so a value "
+                f"this close means step 0 was read"
+            )
+
+        # A truncated final line -- a run killed mid-write -- must leave the last
+        # good pair standing rather than blanking the reference or pairing the new
+        # step with the old rate.
+        truncated = os.path.join(tmp, "truncated.stdout")
+        with open(truncated, "w") as f:
+            f.write("step:0\tmutation_rate:39.1646\n")
+            f.write("step:10\tmutation_rate:9.3575\n")
+            f.write("step:20\tloss:1e8\tmutation_ra")
+        rate, step = qc.parse_fitted_mutation_rate(truncated)
+        if rate is None or abs(rate - 9.3575) > 1e-9 or step != 10:
+            failures.append(
+                f"a truncated final line should leave (9.3575, 10) standing, got "
+                f"({rate}, {step})"
+            )
+
+        # No progress lines at all, and no file at all: both are "no rate", and both
+        # must be reportable rather than crash.
+        empty = os.path.join(tmp, "empty.stdout")
+        with open(empty, "w") as f:
+            f.write("Loading tree\nFit completed. Extracting parameters.\n")
+        for label, path in [("a log with no step lines", empty),
+                            ("a missing log", os.path.join(tmp, "nope.stdout"))]:
+            rate, step = qc.parse_fitted_mutation_rate(path)
+            if (rate, step) != (None, None):
+                failures.append(f"{label} should give (None, None), got ({rate}, {step})")
+
+    if not failures:
+        print("  fitted rate is the last logged step; truncation and absence are safe")
+    return failures
+
+
+def check_model_implied_line_anchors_at_the_root_and_is_per_year():
+    """The fitted-clock line passes through zero on the root's date, in subs/**year**.
+
+    Two ways to get this wrong, and only one of them is visible on the figure. A
+    per-*day* reading of the rate puts the line 365x too steep and shoots it off the
+    top of the plot, which anyone would notice. But anchoring it anywhere other than
+    the root -- at the cloud's centroid, say, as the pre-fit slope legitimately is --
+    keeps it inside the axes and looking reasonable while destroying the only thing
+    it is for: the vertical gap to the cloud, which is the duration inflation
+    measured in mutations.
+    """
+    qc = _load()
+    failures = []
+    root_day = 18_000.0  # arbitrary epoch day for the root
+    rate = 12.0
+
+    at_root = qc.model_implied_divergence([root_day], root_day, rate)
+    if at_root is None or abs(float(at_root[0])) > 1e-12:
+        failures.append(f"divergence at the root must be exactly 0, got {at_root}")
+
+    one_year = qc.model_implied_divergence(
+        [root_day + qc.DAYS_PER_YEAR], root_day, rate
+    )
+    if one_year is None or abs(float(one_year[0]) - rate) > 1e-9:
+        failures.append(
+            f"one year past the root must be exactly one rate ({rate}), got {one_year}"
+        )
+
+    # Ten years out, the difference between per-year and per-day is not subtle;
+    # asserted anyway because it is the cheap half of the pair above.
+    ten_years = qc.model_implied_divergence(
+        [root_day + 10 * qc.DAYS_PER_YEAR], root_day, rate
+    )
+    if ten_years is None or abs(float(ten_years[0]) - 10 * rate) > 1e-9:
+        failures.append(f"ten years past the root should be {10 * rate}, got {ten_years}")
+
+    # A date BEFORE the root gives negative predicted divergence rather than being
+    # clamped: clamping would hide a root dated after its own samples, which is
+    # exactly what check 7 and check 8 exist to catch.
+    before = qc.model_implied_divergence([root_day - 365.25], root_day, rate)
+    if before is None or float(before[0]) >= 0:
+        failures.append(f"a pre-root date should predict negative divergence, got {before}")
+
+    # Either input missing means "no line", which the caller states on the figure.
+    for label, args in [
+        ("no fitted rate", ([root_day], root_day, None)),
+        ("no root anchor", ([root_day], None, rate)),
+    ]:
+        if qc.model_implied_divergence(*args) is not None:
+            failures.append(f"{label} should give None, not a line")
+
+    if not failures:
+        print("  model line is anchored at the root, in subs/yr, and unclamped")
+    return failures
+
+
+def check_per_bin_rate_is_exact_and_reconciles():
+    """Per-bin rates use real per-branch counts and sum back to the aggregate.
+
+    The fixture is built so a **midpoint** reading of the ranged bins gives a visibly
+    different answer: the two branches in the ``21-50`` bin carry 21 and 50
+    mutations, whose midpoint (35) is wrong for both. That matters more than the
+    small error it causes, because the ranged bins are exactly where the punctuated
+    jumps live -- the branches this decomposition exists to characterize -- so a
+    midpoint is least defensible precisely where it is most tempting.
+
+    The reconciliation is the other half: the bins must partition the branches, so
+    summing ``mutations`` and ``branch_years`` across them has to reproduce
+    :func:`implied_clock_summary` exactly. A binning bug that dropped or
+    double-counted a bin would otherwise show up only as a slightly odd rate in one
+    row, which is unfalsifiable by eye.
+    """
+    qc = _load()
+    failures = []
+    year = qc.DAYS_PER_YEAR
+
+    # 0-mutation branches holding real time, ordinary branches, and two jumps.
+    dt = np.array([year, year, year, 2 * year, year, year, np.nan], dtype="float64")
+    muts = np.array([0, 0, 1, 4, 21, 50, 7], dtype="float64")
+    by_bin = qc.implied_rate_by_bin(dt, muts)
+
+    if "0" not in by_bin:
+        failures.append(
+            "the zero-mutation bin must be reported, not dropped as undefined: "
+            "0 subs/yr over a large share of the tree's time is the finding"
+        )
+    elif by_bin["0"]["subs_per_year"] != 0.0:
+        failures.append(f"zero-mutation bin should be 0.0 subs/yr, got {by_bin['0']}")
+
+    # 21 + 50 = 71 mutations over 2 branch-years. A midpoint of 35 would give 70/2.
+    ranged = by_bin.get("21-50")
+    if ranged is None or abs(ranged["mutations"] - 71) > 1e-9:
+        failures.append(f"the 21-50 bin must sum real counts (71), got {ranged}")
+    elif abs(ranged["subs_per_year"] - 35.5) > 1e-9:
+        failures.append(f"21-50 rate should be 71/2 = 35.5, got {ranged}")
+
+    # The NaN-duration branch carries 7 mutations. Crediting them without their time
+    # would inflate the 6-10 bin (and the aggregate) out of nothing.
+    if "6-10" in by_bin:
+        failures.append(
+            f"a branch with an undefined Delta-t must be excluded from both sums, "
+            f"but its bin appeared: {by_bin['6-10']}"
+        )
+
+    aggregate = qc.implied_clock_summary(dt, muts)
+    tot_m = sum(e["mutations"] for e in by_bin.values())
+    tot_y = sum(e["branch_years"] for e in by_bin.values())
+    if abs(tot_m - aggregate["total_mutations"]) > 1e-6:
+        failures.append(
+            f"per-bin mutations sum to {tot_m} but the aggregate says "
+            f"{aggregate['total_mutations']}: the bins are not a partition"
+        )
+    if abs(tot_y - aggregate["branch_years"]) > 1e-6:
+        failures.append(
+            f"per-bin branch-years sum to {tot_y} but the aggregate says "
+            f"{aggregate['branch_years']}: the bins are not a partition"
+        )
+
+    if qc.implied_rate_by_bin([], []) != {}:
+        failures.append("no branches should give an empty mapping, not a raise")
+    try:
+        qc.implied_rate_by_bin([1.0, 2.0], [1.0])
+        failures.append("mismatched array lengths should raise")
+    except ValueError:
+        pass
+
+    if not failures:
+        print("  per-bin rates are exact, keep the zero bin, and sum to the aggregate")
+    return failures
+
+
 CHECKS = [
     ("histogram order statistics are exact", check_histogram_matches_exact_quantiles),
     ("quantile is exact at integer targets", check_quantile_boundary_is_exact),
@@ -946,6 +1154,9 @@ CHECKS = [
     ("divergence accumulates, root excluded", check_rtt_divergence_accumulates_and_excludes_the_root),
     ("the binned scatter is lossless", check_rtt_histogram_is_lossless),
     ("slope units and reference handling", check_rtt_slope_is_per_year_and_reference_is_never_dropped),
+    ("fitted rate is the last step", check_fitted_rate_comes_from_the_last_logged_step),
+    ("model line anchors at the root", check_model_implied_line_anchors_at_the_root_and_is_per_year),
+    ("per-bin rate is exact and reconciles", check_per_bin_rate_is_exact_and_reconciles),
 ]
 
 

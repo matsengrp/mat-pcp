@@ -56,6 +56,7 @@ branch_dt_path = snakemake.output.branch_dt
 internal_checks_path = snakemake.output.internal_checks
 branch_dt_summary_path = snakemake.output.branch_dt_summary
 rtt_path = snakemake.output.rtt
+rtt_anchor_path = snakemake.output.rtt_anchor
 max_median_abs_tip_residual_days = float(
     snakemake.params.max_median_abs_tip_residual_days
 )
@@ -330,6 +331,28 @@ pd.DataFrame(
 # EXACT rather than interpolated, because Delta-t is whole days and the histogram
 # holds every observation (see the DayHistogram docstring). ``iqr`` is p75 - p25 on
 # those same exact order statistics, not a separate estimate.
+# The per-bin implied rate, from the per-branch arrays rather than from the `mean`
+# column below: `mutations` is the real sum of per-branch counts, so the ranged bins
+# are as exact as the single-count ones. This is what separates "the fit tracks
+# gradual evolution and lets jumps be outliers" from "the fit parked time on branches
+# with no mutations" -- see node_date_qc.implied_rate_by_bin.
+rate_by_bin = node_date_qc.implied_rate_by_bin(branch_dt, branch_muts)
+clock_summary = node_date_qc.implied_clock_summary(branch_dt, branch_muts)
+
+
+def rate_columns(label, entry):
+    """The three rate columns for one summary row, formatted once for both writers."""
+    return {
+        "mutations": None if entry is None else round(entry["mutations"]),
+        "branch_years": None if entry is None else round(entry["branch_years"], 1),
+        "subs_per_year": (
+            None
+            if entry is None or entry["subs_per_year"] is None
+            else round(entry["subs_per_year"], 2)
+        ),
+    }
+
+
 branch_summary = []
 for label in sorted(dt_by_bin, key=bin_lower_bound):
     s = dt_by_bin[label].stats()
@@ -349,6 +372,7 @@ for label in sorted(dt_by_bin, key=bin_lower_bound):
             "frac_dt_zero": round(
                 dict(dt_by_bin[label].as_rows()).get(0, 0) / s["n"], 6
             ),
+            **rate_columns(label, rate_by_bin.get(label)),
         }
     )
 # An "all" row, so the marginal distribution does not have to be recombined by hand
@@ -371,6 +395,16 @@ branch_summary.append(
         "max": s["max"],
         "mean": round(s["mean"], 2),
         "frac_dt_zero": round(dict(all_hist.as_rows()).get(0, 0) / s["n"], 6),
+        # From implied_clock_summary, NOT from re-summing the bins: one source of
+        # truth for the aggregate, and it is the number the report line quotes.
+        **rate_columns(
+            "all",
+            {
+                "mutations": clock_summary["total_mutations"],
+                "branch_years": clock_summary["branch_years"],
+                "subs_per_year": clock_summary["subs_per_year"],
+            },
+        ),
     }
 )
 n_dt_defined = int((~np.isnan(branch_dt)).sum())
@@ -427,8 +461,8 @@ if steps:
 # 11 d/mutation against a ~15.3 d nominal and looked healthy while the tree's own
 # implied rate sat 4.3x below chronumental's pre-fit root-to-tip estimate. Computed
 # from the per-branch arrays, so it is exact rather than reconstructed from the
-# ranged bins of the summary CSV (which moves the answer ~+/-7%).
-clock_summary = node_date_qc.implied_clock_summary(branch_dt, branch_muts)
+# ranged bins of the summary CSV (which moves the answer ~+/-7%). Computed further up,
+# beside rate_by_bin, because the summary CSV's "all" row quotes it.
 # Parsed once and reused by check 10, so the two checks cannot end up comparing
 # against different references.
 root_to_tip_rate = node_date_qc.parse_root_to_tip_rate(chronumental_stdout_path)
@@ -440,7 +474,23 @@ aggregate_note = node_date_qc.implied_clock_note(
 record_report(
     "branch_dt_vs_mutations",
     f"{len(dt_by_bin)} mutation-count bins over {total_branches} dated branches"
-    f"{clock_note}{aggregate_note}; median Delta-t by bin: "
+    f"{clock_note}{aggregate_note}; implied subs/yr by bin: "
+    # Reported alongside the medians rather than instead of them: the median answers
+    # "how long is a branch with n mutations", the rate answers "what clock would
+    # that imply", and only the second is comparable to the nominal or to the
+    # aggregate. The zero-mutation bin is printed as 0.00 with its share of the
+    # tree's time, which is the one number in this whole line that indicts the fit.
+    + ", ".join(
+        f"{label}mut:"
+        + (
+            "n/a"
+            if rate_by_bin[label]["subs_per_year"] is None
+            else f"{rate_by_bin[label]['subs_per_year']:.2f}"
+        )
+        + f"@{100 * rate_by_bin[label]['branch_years'] / clock_summary['branch_years']:.1f}%t"
+        for label in sorted(rate_by_bin, key=bin_lower_bound)
+    )
+    + "; median Delta-t by bin: "
     + ", ".join(f"{median_labels[n]}mut:{medians[n]}d" for n in sorted(medians))
     + f"; full per-bin day distributions in {os.path.basename(branch_dt_path)}",
 )
@@ -686,11 +736,70 @@ rtt_note = node_date_qc.root_to_tip_note(
     root_to_tip_rate,
     chronumental_stdout_path,
 )
+
+# The anchor sidecar: the one quantity the plot cannot derive from the cloud.
+# ``model_implied_divergence`` draws the fitted clock's own prediction, which passes
+# through zero divergence on the root's *fitted* date -- and finding the root needs
+# the tree, which this rule has loaded and the plot rule deliberately does not (it
+# reads a few tens of kB of histogram, not a 646 MB newick and a 731 MB dates file).
+#
+# It cannot come from the log either. chronumental prints a ``root_date`` field on
+# every progress line, but it is not the root's date in days: the two #146 runs
+# whose fields read -17.5946 and -17.5023 -- 0.09 apart, on any linear reading of
+# days or years a difference of hours or weeks -- wrote root dates two days apart
+# (2019-12-09 and 2019-12-11). It is an internal parameterization, so decoding it
+# would be a guess that happens to land near the right answer, which is worse than
+# not having it.
+root_day_ordinal = None
+if root_date is not None and not pd.isna(root_date):
+    root_day_ordinal = float(to_day_ordinal(pd.Series([root_date]))[0])
+pd.DataFrame(
+    [
+        {
+            "root_id": root_id,
+            # Blank when check 7 found no parseable root date. Written as an empty
+            # cell rather than omitting the row, so the plot distinguishes "the QC
+            # ran and the root had no date" from "no sidecar, the QC never ran".
+            "root_fitted_date": (
+                "" if root_date is None or pd.isna(root_date) else root_date.isoformat()
+            ),
+            "root_day_ordinal": "" if root_day_ordinal is None else root_day_ordinal,
+        }
+    ]
+).to_csv(rtt_anchor_path, index=False)
+
+# Reported for the reader of the report, and pointedly NOT as a ratio against the
+# aggregate rate: that comparison is near-identity by construction (the Poisson term
+# is stationary at rate = 365 * sum(mut) / sum(t), so the fitted clock IS the
+# aggregate statistic, measured 1.027 on the shipped tree) and a "ratio near 1"
+# rule would pass a 4.3x-inflated tree. Against the *pre-fit* root-to-tip slope it
+# is a real comparison, which is the one drawn on the scatter.
+fitted_rate, fitted_step = node_date_qc.parse_fitted_mutation_rate(
+    chronumental_stdout_path
+)
+if fitted_rate is None:
+    fitted_note = (
+        f"; fitted clock unavailable (no parsable '"
+        f"{node_date_qc.FITTED_RATE_STEP_PREFIX}' progress line at "
+        f"{chronumental_stdout_path})"
+    )
+else:
+    fitted_note = (
+        f"; chronumental's fitted clock {fitted_rate:.2f} subs/yr at its last "
+        f"logged step {fitted_step}"
+    )
+    if root_to_tip_rate:
+        fitted_note += (
+            f", {fitted_rate / root_to_tip_rate:.2f}x its own pre-fit root-to-tip "
+            f"slope"
+        )
 record_report(
     "root_to_tip_regression",
     f"{rtt_note}; {len(rtt_days)} non-empty (date, divergence) cells over "
     f"{n_tips_tree} tips in the tree, full cloud in "
-    f"{os.path.basename(rtt_path)}",
+    f"{os.path.basename(rtt_path)}{fitted_note}; model-implied line anchored at "
+    f"the fitted root date "
+    f"{'unavailable' if root_day_ordinal is None else root_date.date()}",
 )
 
 # --- write report ------------------------------------------------------------

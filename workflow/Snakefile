@@ -643,7 +643,15 @@ rule chronumental_qc:
         # joint distribution rather than a summary of it -- a few tens of kB
         # standing in for a 17 M-point cloud, and the input to the scatter that
         # ``chronumental_rtt_plot`` renders.
-        rtt=os.path.join(OUTDIR, "mat/node_dates_rtt.csv")
+        rtt=os.path.join(OUTDIR, "mat/node_dates_rtt.csv"),
+        # The root's fitted date, which is what anchors the fitted clock's own
+        # predicted line on the scatter. A sidecar because it is the one
+        # quantity that needs the TREE: finding the root means loading the
+        # newick, which this rule already does and the plot rule deliberately
+        # does not. It cannot be read off the log either -- chronumental's
+        # ``root_date`` progress field is an internal parameterization, not the
+        # root's date in days (#146).
+        rtt_anchor=os.path.join(OUTDIR, "mat/node_dates_rtt_anchor.csv")
     params:
         max_median_abs_tip_residual_days=config.get(
             "chronumental_max_median_abs_tip_residual_days", 30
@@ -689,7 +697,8 @@ rule chronumental_rtt_plot:
     report cannot disagree.
     """
     input:
-        rtt=rules.chronumental_qc.output.rtt
+        rtt=rules.chronumental_qc.output.rtt,
+        rtt_anchor=rules.chronumental_qc.output.rtt_anchor
     output:
         plot=os.path.join(OUTDIR, "mat/node_dates_rtt_scatter.png")
     params:

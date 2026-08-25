@@ -204,6 +204,66 @@ def implied_clock_note(summary, root_to_tip_rate, stdout_path):
     return note
 
 
+def implied_rate_by_bin(branch_dt_days, branch_mutations):
+    """Per-bin ``sum(mutations) / sum(branch-years)``, keyed by bin label.
+
+    :func:`implied_clock_summary` gives one aggregate for the whole tree; this
+    decomposes it by branch mutation count, which is what distinguishes the two
+    stories a low aggregate could tell. If the fit were tracking gradual evolution
+    and letting saltational branches sit as outliers, the ordinary low-count bins
+    would come out near the clock and the high-count bins far below it. What the v11
+    trees actually show is the reverse: bins 1-5 climb 13.5 -> 25.1 subs/yr, arriving
+    at the ~23.9 nominal, the >20-mutation bins run *above* it (57.9 and 72.0, i.e. the fit
+    compresses the jumps rather than stretching them), and the entire deficit is the
+    zero-mutation bin -- 5.77 M branches averaging 22.5 days, contributing 46% of the
+    tree's time and no mutations at all. Under ``--variance_dates 30`` that same bin
+    averages 0.24 days and the aggregate moves 9.47 -> 27.25.
+
+    Two things about the arithmetic matter.
+
+    **Exact counts, not bin midpoints.** ``mutations`` sums the real per-branch
+    counts, so the ranged bins (``6-10``, ``21-50``, ``51+``) are as exact as the
+    single-count ones. Reconstructing this from
+    ``node_dates_branch_dt_summary.csv``'s ``mean`` column requires inventing a
+    representative count per ranged bin, which moved the aggregate 9.47 -> 9.59 in
+    the analysis that prompted this function -- small, but it is the ranged bins
+    that carry the punctuation, so that is exactly where a midpoint is least
+    defensible.
+
+    **The zero-mutation bin is reported, not dropped.** Its rate is 0 by
+    construction, and a caller tempted to omit it as "undefined" would delete the
+    finding: 0 subs/yr over 46% of the tree's elapsed time is the whole diagnosis.
+    Branches with an undefined ``Delta-t`` are excluded from both sums, since a NaN
+    duration cannot be credited with its mutations either.
+    """
+    dt = np.asarray(branch_dt_days, dtype="float64")
+    muts = np.asarray(branch_mutations, dtype="float64")
+    if len(dt) != len(muts):
+        raise ValueError(
+            f"branch arrays disagree: {len(dt)} durations vs {len(muts)} counts"
+        )
+    finite = np.isfinite(dt) & np.isfinite(muts)
+    dt, muts = dt[finite], muts[finite]
+    out = {}
+    edges = np.asarray(MUT_COUNT_BINS)
+    bin_pos = np.searchsorted(edges, muts, side="left")
+    for pos in np.unique(bin_pos):
+        mask = bin_pos == pos
+        count = int(mask.sum())
+        label = mutation_count_bin(
+            int(edges[pos]) if pos < len(edges) else int(edges[-1]) + 1
+        )
+        years = float(dt[mask].sum()) / DAYS_PER_YEAR
+        mutations = float(muts[mask].sum())
+        out[label] = {
+            "n_branches": count,
+            "mutations": mutations,
+            "branch_years": years,
+            "subs_per_year": (mutations / years) if years > 0 else None,
+        }
+    return out
+
+
 def parse_root_to_tip_rate(stdout_path):
     """chronumental's own pre-fit clock estimate from its stdout, or ``None``.
 
@@ -222,6 +282,95 @@ def parse_root_to_tip_rate(stdout_path):
             if line.startswith(ROOT_TO_TIP_PREFIX):
                 return float(line[len(ROOT_TO_TIP_PREFIX):].strip())
     return None
+
+
+#: chronumental logs one progress line per ``--log_every`` steps, each carrying the
+#: current value of every fitted parameter as whitespace-separated ``name:value``
+#: fields. The *fitted* clock is the ``mutation_rate`` field of the **last** such
+#: line: the run ends with "Fit completed. Extracting parameters." and no
+#: final-parameter line, so the last logged step is the closest thing the log has to
+#: the rate the run actually wrote out.
+FITTED_RATE_STEP_PREFIX = "step:"
+FITTED_RATE_FIELD = "mutation_rate"
+
+
+def parse_fitted_mutation_rate(stdout_path):
+    """chronumental's *fitted* clock, as ``(subs_per_year, step)``.
+
+    ``(None, None)`` means "no fitted rate available", which the caller must
+    **state** rather than pass over, for the same reason as
+    :func:`parse_root_to_tip_rate`.
+
+    **The last progress line, not the first.** Step 0 reports the optimizer's
+    starting value, which is the pre-fit root-to-tip estimate after one update --
+    39.16 against a pre-fit 40.36 on ``public_2026-08-06_v11``. A first-match parse
+    therefore returns a number within 3% of the pre-fit rate: it looks like a
+    converged clock agreeing with its own starting point, and it is the exact
+    opposite of the finding, since the rate that run actually fitted is 9.36, 4.3x
+    lower. Nothing downstream can tell the two apart, so the last-line semantics are
+    unit-tested rather than trusted to the loop reading correctly.
+
+    **The step is returned, not discarded.** chronumental logs every
+    ``--log_every`` steps, so the last *logged* step need not be the last step
+    taken, and the rate can still be moving there: over the final third of the #146
+    ``--variance_dates 30`` run it went 21.9 -> 27.2. Printing the rate without the
+    step implies a convergence the log does not show.
+    """
+    if not stdout_path or not os.path.exists(stdout_path):
+        return None, None
+    rate, step = None, None
+    with open(stdout_path) as f:
+        for line in f:
+            if not line.startswith(FITTED_RATE_STEP_PREFIX):
+                continue
+            fields = {}
+            for token in line.split():
+                name, sep, value = token.partition(":")
+                if sep:
+                    fields[name] = value
+            if FITTED_RATE_FIELD not in fields:
+                continue
+            try:
+                # Assigned together, and only on success, so a truncated final line
+                # (a killed run mid-write) leaves the last good pair standing rather
+                # than blanking the reference or pairing a rate with a stale step.
+                rate, step = float(fields[FITTED_RATE_FIELD]), int(fields["step"])
+            except ValueError:
+                continue
+    return rate, step
+
+
+def model_implied_divergence(day_ordinals, root_day_ordinal, fitted_rate):
+    """Root-to-tip divergence the fitted clock predicts at each date.
+
+    This is the model's own prediction, not a slope drawn near the cloud for
+    comparison, and the reason is worth stating because it is what makes the line
+    legitimate. chronumental parameterizes each branch's *duration*, and a node's
+    date is the root date plus the cumulative sum along its path -- so the durations
+    on any root-to-tip path sum to ``tip_date - root_date`` by construction. The
+    per-branch Poisson expectation ``rate * t`` therefore telescopes: expected
+    root-to-tip divergence is ``rate * (tip_date - root_date)``, exactly. Tip fitted
+    dates equal their collection dates to a median 0.01 d on the shipped prior, so
+    evaluating that at the *collection* date is the same statement.
+
+    Which means the gap between this line and the cloud is not a plotting artifact
+    to be tuned away -- it is the #145 finding drawn to scale. On
+    ``public_2026-08-06_v11`` the fitted clock predicts 62 mutations at the last
+    collection date, where the cloud's own regression reads 247: the fit reproduces
+    every leaf date
+    while under-predicting every leaf's divergence by ~4x, having parked the missing
+    time on interior branches carrying no mutations.
+
+    Anchoring at zero divergence on the root's date is exact for the same reason
+    :func:`root_to_tip_divergence` excludes the root's own mutation list: on a MAT
+    those are the root's difference from the *reference*, not evolution along a
+    branch, so divergence at the root is 0 and the line passes through
+    ``(root_date, 0)`` rather than through a fitted intercept.
+    """
+    if fitted_rate is None or root_day_ordinal is None:
+        return None
+    days = np.asarray(day_ordinals, dtype="float64")
+    return fitted_rate * (days - float(root_day_ordinal)) / DAYS_PER_YEAR
 
 
 def mutation_count_bin(n_mutations):

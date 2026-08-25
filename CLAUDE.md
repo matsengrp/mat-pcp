@@ -611,6 +611,35 @@ mat-pcp/
     **own conda env**: `chronumental_qc` runs on `bte.yml` and widening a shared env
     changes its hash, handing every rule using it a `software environment has changed`
     trigger -- a full rebuild of a released tree for a figure.
+    *The fitted clock is drawn as a prediction, not a third slope.* The figure
+    also carries chronumental's **fitted** rate, and its anchoring is different
+    from the pre-fit line's on purpose. The pre-fit line is slope-only at the
+    centroid because chronumental logs no intercept; the fitted line has a real
+    one, since a node's date is the root date plus the cumsum of its path's
+    durations, so those durations telescope and the per-branch Poisson
+    expectation sums to `rate * (tip - root)` along **any** root-to-tip path.
+    Drawn from zero divergence on the root's fitted date it is therefore the
+    model's own prediction, and the vertical gap to the cloud is #145 measured in
+    mutations: 9.36 subs/yr predicts 62 at the last collection date, where the
+    cloud's own regression reads 247. Note what did *not* move -- the root's fitted date spans one day
+    across the whole sweep (2019-12-10 for the shipped setting, 2019-12-11 for
+    `--variance_dates 30`), so the inflation is interior, and
+    "the root got pushed back" is the wrong story. Three traps. The rate must come
+    from the **last** logged step: `step:0` is the pre-fit estimate after one
+    update (39.16 against 40.36), so a first-match parse returns a clock that
+    agrees with its own starting point and is 4.3x wrong, with nothing downstream
+    able to tell. The anchor is a **sidecar** (`mat/node_dates_rtt_anchor.csv`)
+    because finding the root needs the tree, which the plot rule deliberately does
+    not load -- and it cannot be decoded from the log's `root_date` field, an
+    internal parameterization: the two arms whose fields read -17.5946 and
+    -17.5023 wrote root dates 0.81 days apart, where reading the field as days
+    predicts 2.2 hours and as years predicts 34 days. And the report states the
+    fitted rate against the **pre-fit**
+    slope only, never against the tree's implied aggregate: that ratio is
+    near-identity by construction, so a "near 1 is fine" rule passes an inflated
+    tree. Guarded by two checks in `tests/test_node_date_qc.py`, both
+    mutation-tested, and by the anchor reconciliation in
+    `validate_test.py::validate_root_to_tip_cloud`.
 
     See [#145](https://github.com/matsengrp/mat-pcp/issues/145) and
     [#146](https://github.com/matsengrp/mat-pcp/issues/146).

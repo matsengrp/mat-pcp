@@ -411,10 +411,57 @@ def validate_root_to_tip_cloud(output_dir):
                     f"figure are describing different regressions."
                 )
 
+    # 4. The figure's anchor for the fitted-clock line, against the root date the
+    #    report states. Same script writes both, but they are read by different
+    #    audiences -- the sidecar by the plot, the report by a person -- so a
+    #    divergence would anchor the model-implied line somewhere nobody can see,
+    #    and the line would still look like a line.
+    anchor_path = os.path.join(output_dir, "mat", "node_dates_rtt_anchor.csv")
+    anchor_note = "no anchor sidecar"
+    if not os.path.exists(anchor_path):
+        differences.append(
+            f"root-to-tip: {anchor_path} is missing, so the fitted-clock line has "
+            f"no root to start from"
+        )
+    else:
+        anchor = pd.read_csv(anchor_path)
+        if len(anchor) != 1:
+            differences.append(
+                f"root-to-tip: {anchor_path} holds {len(anchor)} rows, expected "
+                f"exactly 1 (one root)"
+            )
+        else:
+            anchor_date = pd.to_datetime(anchor["root_fitted_date"].iloc[0])
+            anchor_note = f"anchor {anchor_date.date() if pd.notna(anchor_date) else 'blank'}"
+            if os.path.exists(report_path):
+                root_row = report[report["check"] == "root_date_plausible"]
+                match = re.search(
+                    r"dated (\d{4}-\d{2}-\d{2})", str(root_row.iloc[0]["detail"])
+                ) if not root_row.empty else None
+                if match and pd.notna(anchor_date):
+                    if str(anchor_date.date()) != match.group(1):
+                        differences.append(
+                            f"root-to-tip: the anchor sidecar says the root is dated "
+                            f"{anchor_date.date()} but check 7 reported "
+                            f"{match.group(1)}; the figure's fitted-clock line is "
+                            f"anchored somewhere the report does not describe"
+                        )
+            if pd.notna(anchor_date):
+                # The root cannot postdate the earliest sample beneath it, so its
+                # anchor sits at or left of the cloud. Inside the cloud would make
+                # the model-implied line start partway up the y-axis at zero
+                # divergence, which is not a rendering problem but a dating one.
+                earliest = cloud["observed_date"].min()
+                if anchor_date.normalize() > earliest:
+                    differences.append(
+                        f"root-to-tip: the root is dated {anchor_date.date()}, after "
+                        f"the earliest tip in the cloud ({earliest.date()})"
+                    )
+
     return differences, (
         f"root-to-tip cloud: {n_cloud_tips} tips in {len(cloud)} exact cells, "
         f"max divergence {int(cloud['rtt_mutations'].max())}, report slope "
-        f"{slope_reported} subs/yr reproduced from the cloud"
+        f"{slope_reported} subs/yr reproduced from the cloud, {anchor_note}"
     )
 
 

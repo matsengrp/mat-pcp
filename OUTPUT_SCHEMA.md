@@ -375,12 +375,12 @@ nobody has characterised would fail production runs uninterpretably.
 
 | `check` | measures |
 |---|---|
-| `branch_dt_vs_mutations` | Δt binned by branch mutation count, plus days/mutation against a nominal ~15.3 (order-of-magnitude only: the MAT is masked and branch-filtered, so the realized slope runs higher). Also reports the **aggregate** rate — Σ mutations / Σ branch-years, exact over the per-branch arrays rather than reconstructed from the ranged bins below — as a ratio to that nominal and to chronumental's own pre-fit root-to-tip estimate parsed from `log/chronumental.stdout`, plus the zero-mutation share of total branch-*time*. The days/mutation figure is the **incremental** slope between adjacent single-count bins, which cancels the zero-mutation intercept by construction and is therefore blind to the duration inflation confirmed in [#145](https://github.com/matsengrp/mat-pcp/issues/145); the aggregate is the statistic that sees it ([#146](https://github.com/matsengrp/mat-pcp/issues/146)). When the stdout log is absent (it is a Snakemake `log:` entry, not a declared output) the detail says so and names the path it looked at, rather than silently omitting the comparison. |
+| `branch_dt_vs_mutations` | Δt binned by branch mutation count, plus days/mutation against a nominal ~15.3 (order-of-magnitude only: the MAT is masked and branch-filtered, so the realized slope runs higher). Also reports the **aggregate** rate — Σ mutations / Σ branch-years, exact over the per-branch arrays rather than reconstructed from the ranged bins below — as a ratio to that nominal and to chronumental's own pre-fit root-to-tip estimate parsed from `log/chronumental.stdout`, plus the zero-mutation share of total branch-*time*. The days/mutation figure is the **incremental** slope between adjacent single-count bins, which cancels the zero-mutation intercept by construction and is therefore blind to the duration inflation confirmed in [#145](https://github.com/matsengrp/mat-pcp/issues/145); the aggregate is the statistic that sees it ([#146](https://github.com/matsengrp/mat-pcp/issues/146)). The per-bin **implied rate** is reported next to the per-bin medians, each with the bin's share of total branch-time (`0mut:0.00@45.9%t, 1mut:13.45@27.5%t, ...`): the median answers "how long is a branch with n mutations", the rate answers "what clock would that imply", and only the second is comparable to the nominal or to the aggregate. Both are kept because they answer different questions. When the stdout log is absent (it is a Snakemake `log:` entry, not a declared output) the detail says so and names the path it looked at, rather than silently omitting the comparison. |
 | `zero_mut_leaf_predicted_dt` | Predicted Δt on zero-mutation leaf branches. **One-sided**: `time_monotonicity` is a hard gate already forcing Δt ≥ 0, so `frac<0` here is an *invariant rather than a measurement* and must not be quoted as a confirmed prediction. Read `min` instead: `EPS_DAYS = 1` admits a −1 day edge past that gate, and a 4-decimal fraction over 12 M observations hides up to ~600 negatives. |
 | `zero_mut_leaf_vs_earliest_observed` | *Earliest observed* date among a parent's zero-mutation leaf children **minus** the parent's predicted date. Note this is the **opposite orientation** to `internal_date_vs_min_descendant_observed`: here a **negative** value is the anomaly. Also reports how many dated strains had no node in the tree and were excluded. |
 | `root_date_plausible` | Root date against a deliberately wide window (2019-10-01 … 2020-02-29). A tripwire for a mis-scaled time axis. |
 | `internal_date_vs_min_descendant_observed` | Predicted internal date minus the earliest observed descendant date. **Positive is the anomaly** (the ancestor postdates its earliest sample). Compares *inferred* against *observed*, so a violation is a three-way inconsistency between the inferred date, the topology and a collection date — and it is not independent of `tip_residual`: monotonicity forces `pred(ancestor) ≤ pred(tip)`, so a positive gap requires that tip's own residual to be at least as large. Quantifies downstream impact (how many internal nodes, hence branches, land in the wrong window) rather than testing the dating algorithm. |
-| `root_to_tip_regression` | The slope of root-to-tip divergence on collection date, recomputed from the exact cloud in `node_dates_rtt.csv` and reported in subs/**year**, with `r` and the tip count. Compared against chronumental's own logged pre-fit slope as a ratio; the two regressions run over **different tip sets** (day-resolution tips here, every dated tip there), so they are expected to be close rather than equal and only a gap beyond `RTT_SLOPE_REL_TOL` (25%) is flagged. Exists because that pre-fit slope is the only *independent* reference the QC has — comparing the tree's implied rate against the *fitted* rate is near-identity under a learned clock (measured 1.027) — and until [#146](https://github.com/matsengrp/mat-pcp/issues/146) it was a single number with nothing behind it: one slope describes a tight line and a fan of recombinants equally well. As elsewhere, an absent stdout log is stated with the path, never silently dropped. |
+| `root_to_tip_regression` | The slope of root-to-tip divergence on collection date, recomputed from the exact cloud in `node_dates_rtt.csv` and reported in subs/**year**, with `r` and the tip count. Compared against chronumental's own logged pre-fit slope as a ratio; the two regressions run over **different tip sets** (day-resolution tips here, every dated tip there), so they are expected to be close rather than equal and only a gap beyond `RTT_SLOPE_REL_TOL` (25%) is flagged. Exists because that pre-fit slope is the only *independent* reference the QC has — comparing the tree's implied rate against the *fitted* rate is near-identity under a learned clock (measured 1.027) — and until [#146](https://github.com/matsengrp/mat-pcp/issues/146) it was a single number with nothing behind it: one slope describes a tight line and a fan of recombinants equally well. Also reports chronumental's **fitted** clock with the step it was logged at, and its ratio to the pre-fit slope — pointedly *not* its ratio to the tree's implied aggregate rate, which is near-identity by construction (the Poisson term is stationary at `rate = 365 × Σmut / Σt`, so the fitted clock *is* the aggregate statistic) and would let a "ratio near 1" rule pass a 4.3x-inflated tree. As elsewhere, an absent stdout log is stated with the path, never silently dropped. |
 | `internal_dt_to_closest_descendant` | Predicted Δt from an internal node to its **nearest descendant, both dates inferred** — so unlike the row above this *is* a test of the algorithm: given the topology it was handed, how much time does the fit put below each internal node? Equals min-over-*children* of the branch Δt, because monotonicity makes predicted dates nondecreasing along every path, so the nearest descendant is always an immediate child. Also reports how many zero-mutation branches are internal rather than terminal (0 on the v9 tree, so `zero_mut_leaf_predicted_dt` covers all of them). |
 
 Because checks 6 and 8 use opposite sign conventions, `format_stats` prints **both**
@@ -432,6 +432,31 @@ script raises if its `n_branches` does not equal the number of branches with a d
 | `iqr` | int | `p75 − p25`. |
 | `mean` | float | Mean Δt in days, to 2 dp. |
 | `frac_dt_zero` | float | Fraction of the bin with Δt exactly 0 — parent and child dated the same day. |
+| `mutations` | int | Total mutations on the bin's branches. The **real** per-branch sum, so the ranged bins are as exact as the single-count ones. |
+| `branch_years` | float | Total Δt in the bin, in years, to 1 dp. |
+| `subs_per_year` | float | `mutations / branch_years` — the clock the bin implies. Empty when the bin spans zero total time. |
+
+**The three rate columns decompose check 5's aggregate** ([#146](https://github.com/matsengrp/mat-pcp/issues/146)),
+and they separate two stories a low aggregate could tell. If the fit were tracking
+gradual evolution while letting saltational branches sit as Poisson outliers, the
+ordinary low-count bins would land near the clock and the high-count bins far below
+it. On the v11 trees the reverse holds: bins 1–5 climb 13.5 → 25.1 subs/yr, arriving
+at the ~23.9 nominal; the >20-mutation bins run *above* it at 57.9 and 72.0, so the fit
+**compresses** the jumps rather than stretching them into long outlier branches; and
+the whole deficit is the zero-mutation bin — 5.77 M branches averaging 22.5 days,
+holding 46% of the tree's elapsed time and contributing no mutations at all. Under
+`--variance_dates 30` that same bin averages 0.24 days and the aggregate moves
+9.47 → 27.25.
+
+Two properties are load-bearing. `mutations` sums real per-branch counts rather than
+bin midpoints — reconstructing this from the `mean` column instead moved the aggregate
+9.47 → 9.59, small in itself but the ranged bins are precisely where the punctuation
+lives, so a midpoint is least defensible exactly where it is most tempting. And the
+zero-mutation bin is **reported, not dropped as undefined**: 0 subs/yr over 46% of the
+tree's time is the finding, so omitting the row would delete the diagnosis. The `all`
+row's three columns come from `implied_clock_summary` rather than from re-summing the
+bins, so there is one source of truth for the number check 5 quotes; the unit test
+asserts the bins sum back to it.
 
 ### `mat/node_dates_internal_checks.csv`
 
@@ -464,17 +489,82 @@ ship as a few tens of kB next to a `node_dates_residuals.csv` that is already 1.
 and it is asserted in `tests/test_node_date_qc.py` against an explicitly expanded
 point array rather than left as a claim.
 
+### `mat/node_dates_rtt_anchor.csv`
+
+One row, holding the fitted date of the tree's root (#146). This is the origin of the
+fitted-clock line on the scatter, and it is a sidecar rather than a column because it
+is the one quantity that needs the **tree**: finding the root means loading the
+newick, which `chronumental_qc` already does and `chronumental_rtt_plot` deliberately
+does not (it reads a few tens of kB of histogram, not a 646 MB newick plus a 731 MB
+dates file).
+
+It cannot be read off chronumental's log either. chronumental prints a `root_date`
+field on every progress line, but that is an internal parameterization, not the root's
+date in days: the two [#146](https://github.com/matsengrp/mat-pcp/issues/146) sweep
+runs whose fields read `-17.5946` and `-17.5023` wrote root dates `2019-12-10
+04:41` and `2019-12-11 00:11` — 0.0923 apart in the field, 0.81 days apart in the
+date. Read as days the field predicts 2.2 hours; read as years, 34 days. It is
+neither, so decoding it would be a guess that lands near the right answer, which is
+worse than not having it.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `root_id` | str | The root node's id in the tree (matUtils names internal nodes `node_N`). |
+| `root_fitted_date` | datetime | chronumental's predicted date for the root. **Empty** when check 7 found no parseable root date — written as a blank cell rather than by omitting the row, so a consumer distinguishes "the QC ran and the root had no date" from "no sidecar, the QC never ran". |
+| `root_day_ordinal` | float | The same date as float days since the epoch, truncated to whole days to match the cloud's day-resolution axis. What the plot actually consumes. |
+
+Cross-checked end-to-end by `validate_test.py::validate_root_to_tip_cloud`: the
+sidecar's date must equal the one check 7 reports, and must not postdate the earliest
+tip in the cloud. Same script writes both, but they are read by different audiences —
+the sidecar by the plot, the report by a person — so a divergence would anchor the
+model-implied line somewhere nobody can see, and the line would still look like a
+line.
+
 ### `mat/node_dates_rtt_scatter.png`
 
 Rendering of the above by the `chronumental_rtt_plot` rule (#146): divergence against
-date, coloured by tips per cell on a log scale, with two lines — the regression
-recomputed here (through the same `node_date_qc.weighted_linregress` that produced the
-number in `node_dates_qc.tsv`, so the figure and the report cannot disagree) and
-chronumental's own logged pre-fit slope, anchored at the cloud's centroid because
-chronumental logs its slope but not its intercept. When that log is unavailable the
-figure says so **on its face**: a plot missing a comparison it never announces looks
-exactly like one where the comparison agreed. A tree with no day-resolution tips gets
-a figure stating that rather than a failure or a stale file.
+date, coloured by tips per cell on a log scale, with **three** lines.
+
+1. The regression recomputed here, through the same
+   `node_date_qc.weighted_linregress` that produced the number in
+   `node_dates_qc.tsv`, so the figure and the report cannot disagree.
+2. chronumental's own logged **pre-fit** slope, anchored at the cloud's centroid
+   because chronumental logs its slope but not its intercept. A slope comparison
+   only, and labelled as such.
+3. chronumental's **fitted** clock, which unlike the other two is not a slope placed
+   near the cloud for comparison but the model's own prediction:
+   `rate × (date − root_fitted_date)`, drawn from zero divergence on the root's
+   fitted date. That is exact under chronumental's parameterization rather than an
+   approximation — a node's date is the root date plus the cumulative sum of the
+   branch durations along its path, so those durations telescope and the per-branch
+   Poisson expectation `rate × t` sums to `rate × (tip − root)` along any
+   root-to-tip path. Anchoring at zero divergence is exact for the same reason
+   `rtt_mutations` excludes the root's own mutation list.
+
+**The gap between line 3 and the cloud is the finding, not a plotting artifact.** On
+`public_2026-08-06_v11` the fitted clock (9.36 subs/yr) predicts **62** mutations at
+the last collection date, where the cloud's own regression reads **247**: the fit
+reproduces every leaf date to a median 0.01 d while under-predicting every leaf's
+divergence ~4x, having parked the
+missing time on interior branches that carry no mutations
+([#145](https://github.com/matsengrp/mat-pcp/issues/145)). Note the root's fitted date
+barely moves under any prior: 2019-12-10 for the shipped setting and the two milder
+sweep arms, 2019-12-11 for `--variance_dates 30`, a total spread of one day on a
+6.5-year axis. The inflation is in the interior, not in the root, which is why the
+anchor is stable enough to compare arms against.
+
+The fitted rate is read from the **last** logged progress line, and the step number is
+reported with it: `step:0` carries the optimizer's starting value, which is the pre-fit
+estimate after one update (39.16 against a pre-fit 40.36), so a first-match parse
+returns a plausible-looking clock that agrees with its own starting point and is the
+exact opposite of the finding. chronumental logs every `--log_every` steps and prints
+no final-parameter line, so the last logged step is also not necessarily the last step
+taken.
+
+When either logged rate is unavailable, or the anchor is blank, the figure says so **on
+its face**: a plot missing a comparison it never announces looks exactly like one where
+the comparison agreed. A tree with no day-resolution tips gets a figure stating that
+rather than a failure or a stale file.
 
 Its own conda env (`workflow/envs/plot.yml`) rather than an addition to `default.yml`
 or `bte.yml`: both are shared by many rules, and widening either changes its hash and
