@@ -1,0 +1,7 @@
+arm,flags,root_to_tip_rate,final_step,fitted_rate,length_cor,date_error_med,max_date_error,length_cor_first,length_cor_falling_intervals,length_cor_intervals,tip_residual_gate,tip_residual_median_d,tip_residual_p95_d,root_date,root_date_inside_window,implied_subs_per_year,zero_mut_branch_time_pct,incremental_slope_d_per_mut,n_branches,pct_branches_over_window,pct_branches_over_step,hours,peak_rss_gb,rtt_over_fitted,implied_over_rtt
+A0_baseline,(none),40.357335447508774,999.0,9.3575,0.3964,0.0145,1646.5623,0.9941,99.0,100.0,PASS,1.0,1.0,2019-12-10,True,9.47,45.9,11.0,10177516.0,2.8738053568277366,18.039116813965215,1.88,23.5,4.31,0.235
+A1_variance_dates_3,--variance_dates 3,40.357335447508774,999.0,9.4125,0.4377,0.2368,1643.6444,0.9941,34.0,100.0,PASS,1.0,1.0,2019-12-10,True,9.45,43.4,12.0,10177516.0,3.1307148031012675,18.675323133857024,1.88,23.5,4.29,0.234
+A2_variance_dates_10,--variance_dates 10,40.357335447508774,999.0,11.1609,0.5571,3.0569,1636.5852,0.9941,18.0,100.0,PASS,4.0,7.0,2019-12-10,True,11.22,33.2,14.0,10177516.0,2.9535595915545603,15.405153870551517,1.88,23.5,3.62,0.278
+A3_variance_dates_30,--variance_dates 30,40.357335447508774,999.0,27.2259,0.8476,9.7217,1712.5518,0.9942,11.0,100.0,PASS,10.0,35.0,2019-12-11,True,27.25,1.4,11.0,10177516.0,0.5071964514720487,3.535292894651308,1.88,23.5,1.48,0.675
+B0_horseshoe_tau3.2,--model HorseShoeLike,40.357335447508774,,,,,,,,,,,,,,,,,,,,1.88,18.2,,
+B1_horseshoe_tau32,--model HorseShoeLike --initial_tau 32,40.357335447508774,,,,,,,,,,,,,,,,,,,,1.88,18.2,,

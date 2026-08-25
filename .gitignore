@@ -46,3 +46,6 @@ ISSUE-*.md
 log/
 run-*.log
 run-*.exit
+
+# marimo notebook session cache (analysis/ notebooks)
+**/__marimo__/

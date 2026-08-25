@@ -299,6 +299,188 @@ def compare_summaries(actual, expected):
     return differences
 
 
+def validate_root_to_tip_cloud(output_dir):
+    """The RTT cloud, the report row and the figure all describe the same regression.
+
+    The scatter (#146) exists because ``chronumental_qc``'s aggregate check divides
+    by chronumental's pre-fit root-to-tip slope, and that slope is the only
+    *independent* reference in the QC. Three things a run can check that the unit
+    tests cannot, because they are cross-*file* properties:
+
+    1. ``node_dates_qc.tsv``'s ``root_to_tip_regression`` slope equals a
+       recomputation from ``node_dates_rtt.csv``. The figure recomputes from that
+       CSV too, so this is what makes "the figure cannot disagree with the report"
+       an assertion rather than a design intention.
+    2. The cloud's tips reconcile with the tips in ``node_dates_residuals.csv``.
+       Both are the day-resolution set, and the cloud additionally requires the
+       strain to be a node in *this* tree -- so the cloud may be smaller, never
+       larger. A silently *larger* cloud would mean the strain->node mapping is
+       matching something it should not.
+    3. Divergence is non-negative and its own maximum is plausible. A negative
+       value means the accumulation ran the wrong way down the tree, which the
+       scatter would render as a mirrored cloud that still looks like a cloud.
+
+    Deliberately **not** asserted: that the recomputed slope equals chronumental's
+    logged one. The two regressions run over different tip sets (see
+    ``node_date_qc.root_to_tip_histogram``), so equality is false in general -- the
+    report states both and flags only a gross gap. It happens to hold to 0.1% on the
+    test data, where every tip is day-resolution, and reading that as a guarantee is
+    what would make this check fail on the production trees.
+    """
+    import pandas as pd
+
+    cloud_path = os.path.join(output_dir, "mat", "node_dates_rtt.csv")
+    report_path = os.path.join(output_dir, "mat", "node_dates_qc.tsv")
+    plot_path = os.path.join(output_dir, "mat", "node_dates_rtt_scatter.png")
+    if not os.path.exists(cloud_path):
+        return [], f"SKIPPED: no {cloud_path}"
+
+    differences = []
+    cloud = pd.read_csv(cloud_path, parse_dates=["observed_date"])
+    if not os.path.exists(plot_path) or os.path.getsize(plot_path) == 0:
+        differences.append(
+            f"root-to-tip: {plot_path} is missing or empty, so the cloud was "
+            f"computed but never rendered"
+        )
+
+    if cloud.empty:
+        # Legitimate only if there were no day-resolution tips at all.
+        return differences, "root-to-tip: cloud is empty (no day-resolution tips)"
+
+    if (cloud["rtt_mutations"] < 0).any():
+        differences.append(
+            f"root-to-tip: {int((cloud['rtt_mutations'] < 0).sum())} cell(s) have "
+            f"negative divergence, which means the path accumulation ran the wrong "
+            f"way; the scatter would still look like a cloud"
+        )
+    if (cloud["n_tips"] < 1).any():
+        differences.append("root-to-tip: a cell holds fewer than 1 tip")
+
+    n_cloud_tips = int(cloud["n_tips"].sum())
+    residuals_path = os.path.join(output_dir, "mat", "node_dates_residuals.csv")
+    if os.path.exists(residuals_path):
+        n_residual_tips = sum(1 for _ in open(residuals_path)) - 1
+        if n_cloud_tips > n_residual_tips:
+            differences.append(
+                f"root-to-tip: the cloud holds {n_cloud_tips} tips but only "
+                f"{n_residual_tips} day-resolution tips exist; it can be smaller "
+                f"(strains absent from this tree) but never larger"
+            )
+
+    # The report's own number, against a recomputation from the file it names.
+    slope_reported = None
+    if os.path.exists(report_path):
+        report = pd.read_csv(report_path, sep="\t")
+        row = report[report["check"] == "root_to_tip_regression"]
+        if row.empty:
+            differences.append(
+                f"root-to-tip: no root_to_tip_regression row in {report_path}"
+            )
+        else:
+            match = re.search(
+                r"recomputed slope ([-\d.]+) subs/yr", str(row.iloc[0]["detail"])
+            )
+            if not match:
+                differences.append(
+                    f"root-to-tip: could not read the slope out of the report "
+                    f"detail: {row.iloc[0]['detail']!r}"
+                )
+            else:
+                slope_reported = float(match.group(1))
+
+    if slope_reported is not None:
+        qc = _load_node_date_qc_module()
+        days = cloud["observed_date"].to_numpy(dtype="datetime64[D]").astype("float64")
+        recomputed = qc.weighted_linregress(
+            days,
+            cloud["rtt_mutations"].to_numpy(dtype="float64"),
+            cloud["n_tips"].to_numpy(dtype="float64"),
+        )
+        if recomputed["slope"] is None:
+            differences.append(
+                "root-to-tip: the cloud gives no slope but the report printed one"
+            )
+        else:
+            per_year = recomputed["slope"] * qc.DAYS_PER_YEAR
+            # The report rounds to 2 dp, so compare at that resolution.
+            if abs(per_year - slope_reported) > 0.02:
+                differences.append(
+                    f"root-to-tip: the report says {slope_reported} subs/yr but "
+                    f"{os.path.basename(cloud_path)} gives {per_year:.2f}. The "
+                    f"figure regresses this same file, so the report and the "
+                    f"figure are describing different regressions."
+                )
+
+    # 4. The figure's anchor for the fitted-clock line, against the root date the
+    #    report states. Same script writes both, but they are read by different
+    #    audiences -- the sidecar by the plot, the report by a person -- so a
+    #    divergence would anchor the model-implied line somewhere nobody can see,
+    #    and the line would still look like a line.
+    anchor_path = os.path.join(output_dir, "mat", "node_dates_rtt_anchor.csv")
+    anchor_note = "no anchor sidecar"
+    if not os.path.exists(anchor_path):
+        differences.append(
+            f"root-to-tip: {anchor_path} is missing, so the fitted-clock line has "
+            f"no root to start from"
+        )
+    else:
+        anchor = pd.read_csv(anchor_path)
+        if len(anchor) != 1:
+            differences.append(
+                f"root-to-tip: {anchor_path} holds {len(anchor)} rows, expected "
+                f"exactly 1 (one root)"
+            )
+        else:
+            anchor_date = pd.to_datetime(anchor["root_fitted_date"].iloc[0])
+            anchor_note = f"anchor {anchor_date.date() if pd.notna(anchor_date) else 'blank'}"
+            if os.path.exists(report_path):
+                root_row = report[report["check"] == "root_date_plausible"]
+                match = re.search(
+                    r"dated (\d{4}-\d{2}-\d{2})", str(root_row.iloc[0]["detail"])
+                ) if not root_row.empty else None
+                if match and pd.notna(anchor_date):
+                    if str(anchor_date.date()) != match.group(1):
+                        differences.append(
+                            f"root-to-tip: the anchor sidecar says the root is dated "
+                            f"{anchor_date.date()} but check 7 reported "
+                            f"{match.group(1)}; the figure's fitted-clock line is "
+                            f"anchored somewhere the report does not describe"
+                        )
+            if pd.notna(anchor_date):
+                # The root cannot postdate the earliest sample beneath it, so its
+                # anchor sits at or left of the cloud. Inside the cloud would make
+                # the model-implied line start partway up the y-axis at zero
+                # divergence, which is not a rendering problem but a dating one.
+                earliest = cloud["observed_date"].min()
+                if anchor_date.normalize() > earliest:
+                    differences.append(
+                        f"root-to-tip: the root is dated {anchor_date.date()}, after "
+                        f"the earliest tip in the cloud ({earliest.date()})"
+                    )
+
+    return differences, (
+        f"root-to-tip cloud: {n_cloud_tips} tips in {len(cloud)} exact cells, "
+        f"max divergence {int(cloud['rtt_mutations'].max())}, report slope "
+        f"{slope_reported} subs/yr reproduced from the cloud, {anchor_note}"
+    )
+
+
+def _load_node_date_qc_module():
+    """Import ``workflow/modules/node_date_qc.py`` by path (no package install)."""
+    import importlib.util
+    scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    module_path = os.path.join(
+        os.path.dirname(scripts_dir), "modules", "node_date_qc.py"
+    )
+    if not os.path.exists(module_path):
+        raise ImportError(f"Cannot find module 'node_date_qc' at {module_path}")
+    spec = importlib.util.spec_from_file_location("node_date_qc", module_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["node_date_qc"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_masking_module():
     """Import ``workflow/modules/masking.py`` by path (no package install).
 
@@ -1419,10 +1601,11 @@ def main():
     codon_bg_diffs, codon_bg_summary = validate_founder_codon_background(output_dir)
     era_diffs, era_summary = validate_era_rate_tables(output_dir)
     censor_diffs, censor_summary = validate_censor_table(output_dir)
+    rtt_diffs, rtt_summary = validate_root_to_tip_cloud(output_dir)
     differences += (
         site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
         + orf1ab_diffs + orf1b_diffs + glm_syn_diffs + codon_bg_diffs + era_diffs
-        + censor_diffs
+        + censor_diffs + rtt_diffs
     )
 
     if differences:
@@ -1465,6 +1648,8 @@ def main():
             print(f"  - Era rate tables: {era_summary}")
         if censor_summary:
             print(f"  - {censor_summary}")
+        if rtt_summary:
+            print(f"  - {rtt_summary}")
         sys.exit(0)
 
 

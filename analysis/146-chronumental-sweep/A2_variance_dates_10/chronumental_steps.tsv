@@ -1,0 +1,2 @@
+step:0	loss:2074006656.0000	date_cor:0.9417	date_error:168.3848	date_error_med:164.4189	max_date_error:1317.2948	length_cor:0.9941	root_date:-18.0584	mutation_rate:39.1646
+step:999	loss:191666784.0000	date_cor:0.9998	date_error:3.0905	date_error_med:3.0569	max_date_error:1636.5852	length_cor:0.5571	root_date:-17.5923	mutation_rate:11.1609

@@ -512,6 +512,9 @@ results/
 │   ├── node_dates.tsv             # chronumental node dates (tips + internal)
 │   ├── node_dates_qc.tsv          # chronumental_qc pass/fail report
 │   ├── node_dates_residuals.csv   # Per-tip predicted vs observed date
+│   ├── node_dates_rtt.csv         # Exact (date x root-to-tip divergence) cloud (#146)
+│   ├── node_dates_rtt_anchor.csv  # Root's fitted date: the fitted-clock line's origin
+│   ├── node_dates_rtt_scatter.png # That cloud, vs chronumental's pre-fit and fitted clocks
 │   └── clade_counts.csv           # Sample counts per clade
 ├── windows/                       # Sliding-window fitness (EPIC #115 Phases 2-3)
 │   ├── subtree_counts.csv         # Per-window per-mutation actual counts (coding)

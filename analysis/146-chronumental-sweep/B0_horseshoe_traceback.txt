@@ -1,0 +1,33 @@
+An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+Traceback (most recent call last):
+  File "/fh/fast/matsen_e/shared/viral-dasm/mat-pcp/.snakemake/conda/fabe6ac8a086b8649d634a2504fedf41_/bin/chronumental", line 7, in <module>
+    sys.exit(__main__.main())
+  File "/fh/fast/matsen_e/shared/viral-dasm/mat-pcp/.snakemake/conda/fabe6ac8a086b8649d634a2504fedf41_/lib/python3.9/site-packages/chronumental/__main__.py", line 379, in main
+    result_string = "\t".join([
+  File "/fh/fast/matsen_e/shared/viral-dasm/mat-pcp/.snakemake/conda/fabe6ac8a086b8649d634a2504fedf41_/lib/python3.9/site-packages/chronumental/__main__.py", line 380, in <listcomp>
+    f"{name}:{value:.4f}"
+ValueError: Unknown format code 'f' for object of type 'str'
+Command exited with non-zero status 1
+	Command being timed: "/fh/fast/matsen_e/shared/viral-dasm/mat-pcp/.snakemake/conda/fabe6ac8a086b8649d634a2504fedf41_/bin/chronumental --tree results/public_2026-08-06_v11/mat/filtered_tree.nwk --dates results/public_2026-08-06_v11/mat/filtered_metadata.tsv.gz --steps 1000 --model HorseShoeLike --dates_out _ignore/chronumental_sweep_146/B0_horseshoe_tau3.2/node_dates.tsv --tree_out _ignore/chronumental_sweep_146/B0_horseshoe_tau3.2/timetree.nwk"
+	User time (seconds): 516.47
+	System time (seconds): 78.80
+	Percent of CPU this job got: 100%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 9:50.88
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 18197396
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 6
+	Minor (reclaiming a frame) page faults: 13328290
+	Voluntary context switches: 15421
+	Involuntary context switches: 11626
+	Swaps: 0
+	File system inputs: 200816
+	File system outputs: 104
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1

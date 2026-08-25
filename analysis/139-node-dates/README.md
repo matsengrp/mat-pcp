@@ -23,12 +23,37 @@ pixi run snakemake -j 1 --use-conda --configfile <the 2026-04-22 config> \
 | `node_dates_branch_dt.csv` | `(mut_count_bin, dt_days, count)` — check 5's per-bin day histograms |
 | `node_dates_internal_checks.csv` | `(check, days, count)` — checks 6 and 8's day histograms |
 
+## Correction (#145 / #146): the slope answered a narrower question than this README claimed
+
+This README originally read the 11 d/mutation incremental slope as settling the
+`--steps 1000` convergence concern. It does not, and the reason is structural rather
+than a matter of degree.
+
+The slope is the difference between adjacent single-count bin medians, so it cancels
+the zero-mutation intercept **by construction**. On the v11 trees that intercept is
+where the whole problem lives:
+[#145](https://github.com/matsengrp/mat-pcp/issues/145) confirmed that the fitted
+rate sits **4.3–4.4x below chronumental's own pre-fit root-to-tip estimate**, that
+`length_cor` falls monotonically from 0.995 to ~0.38 and is *still falling* at the
+final step, and that 57% of branches carry zero mutations while holding **46% of the
+tree's total elapsed time**. A linear slope is consistent with all of that: stretching
+every branch by a common factor preserves the increments and moves only the intercept
+and the total.
+
+So the accurate statement is: the slope shows the fit converged to something
+**clock-like**, which is what this README's own check-A caveat said it could show,
+and nothing more. `chronumental_qc` check 5 now also reports the aggregate
+`Σ mutations / Σ branch-years` and the zero-mutation share of branch-time, which are
+the statistics that see the intercept ([#146](https://github.com/matsengrp/mat-pcp/issues/146)).
+The numbers in the table above are unchanged and still correct; only the conclusion
+drawn from the slope is.
+
 ## What the tree shows
 
-**The clock converged.** Median Δt rises monotonically with branch mutation count
+**The clock is linear. It is not converged — see the correction below.** Median Δt
+rises monotonically with branch mutation count
 (16, 23, 36, 47, 58, 68 d for 0–5 mutations): a **median incremental slope of
-11 d/mutation on a 16 d zero-mutation intercept**, against a nominal ~15.3. That was
-the `--steps 1000` concern and it is answered. Note the high bins *saturate*
+11 d/mutation on a 16 d zero-mutation intercept**, against a nominal ~15.3. Note the high bins *saturate*
 (11–20 mut → 80 d, below the 6–10 bin's 84 d) on ~650 branches — plausibly chronic
 infections, and `max_nt_mutations` branch QC applies to the counting path, not the
 timetree.
