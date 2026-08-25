@@ -73,6 +73,27 @@ is not a tail artifact. The high-count bins run the other way (57.9 and 72.0
 subs/yr above 20 mutations): the default fit *compresses* the saltational branches
 while parking 45.9% of the tree's elapsed time on zero-mutation ones.
 
+**The window *grid* moves, not just the counts within it.** Every shipped config
+leaves `window_end_time: null`, so the grid is anchored at the tree's *latest
+predicted* node date and tiled backwards. Loosening the leaf-date likelihood moves
+that anchor, so the whole grid slides and every branch re-buckets — on the test
+tree the anchor went 2022-05-13 → 2022-06-03 and the first window 2019-11-25 →
+2019-12-16, a 21-day slide at an unchanged 19 windows. **A consumer joining v11 and
+v12 on `window_start` will silently mis-align**, which is a different and worse
+failure than comparing shifted counts within a shared grid. Note also that the
+anchor can now sit slightly *past* the metadata's own `max_leaf_date` (2 days, on
+the test tree), since a predicted tip date is no longer pinned to its observed one;
+pin `window_end_time` if a fixed grid matters for your comparison.
+
+The windowing regression sentinels in `workflow/scripts/validate_windowing.py` are
+re-baselined accordingly, with the v11 values retained in comments. The move is
+attributable rather than assumed: `data/test_data/expected_summary.json` passes
+**unchanged**, so the whole clade-based path — PCPs, mutation counts, GLM rates,
+fitness — is byte-stable under the new prior and only the node-date-dependent
+`windows/` outputs shifted. Every structural and invariant check passed at the new
+values, including the per-window synonymous calibration and the
+`delta_fitness_ratio` identity.
+
 `--variance_dates 30` is added to every config that runs chronumental, including
 `config_test_data.yaml`. The test tree was already healthy (it is 3,204 nodes and
 cannot show the inflation), and its aggregate rate moves only 24.17 → 24.89
