@@ -50,6 +50,69 @@ import pandas as pd
 CUTOFF_PATTERN = r"[0-9]{4}-[0-9]{2}-[0-9]{2}"
 CUTOFF_DIR_PREFIX = "upto_"
 
+# A clade with fewer than two samples at a cutoff is not a small clade -- it is a
+# clade that cannot be made into a tree, so the configured ``min_clade_size`` is
+# *floored* here rather than trusted directly. Two separate failures sit below
+# this line, and only the second one fixes the threshold at 2 rather than 1.
+#
+# ``0 >= 0``. Every production config ships ``min_clade_size: 0``, which is
+# harmless on the full-tree path -- a clade only reaches the roster because
+# metadata rows carry it, so it always has samples, and ``adequate_sample_counts``
+# is vacuously true there. At a cutoff it is not harmless: on the v12 2026-08-06
+# trees it marked all 26 zero-sample (cutoff, clade) pairs ``adequate``, the
+# checkpoint committed the fan-out, and ``samples_upto_cutoff``'s empty-list guard
+# then correctly raised on each -- taking every downstream aggregate with it. So
+# the whole skip-and-record mechanism this module exists to implement was inert on
+# exactly the configs it was written for.
+#
+# ``bte segfaults on a single-leaf MAT``. This is the reason the floor is 2. A
+# one-sample cutoff subtree writes a well-formed ``.pb`` that ``matUtils``
+# produces without complaint, and ``bte.MATree`` then dies with SIGSEGV loading
+# it -- measured on 25C at 2023-01-01 (1 sample), six times, once per gene, while
+# the 5-leaf 23E subtree loads in 4 ms. Pinned by construction rather than
+# inferred: subtrees cut to 2 and 3 leaves from that same 23E tree both load
+# cleanly, so the boundary is exactly one leaf. A signal-11 in a C++ extension
+# yields no traceback and no partial output, so nothing above it can attribute
+# the failure to clade size.
+#
+# The floor is structural, not a threshold: ``min_clade_size`` says how big a
+# clade the user wants, and this says what can be built at all. Note the same
+# latent crash exists on the full-tree path -- ``get_clades`` applies
+# ``min_clade_size`` unfloored -- but no shipped tree has a one-sample clade
+# (the smallest on the released v11 public tree is 25I at 20), so it is recorded
+# here rather than changed there, where it would move released semantics.
+#
+# Only the sub-2 cases are floored. A clade with a *handful* of samples is kept,
+# even though it may contribute zero PCP rows for some genes (23E has 5 samples
+# at 2023-01-01 on the public tree and 0 rows for S), because that is exactly
+# what the full-tree path already ships under the same ``min_clade_size: 0``:
+# 21E has 47 samples and 6 S rows in the released v11 tree. Dropping them here
+# would make the cutoff roster disagree with the full roster for reasons the
+# config does not state. A consumer that cares reads ``n_samples_upto`` from
+# ``pcps/cutoff_summary.csv``.
+MIN_SAMPLES_AT_CUTOFF = 2
+
+
+def adequate_at_cutoff(n_kept, min_clade_size):
+    """Whether a clade with ``n_kept`` samples at a cutoff gets a PCP set.
+
+    The single definition of the adequacy verdict, so the checkpoint that writes
+    ``adequate_sample_counts`` and anything that re-derives it cannot drift. See
+    ``MIN_SAMPLES_AT_CUTOFF`` for why the configured floor is raised to 2.
+    """
+    return int(n_kept) >= effective_min_clade_size(min_clade_size)
+
+
+def effective_min_clade_size(min_clade_size):
+    """The floored ``min_clade_size`` actually applied at a cutoff.
+
+    Exposed separately so log lines and error messages quote the threshold that
+    was *enforced*, not the one that was configured -- a message reading
+    ``>= 0`` next to a skipped one-sample clade is a contradiction the reader
+    has to resolve from the source.
+    """
+    return max(int(min_clade_size), MIN_SAMPLES_AT_CUTOFF)
+
 
 def cutoff_dir(cutoff):
     """The per-cutoff subdirectory name, e.g. ``upto_2023-01-01``."""

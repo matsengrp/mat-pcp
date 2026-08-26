@@ -1463,6 +1463,18 @@ def validate_cutoff_pcps(output_dir):
                         f"{cutoff}/{clade}: sample list has {n_lines} strains but "
                         f"cutoff_summary.csv says {row['n_samples_upto']}"
                     )
+        elif os.path.isfile(samples_path):
+            # The same "recorded but not performed" test as the PCP check below,
+            # one stage earlier. Checking only the PCP files leaves a whole class
+            # of stale intermediate invisible: when the v12 production run first
+            # mis-scored adequacy, the excluded clades' subtrees and sample lists
+            # were built before the failure and survived the re-run that dropped
+            # them, so the output tree described a fan-out that no longer existed.
+            diffs.append(
+                f"{cutoff}/{clade}: recorded included=False, yet "
+                f"{samples_path} exists -- a stale intermediate from an "
+                f"earlier fan-out, not a skip"
+            )
         for gene in genes:
             pcp_path = os.path.join(pcps_root, gene, subdir, f"{clade}_pcps.csv.gz")
             if included and not os.path.isfile(pcp_path):

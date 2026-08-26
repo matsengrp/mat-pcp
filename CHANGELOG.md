@@ -137,6 +137,27 @@ full-tree ones — verified on the test data across all four genes for both
 `all_pcps.csv.gz` and `all_pcps_dasm_ready.csv.gz`.
 `config_test_data.yaml` carries that arm alongside a truncating one.
 
+**A clade needs at least two samples at a cutoff, and the configured
+`min_clade_size` does not guarantee it.** Every production config sets
+`min_clade_size: 0`, which is harmless on the full-tree path — a clade only reaches
+the roster because metadata rows carry it, so it always has samples — but at a
+cutoff a clade that does not exist yet keeps zero, and `0 >= 0` marked all 26 such
+(cutoff, clade) pairs on the 2026-08-06 trees `adequate`. The checkpoint committed
+the fan-out, and `samples_upto_cutoff`'s empty-list guard then raised on every one,
+taking the downstream aggregates with it. `cutoffs.MIN_SAMPLES_AT_CUTOFF` now floors
+the configured value at **2**, not 1: a one-sample subtree writes a well-formed
+`.pb` and then kills `bte.MATree` with **SIGSEGV** (observed on 25C at 2023-01-01,
+once per gene; 2- and 3-leaf subtrees cut from the 5-leaf 23E tree both load
+cleanly, so the boundary is exactly one leaf). Only the sub-2 cases are floored — a
+clade with a handful of samples is kept even when it yields zero rows for some gene,
+matching what the full-tree path already ships under the same setting. No CI run can
+observe any of this, since `config_test_data.yaml`'s `min_clade_size: 2` floors the
+comparison by accident; `tests/test_pcp_date_cutoffs.py` drives the real checkpoint
+at `min_clade_size=0` and mutation-tests the floor in `modules/cutoffs.py`.
+`validate_cutoff_pcps` additionally flags a surviving
+`mat/cutoffs/{clade}_samples.txt` for an `included=False` row as a stale
+intermediate.
+
 **Known leakage, stated rather than hidden.** `{gene}_codon_sites_to_mask.txt` and
 `pcps/{gene}/censored_mutations.csv` are *not* recomputed per cutoff; they come
 from the full tree's count table and from `data/usher_masked_sites.yaml`. A strict

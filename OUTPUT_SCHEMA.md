@@ -136,7 +136,7 @@ The roster for the above: one row per (cutoff, clade), including the pairs that 
 | `output_subdir` | string | `upto_{cutoff}` — the directory under `pcps/{gene}/`. |
 | `n_samples_full` | int | Samples in the clade on the whole filtered tree. |
 | `n_samples_upto` | int | Samples in the clade collected at or before the cutoff. |
-| `adequate_sample_counts` | bool | `n_samples_upto >= min_clade_size`. |
+| `adequate_sample_counts` | bool | `n_samples_upto >= max(min_clade_size, 2)`. The floor is not the configured threshold: every production config sets `min_clade_size: 0`, under which a clade that does not exist yet at the cutoff would score adequate on `0 >= 0`, and a one-sample subtree segfaults `bte.MATree`. Defined once in `modules/cutoffs.py::adequate_at_cutoff`. |
 | `included` | bool | Whether the pipeline actually built this pair's PCPs. |
 
 **Why this file exists.** A clade that does not yet exist at a cutoff, or that falls below `min_clade_size` there, is skipped at DAG-construction time and contributes no files — so in the output tree alone it is indistinguishable from a clade dropped by a wiring mistake. This is the same problem `glm/era_fit_summary.csv` solves for empty eras and `censored_mutations.clades.txt` solves for empty censor tables. A consumer that needs to know whether a clade was omitted deliberately must read this file, not infer from the directory listing.

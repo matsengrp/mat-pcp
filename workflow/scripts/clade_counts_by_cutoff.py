@@ -90,7 +90,11 @@ def clade_from_samples_path(path):
 def main():
     strain_dates = cutoffs_mod.load_strain_dates(metadata)
     log(f"Loaded {len(strain_dates)} strain dates from {metadata}")
-    log(f"Cutoffs: {cutoffs}; min_clade_size={min_clade_size}")
+    min_upto = cutoffs_mod.effective_min_clade_size(min_clade_size)
+    log(
+        f"Cutoffs: {cutoffs}; min_clade_size={min_clade_size} "
+        f"(enforced at a cutoff: {min_upto})"
+    )
 
     rows = []
     for cutoff in cutoffs:
@@ -104,7 +108,9 @@ def main():
                     "clade": clade,
                     "n_samples_full": len(strains),
                     "n_samples_upto": len(kept),
-                    "adequate_sample_counts": len(kept) >= min_clade_size,
+                    "adequate_sample_counts": cutoffs_mod.adequate_at_cutoff(
+                        len(kept), min_clade_size
+                    ),
                 }
             )
 
@@ -120,11 +126,11 @@ def main():
         skipped = sorted(arm.loc[~arm["adequate_sample_counts"], "clade"])
         log(
             f"cutoff {cutoff}: {len(adequate)} of {len(arm)} clades adequate "
-            f"(>= {min_clade_size} samples); skipped {skipped or 'none'}"
+            f"(>= {min_upto} samples); skipped {skipped or 'none'}"
         )
         if arm.empty or adequate.empty:
             raise ValueError(
-                f"cutoff {cutoff}: no clade has {min_clade_size} samples at or "
+                f"cutoff {cutoff}: no clade has {min_upto} samples at or "
                 f"before it, so the cutoff would produce nothing at all. Either "
                 f"the cutoff predates the data (check "
                 f"qc_filter_options.min_leaf_date) or min_clade_size is too "

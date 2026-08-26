@@ -733,6 +733,41 @@ mat-pcp/
     silently declined clade, and recording it as `included=False` would hide a
     broken fan-out in the artifact meant to expose it.
 
+    *"Adequate" needs a floor of its own, because ``min_clade_size`` is 0 in every
+    production config.* On the full-tree path that is harmless -- a clade only
+    reaches the roster because metadata rows carry it, so it always has samples and
+    `adequate_sample_counts` is vacuously true. At a cutoff it is not: `0 >= 0`
+    marked all 26 zero-sample (cutoff, clade) pairs on the v12 2026-08-06 trees
+    adequate, the checkpoint committed the fan-out, and `samples_upto_cutoff`'s
+    empty-list guard then raised on each -- so the skip-and-record mechanism above
+    was **inert on exactly the configs it was written for**, and the failure took
+    every downstream aggregate with it. `cutoffs.MIN_SAMPLES_AT_CUTOFF` floors the
+    configured value, and the floor is **2, not 1**, for a second and independent
+    reason: a one-sample cutoff subtree writes a well-formed `.pb` that `matUtils`
+    produces without complaint, and `bte.MATree` then dies with **SIGSEGV** loading
+    it (measured on 25C at 2023-01-01, six times, once per gene; subtrees cut to 2
+    and 3 leaves from the 5-leaf 23E tree both load in milliseconds, so the boundary
+    is exactly one leaf). A signal 11 in a C++ extension leaves no traceback and no
+    partial output, so nothing above it can attribute the failure to clade size. The
+    floor is structural rather than a threshold -- `min_clade_size` says how big a
+    clade the user wants, this says what can be built at all -- and only the sub-2
+    cases are floored: a clade with a *handful* of samples is kept even when it
+    contributes zero rows for some gene (23E has 5 samples and 0 S rows), because
+    that is what the full-tree path already ships under the same setting (21E has 47
+    samples and 6 S rows in the released v11 tree). The same latent crash exists on
+    the full-tree path, where `get_clades` applies `min_clade_size` unfloored; no
+    shipped tree has a one-sample clade (the smallest on v11 public is 25I at 20),
+    so it is recorded rather than changed there. **No CI run can see any of this**:
+    `config_test_data.yaml` sets `min_clade_size: 2`, which floors the comparison by
+    accident. `tests/test_pcp_date_cutoffs.py` therefore drives the real checkpoint
+    at `min_clade_size=0` against a fixture carrying both a 0-sample and a 1-sample
+    clade, and mutation-tests the floor by editing **`modules/cutoffs.py`**, not the
+    script -- patching script text would report the floor as covered while the
+    operator implementing it sat one file away. `validate_test.py::validate_cutoff_pcps`
+    also now treats a surviving `mat/cutoffs/{clade}_samples.txt` for an
+    `included=False` row as a stale intermediate, since checking only the PCP files
+    left the excluded clades' subtrees invisible.
+
     *The masks are shared across cutoffs, which is a real leak, bounded and
     stated.* `{gene}_codon_sites_to_mask.txt` and `censored_mutations.csv` come from
     the full tree, so a cutoff's DASM-ready files are filtered with a mask that saw

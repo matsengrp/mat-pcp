@@ -173,7 +173,8 @@ def run_samples_upto(meta, samples_in, out_path, cutoff, clade, mutate=None,
     return Path(out_path).read_text().split()
 
 
-def run_counts(meta, sample_files, out_path, cutoff_list, min_clade_size, mutate=None):
+def run_counts(meta, sample_files, out_path, cutoff_list, min_clade_size, mutate=None,
+               scripts_dir=None):
     snake = _Namespace(
         input=_Namespace(metadata=meta, samples=sorted(sample_files.values())),
         output=_Namespace(counts=str(out_path)),
@@ -184,7 +185,10 @@ def run_counts(meta, sample_files, out_path, cutoff_list, min_clade_size, mutate
         ),
         log=[],
     )
-    _exec_script(COUNTS_SCRIPT, {"snakemake": snake}, mutate)
+    script = COUNTS_SCRIPT if scripts_dir is None else (
+        Path(scripts_dir) / "clade_counts_by_cutoff.py"
+    )
+    _exec_script(script, {"snakemake": snake}, mutate)
     import pandas as pd
 
     return pd.read_csv(out_path)
@@ -389,8 +393,8 @@ def check_adequacy_on_the_full_count_is_caught():
     """Mutation test: scoring adequacy against ``n_samples_full``."""
     original = COUNTS_SCRIPT.read_text()
     mutated = original.replace(
-        '"adequate_sample_counts": len(kept) >= min_clade_size,',
-        '"adequate_sample_counts": len(strains) >= min_clade_size,',
+        "len(kept), min_clade_size",
+        "len(strains), min_clade_size",
     )
     assert mutated != original, "could not locate the adequacy test to mutate"
     with tempfile.TemporaryDirectory() as tmp:
@@ -408,6 +412,99 @@ def check_adequacy_on_the_full_count_is_caught():
         return [
             "the mutant that scores adequacy on the full-tree count did not "
             "change 19A's verdict, so this check cannot detect it"
+        ]
+    return []
+
+
+def check_production_min_clade_size_zero_still_floors():
+    """``min_clade_size: 0`` -- what every production config ships -- must not
+    call a sub-2-sample clade adequate.
+
+    This is the combination no CI run exercises: ``config_test_data.yaml`` sets
+    ``min_clade_size: 2``, which floors the comparison by accident, so the
+    unfloored ``n >= 0`` read as correct for the whole of #149. On the v12
+    2026-08-06 trees it marked 26 zero-sample pairs adequate, and the fan-out was
+    already committed by the time ``samples_upto_cutoff`` raised on each.
+
+    Both sub-2 cases are checked, because they fail differently and only the
+    second fixes the floor at 2 rather than 1: a zero-sample clade trips
+    ``samples_upto_cutoff``'s guard, while a *one*-sample clade passes every
+    Python-level check and then kills ``bte.MATree`` with SIGSEGV on a
+    single-leaf ``.pb`` -- no traceback, no partial output, nothing to attribute.
+    """
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        meta, sample_files = _write_fixture(tmp)
+        # A clade with exactly one sample at the cutoff, assembled from strains
+        # the fixture's metadata already carries rather than by widening the
+        # shared fixture (which other checks index by clade).
+        one = Path(tmp) / "clades" / "21A_samples.txt"
+        one.write_text("a_boundary\nc_late\n")
+        sample_files = dict(sample_files, **{"21A": str(one)})
+
+        df = run_counts(
+            meta, sample_files, Path(tmp) / "zero.csv", [CUTOFF], min_clade_size=0
+        )
+        verdicts = dict(zip(df["clade"], df["adequate_sample_counts"]))
+        counts = dict(zip(df["clade"], df["n_samples_upto"]))
+
+        if counts.get("20B") != 0 or counts.get("21A") != 1:
+            failures.append(
+                "fixture no longer supplies a 0-sample and a 1-sample clade at "
+                f"the cutoff (got 20B={counts.get('20B')}, "
+                f"21A={counts.get('21A')}); the check would be vacuous"
+            )
+        if verdicts.get("20B") is not False:
+            failures.append(
+                "at min_clade_size=0 a clade with 0 samples by the cutoff was "
+                "marked adequate; the fan-out then commits and "
+                "samples_upto_cutoff raises on it"
+            )
+        if verdicts.get("21A") is not False:
+            failures.append(
+                "at min_clade_size=0 a clade with 1 sample by the cutoff was "
+                "marked adequate; its single-leaf subtree segfaults bte"
+            )
+        if verdicts.get("20A") is not True or verdicts.get("19A") is not True:
+            failures.append(
+                "the floor must not reject clades above it: 20A (3) and 19A (2) "
+                "by the cutoff are both adequate at min_clade_size=0"
+            )
+    return failures
+
+
+def check_removing_the_adequacy_floor_is_caught():
+    """Mutation test: the floor lives in ``modules/cutoffs.py``, not the script.
+
+    Mutating the *module* rather than the script text, for the reason
+    ``_mutated_workflow`` documents -- an earlier version of this file patched
+    only script text, which would report the floor as covered while the operator
+    that implements it sat one file away.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        scripts = _mutated_workflow(
+            tmp,
+            {
+                "modules/cutoffs.py": (
+                    "return max(int(min_clade_size), MIN_SAMPLES_AT_CUTOFF)",
+                    "return int(min_clade_size)",
+                )
+            },
+        )
+        meta, sample_files = _write_fixture(tmp)
+        df = run_counts(
+            meta,
+            sample_files,
+            Path(tmp) / "unfloored.csv",
+            [CUTOFF],
+            min_clade_size=0,
+            scripts_dir=scripts,
+        )
+    verdicts = dict(zip(df["clade"], df["adequate_sample_counts"]))
+    if verdicts.get("20B") is not True:
+        return [
+            "the unfloored mutant did not mark the 0-sample clade adequate, so "
+            "this check cannot detect a floor that has been removed"
         ]
     return []
 
@@ -525,6 +622,10 @@ CHECKS = [
     ("min_clade_size applies at the cutoff", check_min_clade_size_decides_adequacy),
     ("mutation test: adequacy on the full count is caught",
      check_adequacy_on_the_full_count_is_caught),
+    ("min_clade_size: 0 is still floored at 2",
+     check_production_min_clade_size_zero_still_floors),
+    ("mutation test: removing the adequacy floor is caught",
+     check_removing_the_adequacy_floor_is_caught),
     ("an all-inadequate cutoff raises", check_all_inadequate_raises),
     ("counts file is sorted and reproducible",
      check_counts_file_is_sorted_and_reproducible),
