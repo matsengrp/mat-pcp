@@ -1345,7 +1345,7 @@ def validate_founder_codon_background(output_dir):
 def validate_cutoff_pcps(output_dir):
     """The date-cutoff PCP families reconcile with their roster, in both directions.
 
-    Three properties, each of which fails silently without a check (#149).
+    Four properties, each of which fails silently without a check (#149, #151).
 
     **The skip is real, not just recorded.** ``pcps/cutoff_summary.csv`` names
     every (cutoff, clade) pair with ``included`` true/false, and a false row must
@@ -1362,6 +1362,16 @@ def validate_cutoff_pcps(output_dir):
     still yields plausible per-clade counts. Only leaf children can be checked --
     internal node names are not in the metadata -- but leaves are where the dates
     live.
+
+    **No published sample is predicted well past its cutoff.** The
+    reported-date check above cannot see the case #151 exists for: a metadata
+    ``date`` that is simply wrong, which passes every date comparison because
+    the comparison is against that same wrong value. So the published sample
+    lists are re-checked against ``mat/node_dates.tsv`` using the bound the
+    roster itself records, which is a recomputation rather than a re-reading of
+    the count. Unlike the degenerate byte-equality below, this stays
+    non-vacuous on production, where it is the only end-to-end statement that
+    the filter did what the roster claims.
 
     **The degenerate arm is byte-identical to the full tree.** An arm where every
     clade's ``n_samples_upto`` equals its ``n_samples_full`` selected everything,
@@ -1389,6 +1399,7 @@ def validate_cutoff_pcps(output_dir):
     summary = pd.read_csv(summary_path)
     expected_cols = {
         "cutoff", "clade", "output_subdir", "n_samples_full", "n_samples_upto",
+        "n_predicted_late_dropped", "n_undated_kept", "max_predicted_days_past_cutoff",
         "adequate_sample_counts", "included",
     }
     missing_cols = expected_cols - set(summary.columns)
@@ -1503,17 +1514,103 @@ def validate_cutoff_pcps(output_dir):
                         )
             n_checked_pcps += len(pcps)
 
+    # Independent recomputation of the #151 filter over what was actually
+    # published. Reads the bound from the roster, so it cannot drift from the
+    # config, and skips silently only when chronumental's output is absent --
+    # which is reported, not swallowed.
+    n_predicted_checked = 0
+    n_predicted_late_published = 0
+    node_dates_path = os.path.join(output_dir, "mat", "node_dates.tsv")
+    predicted = None
+    if os.path.isfile(node_dates_path):
+        nd = pd.read_csv(
+            node_dates_path,
+            sep="\t",
+            usecols=["strain", "predicted_date"],
+            low_memory=False,
+        )
+        predicted = dict(
+            zip(nd["strain"], pd.to_datetime(nd["predicted_date"]).dt.normalize())
+        )
+    for _, row in summary.iterrows():
+        if not bool(row["included"]) or pd.isna(row["max_predicted_days_past_cutoff"]):
+            continue
+        if predicted is None:
+            diffs.append(
+                f"cutoff_summary.csv records a bound of "
+                f"{row['max_predicted_days_past_cutoff']} days but "
+                f"{node_dates_path} is absent, so nothing can check that the "
+                f"published sets honour it"
+            )
+            break
+        bound = pd.Timestamp(row["cutoff"]) + pd.Timedelta(
+            days=int(row["max_predicted_days_past_cutoff"])
+        )
+        samples_path = os.path.join(
+            output_dir, "mat", "cutoffs", row["output_subdir"],
+            f"{row['clade']}_samples.txt",
+        )
+        if not os.path.isfile(samples_path):
+            continue
+        with open(samples_path) as handle:
+            for line in handle:
+                strain = line.strip()
+                if not strain:
+                    continue
+                date = predicted.get(strain)
+                if date is None:
+                    continue
+                n_predicted_checked += 1
+                if date > bound:
+                    n_predicted_late_published += 1
+                    if n_predicted_late_published <= 5:
+                        diffs.append(
+                            f"{row['cutoff']}/{row['clade']}: published sample "
+                            f"{strain!r} is predicted {date.date()}, more than "
+                            f"{int(row['max_predicted_days_past_cutoff'])} days "
+                            f"past the cutoff -- the filter did not remove it"
+                        )
+
+    n_late_total = int(summary["n_predicted_late_dropped"].sum())
+    n_undated_total = int(summary["n_undated_kept"].sum())
+    bounds = sorted(set(summary["max_predicted_days_past_cutoff"].dropna().astype(int)))
+    if len(bounds) > 1:
+        diffs.append(
+            f"cutoff_summary.csv records more than one predicted-date bound "
+            f"{bounds}; the config carries a single scalar, so the roster "
+            f"mixes rows from different runs"
+        )
+    if n_late_total and not bounds:
+        diffs.append(
+            f"cutoff_summary.csv reports {n_late_total} predicted-late "
+            f"drop(s) but no max_predicted_days_past_cutoff, so nothing records the bound "
+            f"that produced the published sets"
+        )
+    grace_bound = bounds[0] if bounds else "none"
+
     # The degenerate arm(s), detected from the roster rather than the config.
+    #
+    # "Degenerate" means the *cutoff date* excluded nothing, which is not the
+    # same as ``n_samples_upto == n_samples_full`` once the predicted-date
+    # filter (#151) can also remove samples. Comparing the totals directly would
+    # reclassify a degenerate arm as truncating the moment one predicted-late sample
+    # was dropped, and the byte-equality check below -- the one check that says
+    # the cutoff machinery left the ordinary path alone -- would simply stop
+    # running. A check that silently stops running is pattern 10's vacuity.
     degenerate, truncating = [], []
     for cutoff, arm in summary.groupby("cutoff"):
-        if (arm["n_samples_upto"] == arm["n_samples_full"]).all():
+        reached_cutoff = arm["n_samples_upto"] + arm["n_predicted_late_dropped"]
+        if (reached_cutoff == arm["n_samples_full"]).all():
             degenerate.append(str(cutoff))
         else:
             truncating.append(str(cutoff))
 
     n_byte_equal = 0
+    n_filter_confirmed = 0
     for cutoff in degenerate:
         subdir = f"upto_{cutoff}"
+        arm = summary[summary["cutoff"].astype(str) == cutoff]
+        n_dropped = int(arm["n_predicted_late_dropped"].sum())
         for gene in genes:
             for name in ("all_pcps.csv.gz", "all_pcps_dasm_ready.csv.gz"):
                 full = os.path.join(pcps_root, gene, name)
@@ -1521,22 +1618,42 @@ def validate_cutoff_pcps(output_dir):
                 if not (os.path.isfile(full) and os.path.isfile(cut)):
                     continue
                 with open(full, "rb") as a, open(cut, "rb") as b:
-                    if a.read() != b.read():
+                    identical = a.read() == b.read()
+                if n_dropped == 0:
+                    if not identical:
                         diffs.append(
-                            f"{cutoff} selected every sample, so "
-                            f"pcps/{gene}/{subdir}/{name} must byte-equal "
-                            f"pcps/{gene}/{name}; it does not"
+                            f"{cutoff} selected every sample and dropped none as "
+                            f"predicted-late, so pcps/{gene}/{subdir}/{name} "
+                            f"must byte-equal pcps/{gene}/{name}; it does not"
                         )
                     else:
                         n_byte_equal += 1
+                elif identical:
+                    # The converse direction, and the only end-to-end evidence
+                    # that the filter reaches the extraction rather than merely
+                    # being counted in the roster: a bound that removed samples
+                    # cannot leave the outputs bit-for-bit unchanged.
+                    diffs.append(
+                        f"{cutoff} dropped {n_dropped} sample(s) as "
+                        f"predicted-late, yet pcps/{gene}/{subdir}/{name} "
+                        f"byte-equals pcps/{gene}/{name} -- the filter was "
+                        f"recorded but did not reach the extraction"
+                    )
+                else:
+                    n_filter_confirmed += 1
 
     # Truncating arms must actually shrink something, or the after-the-cutoff
     # check above ran over sets identical to the full tree's.
     for cutoff in truncating:
         arm = summary[summary["cutoff"].astype(str) == cutoff]
-        if not (arm["n_samples_upto"] < arm["n_samples_full"]).any():
+        lost_to_date = (
+            arm["n_samples_upto"] + arm["n_predicted_late_dropped"]
+            < arm["n_samples_full"]
+        )
+        if not lost_to_date.any():
             diffs.append(
-                f"{cutoff} is classed as truncating but no clade lost a sample"
+                f"{cutoff} is classed as truncating but no clade lost a sample "
+                f"to the cutoff date itself"
             )
 
     if not truncating:
@@ -1552,7 +1669,17 @@ def validate_cutoff_pcps(output_dir):
             f"over {len(genes)} gene(s); {n_checked_pcps} PCP(s) checked, "
             f"{n_late} collected after their cutoff; {len(skipped)} "
             f"(cutoff, clade) pair(s) skipped and recorded; "
-            f"{n_byte_equal} degenerate file(s) byte-equal the full tree"
+            f"{n_byte_equal} degenerate file(s) byte-equal the full tree; "
+            f"{n_late_total} sample(s) dropped as predicted-late "
+            f"(bound {grace_bound}), {n_undated_total} kept undated; "
+            f"{n_predicted_checked} published sample(s) re-checked against "
+            f"node_dates, {n_predicted_late_published} still late"
+            + (
+                f"; {n_filter_confirmed} degenerate file(s) differ as the "
+                f"filter requires"
+                if n_filter_confirmed
+                else ""
+            )
         )
     return diffs, note
 

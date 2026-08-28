@@ -38,6 +38,9 @@ COLUMNS = [
     "output_subdir",
     "n_samples_full",
     "n_samples_upto",
+    "n_predicted_late_dropped",
+    "n_undated_kept",
+    "max_predicted_days_past_cutoff",
     "adequate_sample_counts",
     "included",
 ]
@@ -103,8 +106,11 @@ def main():
         log(
             f"cutoff {cutoff} -> upto_{cutoff}/: {n_in} of {len(arm)} clades "
             f"included across {len(genes)} gene(s) "
-            f"({int(arm.loc[arm['included'], 'n_samples_upto'].sum())} samples); "
-            f"skipped {skipped or 'none'}"
+            f"({int(arm.loc[arm['included'], 'n_samples_upto'].sum())} samples, "
+            f"{int(arm.loc[arm['included'], 'n_predicted_late_dropped'].sum())} "
+            f"dropped as predicted-late, "
+            f"{int(arm.loc[arm['included'], 'n_undated_kept'].sum())} kept "
+            f"undated); skipped {skipped or 'none'}"
         )
     log(f"Wrote {len(df)} (cutoff, clade) rows to {summary_out}")
 

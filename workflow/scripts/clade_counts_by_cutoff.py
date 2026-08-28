@@ -46,9 +46,11 @@ load_workflow_module = workflow_loader.load_workflow_module
 cutoffs_mod = load_workflow_module("cutoffs")
 
 metadata = snakemake.input.metadata
+node_dates = snakemake.input.node_dates
 sample_files = list(snakemake.input.samples)
 counts_out = snakemake.output.counts
 cutoffs = list(snakemake.params.cutoffs)
+max_days_past_cutoff = snakemake.params.max_days_past_cutoff
 min_clade_size = snakemake.params.min_clade_size
 clade_column = snakemake.params.clade_column
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
@@ -58,6 +60,9 @@ COLUMNS = [
     "clade",
     "n_samples_full",
     "n_samples_upto",
+    "n_predicted_late_dropped",
+    "n_undated_kept",
+    "max_predicted_days_past_cutoff",
     "adequate_sample_counts",
 ]
 
@@ -90,6 +95,16 @@ def clade_from_samples_path(path):
 def main():
     strain_dates = cutoffs_mod.load_strain_dates(metadata)
     log(f"Loaded {len(strain_dates)} strain dates from {metadata}")
+    if max_days_past_cutoff is None:
+        predicted = None
+        log("pcp_max_predicted_days_past_cutoff unset: no predicted-date filter")
+    else:
+        predicted = cutoffs_mod.load_predicted_dates(node_dates)
+        log(
+            f"Loaded {len(predicted)} predicted dates from {node_dates}; "
+            f"dropping samples predicted more than {max_days_past_cutoff} days "
+            f"past their cutoff"
+        )
     min_upto = cutoffs_mod.effective_min_clade_size(min_clade_size)
     log(
         f"Cutoffs: {cutoffs}; min_clade_size={min_clade_size} "
@@ -101,13 +116,24 @@ def main():
         for path in sorted(sample_files):
             clade = clade_from_samples_path(path)
             strains = cutoffs_mod.read_sample_list(path)
-            kept = cutoffs_mod.select_upto(strains, strain_dates, cutoff)
+            selection = cutoffs_mod.select_for_cutoff(
+                strains, strain_dates, cutoff, predicted, max_days_past_cutoff
+            )
+            kept = selection.kept
             rows.append(
                 {
                     "cutoff": cutoff,
                     "clade": clade,
                     "n_samples_full": len(strains),
                     "n_samples_upto": len(kept),
+                    "n_predicted_late_dropped": selection.n_predicted_late,
+                    "n_undated_kept": selection.n_undated,
+                    # The bound is recorded per row rather than left in the log
+                    # so the artifact is self-describing: a consumer of a cutoff
+                    # PCP set needs to know a filter was applied and at what
+                    # threshold, and ``validate_cutoff_pcps`` recomputes the
+                    # drop set from it rather than trusting the count.
+                    "max_predicted_days_past_cutoff": max_days_past_cutoff,
                     "adequate_sample_counts": cutoffs_mod.adequate_at_cutoff(
                         len(kept), min_clade_size
                     ),
@@ -126,7 +152,9 @@ def main():
         skipped = sorted(arm.loc[~arm["adequate_sample_counts"], "clade"])
         log(
             f"cutoff {cutoff}: {len(adequate)} of {len(arm)} clades adequate "
-            f"(>= {min_upto} samples); skipped {skipped or 'none'}"
+            f"(>= {min_upto} samples); skipped {skipped or 'none'}; "
+            f"{int(arm['n_predicted_late_dropped'].sum())} sample(s) dropped as "
+            f"predicted-late, {int(arm['n_undated_kept'].sum())} kept undated"
         )
         if arm.empty or adequate.empty:
             raise ValueError(

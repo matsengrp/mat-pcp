@@ -768,6 +768,74 @@ mat-pcp/
     `included=False` row as a stale intermediate, since checking only the PCP files
     left the excluded clades' subtrees invisible.
 
+    *The cutoff cannot be answered from the metadata date alone, because some of
+    those dates are wrong by years.* On the v12 public tree's 2023-01-01 set, 16
+    leaves are Nextstrain 24A (JN.1) or 24E (KP.3.1.1) -- lineages that did not
+    exist in 2023 -- reported between 2020-01-10 and 2022-12-09 and predicted
+    **337 to 570 days past the cutoff**; their pango calls (JN.1.4, KP.3.1.1,
+    MC.24) agree with the tree and not with the date. They arrive in batches
+    sharing one placeholder value (20-odd `Spain/AR-IACS_LaSARD-*` all reporting
+    exactly 2021-07-16 or 2022-10-18, nine `USA/ND-NDDH-260xx` all 2021-09-02),
+    which is a submission date written into the collection field.
+    `pcp_max_predicted_days_past_cutoff` drops a sample whose **predicted** date
+    lands more than that many days after the cutoff. Four things about the shape
+    are load-bearing.
+
+    The test is against the **cutoff**, not against the reported date. Dropping
+    when the two dates merely disagree by more than N is the obvious alternative
+    and it is a strictly broader filter: it also removes records whose dates
+    disagree while *both* sit comfortably before the cutoff, which are
+    untrustworthy but not leaks. What a temporal holdout can be wrong about is
+    admitting a post-cutoff genome, so that is what is tested -- 823 / 2,693
+    leaves on the two production trees against 2,879 / 13,839 under the
+    discordance reading. It also makes the predicate cutoff-dependent: the same
+    strain is legitimately kept at a later cutoff and dropped at an earlier one.
+
+    The tolerance is **non-zero because the predicted date is fitted**. Median
+    |predicted - reported| is 10 d on both trees, p95 35/37 d, p99 56/62 d under
+    the `--variance_dates 30` prior, so a sample genuinely collected days before
+    the cutoff predicts past it on ordinary noise. 30 days removes 0.011% /
+    0.018% of leaves while still catching every one of the 36 / 272 that sit
+    more than 90 days past. It is a config value rather than a constant because
+    it is a property of the date prior, which pattern 13 has already moved once.
+
+    The comparison is **day-granular on both sides**. `node_dates.tsv` carries a
+    time (`2023-12-10 16:57:02.752815`) while the cutoff is a date, so comparing
+    raw timestamps would make membership depend on the time of day chronumental
+    happened to emit -- a prediction of exactly cutoff+X at 12:00 excluded and
+    the same prediction at 00:00 kept.
+
+    Two knock-on effects that are easy to miss. **The cutoff sets now depend on
+    the node dating**, so changing `chronumental_kwargs` changes which PCPs
+    exist; the filter is confined to the cutoff path precisely because the
+    full-tree outputs never read the reported date (clade rosters come from the
+    clade column, the windowed path keys on predicted dates), so filtering there
+    would move every output while fixing nothing. And **the degenerate arm's
+    byte-equality becomes conditional**: classifying an arm by
+    `n_samples_upto == n_samples_full` would reclassify it as truncating the
+    moment one sample was dropped, and the one check that says the cutoff
+    machinery left the ordinary path alone would silently stop running -- pattern
+    10's vacuity. `validate_cutoff_pcps` classifies on
+    `n_samples_upto + n_predicted_late_dropped` instead, and then asserts
+    byte-equality when nothing was dropped **or byte-inequality when something
+    was**, the latter being the only end-to-end evidence that the filter reaches
+    the extraction rather than merely being counted in the roster.
+
+    A strain chronumental did not date is **kept and counted** (154 on the public
+    tree): dropping it would remove data on a missing prediction rather than a
+    contradicting one, and keeping it silently would hide a half-missing
+    chronumental output. Reported as `n_undated_kept`.
+
+    No CI run can see any of this either: at X=30 the filter removes **nothing**
+    on the test data (0 leaves past cutoff+30 in either arm; the degenerate arm
+    has none even past cutoff+0), so a run is green whether the filter works, is
+    inverted, or never executes. `tests/test_pcp_date_cutoffs.py` therefore
+    drives both real scripts against a fixture whose predictions carry a 12:00
+    time as production's do, with a row that is 91 days discordant yet 61 days
+    *before* the cutoff -- so a mutant implementing the discordance reading gives
+    a different answer rather than the same one -- and mutation-tests the filter
+    by editing **`modules/cutoffs.py`**, not the script text.
+
     *The masks are shared across cutoffs, which is a real leak, bounded and
     stated.* `{gene}_codon_sites_to_mask.txt` and `censored_mutations.csv` come from
     the full tree, so a cutoff's DASM-ready files are filtered with a mask that saw
@@ -836,7 +904,8 @@ The configuration (`config/config.yaml`) is organized into:
    expected synonymous == total observed synonymous per window by construction, and
    windowed fitness is directly comparable to the clade-based `aamut_fitness`.
 5. **Clade Configuration**: `clade_column`, `min_clade_size`, `clades_to_exclude`, `max_clades`
-6. **PCP Extraction**: `pcp_date_cutoffs` (optional, per-tree overridable; see
+6. **PCP Extraction**: `pcp_date_cutoffs` and
+   `pcp_max_predicted_days_past_cutoff` (optional, per-tree overridable; see
    pattern 14), plus `pcp_genes` (PCP branch QC reuses the shared
    Mutation-Counting keys `max_nt_mutations` / `max_reversions_to_ref` /
    `max_reversions_to_clade_founder`), plus two optional maps that exist only

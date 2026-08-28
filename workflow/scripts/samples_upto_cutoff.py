@@ -10,6 +10,13 @@ values the regex exists for, with both results looking like plausible clade
 rosters. Filtering the existing list by date alone also makes the degenerate arm
 exact: a cutoff at or after every sample's date returns the file unchanged, so
 its PCPs are byte-identical to the full tree's (#149).
+
+Samples whose *predicted* date lands more than
+``pcp_max_predicted_days_past_cutoff`` days after the cutoff are dropped as well
+-- a metadata date that is wrong by years otherwise admits a post-cutoff genome
+into a pre-cutoff set. Note that this makes the degenerate arm's byte-equality
+conditional on the filter removing nothing, which ``validate_cutoff_pcps``
+checks rather than assumes.
 """
 
 import os
@@ -35,7 +42,9 @@ cutoffs_mod = load_workflow_module("cutoffs")
 
 samples_in = snakemake.input.samples
 metadata = snakemake.input.metadata
+node_dates = snakemake.input.node_dates
 samples_out = snakemake.output.samples
+max_days_past_cutoff = snakemake.params.max_days_past_cutoff
 cutoff = snakemake.wildcards.cutoff
 clade = snakemake.wildcards.clade
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
@@ -51,7 +60,15 @@ def log(msg):
 def main():
     strains = cutoffs_mod.read_sample_list(samples_in)
     strain_dates = cutoffs_mod.load_strain_dates(metadata)
-    kept = cutoffs_mod.select_upto(strains, strain_dates, cutoff)
+    predicted = (
+        None
+        if max_days_past_cutoff is None
+        else cutoffs_mod.load_predicted_dates(node_dates)
+    )
+    selection = cutoffs_mod.select_for_cutoff(
+        strains, strain_dates, cutoff, predicted, max_days_past_cutoff
+    )
+    kept = selection.kept
 
     # One name per line, in the input file's order -- ``matUtils extract -s``
     # reads this, and reordering it would change the output for no reason
@@ -60,10 +77,12 @@ def main():
         for strain in kept:
             handle.write(f"{strain}\n")
 
-    dropped = len(strains) - len(kept)
     log(
         f"clade {clade} at cutoff {cutoff}: kept {len(kept)} of {len(strains)} "
-        f"samples ({dropped} collected after the cutoff)"
+        f"samples ({selection.n_after_cutoff} collected after the cutoff, "
+        f"{selection.n_predicted_late} predicted more than "
+        f"{max_days_past_cutoff} days past it, {selection.n_undated} kept with "
+        f"no predicted date)"
     )
     if not kept:
         # Not raised here: whether an empty clade is an error is a DAG-level

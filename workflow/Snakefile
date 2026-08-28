@@ -324,6 +324,29 @@ def get_final_tree():
 # ``pcp_gene_cds_blocks`` if it names the gene, otherwise from the reference GTF
 # (see ``gtf.resolve_cds_blocks``). Output paths use the gene symbol verbatim
 # (``pcps/S/``, ``clade_founders/S/``).
+# Drop a sample from a *cutoff* set when its chronumental predicted date lands
+# more than this many days after that cutoff. Optional; ``None`` disables the
+# filter and reproduces the pre-#151 selection exactly.
+#
+# A cutoff asks what had been collected by a date, and some metadata dates are
+# wrong by years -- 16 leaves of the v12 public tree's 2023-01-01 set are JN.1 or
+# KP.3.1.1 genomes reported 2020-2022 and predicted 337-570 days past the
+# cutoff. The tolerance is non-zero because the predicted date is fitted, and it
+# is a config value rather than a constant because it is a property of the date
+# prior, which #146 has already moved once. See the comment block above
+# ``cutoffs.select_for_cutoff`` for the measured distributions.
+PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF = config.get("pcp_max_predicted_days_past_cutoff")
+if PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF is not None:
+    PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF = int(PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF)
+    if PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF < 0:
+        raise ValueError(
+            f"config 'pcp_max_predicted_days_past_cutoff' must be >= 0 or null, "
+            f"got {PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF}. Use null to disable the "
+            f"filter; 0 demands that no predicted date exceed the cutoff at all, "
+            f"which ordinary fit noise violates for samples collected just "
+            f"before it (p95 |predicted - reported| is 35-37 days)."
+        )
+
 PCP_GENES = config["pcp_genes"]
 if not PCP_GENES:
     raise ValueError(
@@ -1409,9 +1432,17 @@ checkpoint get_clades_by_cutoff:
     column, so the clade vocabulary is by construction the one the full-tree path
     already uses -- and ``clades_to_exclude`` / ``max_clades`` come along for
     free, since those files exist only for clades the full tree processes.
+
+    Depends on ``mat/node_dates.tsv`` because the selection drops samples whose
+    reported and predicted dates contradict each other. That makes the cutoff
+    path wait on the (multi-hour) dating rule, which the windowed path already
+    does, and it means the cutoff sample sets move when the date prior moves --
+    stated here because it is not otherwise obvious that changing
+    ``chronumental_kwargs`` changes which PCPs exist.
     """
     input:
         metadata=rules.filter_metadata.output.filtered_metadata,
+        node_dates=rules.chronumental.output.node_dates,
         samples=lambda wc: per_clade_inputs(
             os.path.join(OUTDIR, "mat/clades/{clade}_samples.txt"), wc
         )
@@ -1420,6 +1451,7 @@ checkpoint get_clades_by_cutoff:
     params:
         cutoffs=lambda wc: cutoffs_for_tree(wc.tree),
         min_clade_size=config.get("min_clade_size", 100),
+        max_days_past_cutoff=PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF,
         clade_column=config.get("clade_column", "Nextstrain_clade")
     log:
         os.path.join(OUTDIR, "log/get_clades_by_cutoff.log")
@@ -1453,12 +1485,21 @@ rule cutoff_pcp_summary:
 
 
 rule samples_upto_cutoff:
-    """One clade's samples, restricted to those collected at or before a cutoff."""
+    """One clade's samples, restricted to those collected at or before a cutoff.
+
+    Also drops samples whose reported and predicted dates disagree by more than
+    ``pcp_max_predicted_days_past_cutoff``. Must stay in step with the checkpoint
+    above: both go through ``cutoffs.select_for_cutoff``, so a filter applied in
+    one and not the other cannot happen silently.
+    """
     input:
         samples=rules.samples_by_clade.output.samples,
-        metadata=rules.filter_metadata.output.filtered_metadata
+        metadata=rules.filter_metadata.output.filtered_metadata,
+        node_dates=rules.chronumental.output.node_dates
     output:
         samples=os.path.join(OUTDIR, "mat/cutoffs/upto_{cutoff}/{clade}_samples.txt")
+    params:
+        max_days_past_cutoff=PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF
     log:
         os.path.join(OUTDIR, "log/samples_upto_{cutoff}_{clade}.log")
     conda:

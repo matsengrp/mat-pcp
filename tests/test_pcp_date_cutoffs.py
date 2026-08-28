@@ -159,10 +159,11 @@ def _mutated_workflow(tmp, edits):
 
 
 def run_samples_upto(meta, samples_in, out_path, cutoff, clade, mutate=None,
-                     scripts_dir=None):
+                     scripts_dir=None, node_dates=None, max_days_past_cutoff=None):
     snake = _Namespace(
-        input=_Namespace(samples=samples_in, metadata=meta),
+        input=_Namespace(samples=samples_in, metadata=meta, node_dates=node_dates),
         output=_Namespace(samples=str(out_path)),
+        params=_Namespace(max_days_past_cutoff=max_days_past_cutoff),
         wildcards=_Namespace(cutoff=cutoff, clade=clade),
         log=[],
     )
@@ -174,13 +175,18 @@ def run_samples_upto(meta, samples_in, out_path, cutoff, clade, mutate=None,
 
 
 def run_counts(meta, sample_files, out_path, cutoff_list, min_clade_size, mutate=None,
-               scripts_dir=None):
+               scripts_dir=None, node_dates=None, max_days_past_cutoff=None):
     snake = _Namespace(
-        input=_Namespace(metadata=meta, samples=sorted(sample_files.values())),
+        input=_Namespace(
+            metadata=meta,
+            node_dates=node_dates,
+            samples=sorted(sample_files.values()),
+        ),
         output=_Namespace(counts=str(out_path)),
         params=_Namespace(
             cutoffs=cutoff_list,
             min_clade_size=min_clade_size,
+            max_days_past_cutoff=max_days_past_cutoff,
             clade_column="Nextstrain_clade",
         ),
         log=[],
@@ -612,6 +618,223 @@ def check_config_validation():
     return failures
 
 
+
+# ---------------------------------------------------------------------------
+# The predicted-date filter (#151)
+# ---------------------------------------------------------------------------
+
+# Every strain here is reported at or before the 2020-06-01 cutoff, so the date
+# filter alone keeps all of them; only the predicted date distinguishes them.
+# The fixture is separate from the shared one above because these checks need
+# strains the others index by name, and widening the shared fixture would move
+# their expected rosters.
+FILTER_CUTOFF = "2020-06-01"
+FILTER_ROWS = [
+    # strain,               reported,     predicted,    kept at X=30?
+    ("f_concordant",        "2020-05-01", "2020-05-04", True),
+    ("f_on_cutoff",         "2020-06-01", "2020-06-10", True),
+    ("f_edge_at_bound",     "2020-05-01", "2020-07-01", True),
+    ("f_edge_past_bound",   "2020-05-01", "2020-07-02", False),
+    ("f_way_late",          "2020-05-01", "2021-06-01", False),
+    # Reported and predicted disagree by 91 days, yet the predicted date sits
+    # 61 days *before* the cutoff. Pins the semantics: this row is what makes a
+    # reported-vs-predicted discordance rule and this rule disagree, so a
+    # mutant implementing the other one fails rather than passing.
+    ("f_discordant_early",  "2020-01-01", "2020-04-01", True),
+    # No node_dates row at all -- kept, and counted as undated.
+    ("f_undated",           "2020-05-01", None,         True),
+]
+
+
+def _write_filter_fixture(root):
+    """Metadata, one clade sample list, and a node_dates.tsv for FILTER_ROWS."""
+    import pandas as pd
+
+    root = Path(root)
+    meta = root / "filter_metadata.tsv.gz"
+    pd.DataFrame(
+        [
+            {"strain": s, "date": rep, "host": "Human", "length": 29903}
+            for s, rep, _, _ in FILTER_ROWS
+        ]
+    ).to_csv(meta, sep="\t", index=False, compression="gzip")
+
+    samples = root / "22A_samples.txt"
+    samples.write_text("".join(f"{s}\n" for s, _, _, _ in FILTER_ROWS))
+
+    node_dates = root / "node_dates.tsv"
+    lines = ["strain\tpredicted_date"]
+    # An internal node, so the loader is exercised on a file that is not purely
+    # leaves -- the production file is mostly internal nodes.
+    lines.append("node_1\t2020-02-01 00:00:00.000000")
+    for strain, _, pred, _ in FILTER_ROWS:
+        if pred is not None:
+            lines.append(f"{strain}\t{pred} 12:00:00.000000")
+    node_dates.write_text("\n".join(lines) + "\n")
+    return str(meta), str(samples), str(node_dates)
+
+
+def check_predicted_late_samples_are_dropped():
+    """A sample the tree dates past cutoff+X is dropped; the bound is inclusive.
+
+    No pipeline run can see this. At the shipped X=30 the filter removes nothing
+    on the test data -- 0 leaves in either CI arm exceed cutoff+30, and the
+    2022-06-01 degenerate arm has none even past cutoff+0 -- so a CI run is green
+    whether the filter works, is inverted, or never executes.
+    """
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        meta, samples, node_dates = _write_filter_fixture(tmp)
+        expected = [s for s, _, _, keep in FILTER_ROWS if keep]
+
+        kept = run_samples_upto(
+            meta, samples, Path(tmp) / "out.txt", FILTER_CUTOFF, "22A",
+            node_dates=node_dates, max_days_past_cutoff=30,
+        )
+        if kept != expected:
+            failures.append(f"filtered set {kept} != expected {expected}")
+
+        # Order is the input file's, not sorted -- the degenerate arm's
+        # byte-equality rests on it and the fixture is deliberately unsorted.
+        if sorted(kept) == kept:
+            failures.append(
+                "the kept list came out sorted, so this check can no longer "
+                "detect a filter that reorders its output. Fix the fixture."
+            )
+
+        # With the filter off, every row survives: the pre-#151 behaviour is
+        # reproduced exactly rather than approximately.
+        unfiltered = run_samples_upto(
+            meta, samples, Path(tmp) / "off.txt", FILTER_CUTOFF, "22A",
+        )
+        if unfiltered != [s for s, _, _, _ in FILTER_ROWS]:
+            failures.append(
+                f"with no bound configured the selection still changed: "
+                f"{unfiltered}"
+            )
+
+        # The bound is inclusive at exactly cutoff+X, and day-granular: the
+        # fixture's predictions carry a 12:00 time, as the production file does,
+        # so a raw timestamp comparison would drop f_edge_at_bound here.
+        tight = run_samples_upto(
+            meta, samples, Path(tmp) / "tight.txt", FILTER_CUTOFF, "22A",
+            node_dates=node_dates, max_days_past_cutoff=29,
+        )
+        if "f_edge_at_bound" in tight:
+            failures.append(
+                "f_edge_at_bound survived a bound one day tighter than its own "
+                "offset, so the comparison is not exclusive above the bound"
+            )
+        if "f_concordant" not in tight:
+            failures.append("a concordant sample was dropped at X=29")
+    return failures
+
+
+def check_checkpoint_and_sample_list_agree_under_the_filter():
+    """The roster's counts describe the file that was written.
+
+    The checkpoint and ``samples_upto_cutoff`` are separate scripts that must
+    apply the same filter; if only one does, ``n_samples_upto`` describes a file
+    that does not exist and only ``validate_cutoff_pcps``' line-count check
+    would ever notice. Both go through ``cutoffs.select_for_cutoff``, and this
+    runs both.
+    """
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        meta, samples, node_dates = _write_filter_fixture(tmp)
+        kept = run_samples_upto(
+            meta, samples, Path(tmp) / "out.txt", FILTER_CUTOFF, "22A",
+            node_dates=node_dates, max_days_past_cutoff=30,
+        )
+        counts = run_counts(
+            meta, {"22A": samples}, Path(tmp) / "counts.csv", [FILTER_CUTOFF],
+            min_clade_size=0, node_dates=node_dates, max_days_past_cutoff=30,
+        )
+        row = counts.iloc[0].to_dict()
+        n_late = sum(1 for _, _, _, keep in FILTER_ROWS if not keep)
+        for column, want in (
+            ("n_samples_upto", len(kept)),
+            ("n_samples_full", len(FILTER_ROWS)),
+            ("n_predicted_late_dropped", n_late),
+            ("n_undated_kept", 1),
+            # The bound is recorded, so the published set is self-describing
+            # and validate_cutoff_pcps can reconcile against it.
+            ("max_predicted_days_past_cutoff", 30),
+        ):
+            if int(row[column]) != want:
+                failures.append(
+                    f"checkpoint {column}={row[column]}, expected {want} "
+                    f"(row: {row})"
+                )
+    return failures
+
+
+def check_removing_the_predicted_date_filter_is_caught():
+    """Mutation test: a filter that never runs is caught.
+
+    Mutating ``modules/cutoffs.py`` rather than the script text, for the reason
+    the adequacy floor's mutant does: an operator implemented in the module
+    would be reported as covered while it sat one file away.
+    """
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        meta, samples, node_dates = _write_filter_fixture(tmp)
+        scripts = _mutated_workflow(
+            tmp,
+            {
+                "modules/cutoffs.py": (
+                    "        if pd.Timestamp(predicted).normalize() > bound:",
+                    "        if False:",
+                )
+            },
+        )
+        kept = run_samples_upto(
+            meta, samples, Path(tmp) / "out.txt", FILTER_CUTOFF, "22A",
+            scripts_dir=scripts, node_dates=node_dates, max_days_past_cutoff=30,
+        )
+        if "f_way_late" not in kept:
+            failures.append(
+                "the disabled-filter mutant produced the same set as the "
+                "shipped code, so this check cannot distinguish a working "
+                "filter from one that never runs"
+            )
+    return failures
+
+
+def check_comparing_against_the_reported_date_is_caught():
+    """Mutation test: the test is against the cutoff, not the reported date.
+
+    Dropping when reported and predicted merely *disagree* is the plausible
+    alternative reading, and it is a broader filter -- it also removes records
+    whose dates disagree while both sit before the cutoff. ``f_discordant_early``
+    is exactly such a row, so the two rules give different answers on this
+    fixture and the mutant fails instead of passing.
+    """
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        meta, samples, node_dates = _write_filter_fixture(tmp)
+        scripts = _mutated_workflow(
+            tmp,
+            {
+                "modules/cutoffs.py": (
+                    "        if pd.Timestamp(predicted).normalize() > bound:",
+                    "        if abs((predicted - strain_dates[strain]).days) > grace:",
+                )
+            },
+        )
+        kept = run_samples_upto(
+            meta, samples, Path(tmp) / "out.txt", FILTER_CUTOFF, "22A",
+            scripts_dir=scripts, node_dates=node_dates, max_days_past_cutoff=30,
+        )
+        if "f_discordant_early" in kept:
+            failures.append(
+                "the reported-vs-predicted mutant produced the same set as the "
+                "shipped rule, so the fixture no longer distinguishes the two "
+                "readings. Fix the fixture."
+            )
+    return failures
+
+
 CHECKS = [
     ("cutoff is inclusive and order-preserving",
      check_cutoff_is_inclusive_and_order_preserving),
@@ -631,6 +854,14 @@ CHECKS = [
      check_counts_file_is_sorted_and_reproducible),
     ("an unknown strain raises", check_unknown_strain_raises),
     ("config validation rejects four bad forms", check_config_validation),
+    ("samples predicted past cutoff+X are dropped",
+     check_predicted_late_samples_are_dropped),
+    ("checkpoint and sample list agree under the filter",
+     check_checkpoint_and_sample_list_agree_under_the_filter),
+    ("mutation test: a filter that never runs is caught",
+     check_removing_the_predicted_date_filter_is_caught),
+    ("mutation test: comparing against the reported date is caught",
+     check_comparing_against_the_reported_date_is_caught),
 ]
 
 

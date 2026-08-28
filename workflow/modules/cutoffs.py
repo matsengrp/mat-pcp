@@ -5,7 +5,7 @@ A *cutoff* names a date and asks for the PCPs that would have been extractable
 from the tree using only samples collected **at or before** it -- a temporal
 holdout, so DASM can be trained on what was knowable then.
 
-Three decisions live here because each has a wrong answer that looks right.
+Four decisions live here because each has a wrong answer that looks right.
 
 **The cutoff selects from the clade's own sample list, never from the metadata's
 clade column.** ``rule samples_by_clade`` matches a clade with the awk regex
@@ -27,6 +27,13 @@ and on the degenerate arm it would break byte-equality with the full-tree
 outputs, the one check that says the cutoff machinery left the ordinary path
 alone.
 
+**A sample the tree dates well past the cutoff does not belong in that
+cutoff's set, whatever its metadata says.** Some metadata dates are wrong by
+years, so a cutoff answered from the ``date`` column alone admits post-cutoff
+genomes. ``pcp_max_predicted_days_past_cutoff`` drops them; see the comment
+block above ``select_for_cutoff`` for the measurements behind the value and for
+why the filter is confined to the cutoff path.
+
 **The comparison is against the *coerced* date, not the raw metadata string.**
 ``filter_metadata.py`` rewrites the ``date`` column through
 ``robust_fromisoformat``, which maps a month-resolution value to the 15th and a
@@ -39,6 +46,7 @@ than a coincidence to rely on.
 
 import datetime
 import os
+from typing import NamedTuple
 
 import pandas as pd
 
@@ -237,3 +245,144 @@ def select_upto(strains, strain_dates, cutoff):
             f"the metadata must come from the same filtered metadata."
         )
     return [s for s in strains if strain_dates[s] <= bound]
+
+
+# A cutoff asks which samples had been *collected* by a date, and answers with
+# the metadata's ``date`` column. Some of those dates are wrong by years, so the
+# question is answered with post-cutoff genomes unless they are removed.
+#
+# On the v12 2026-08-06 public tree, 16 leaves in the 2023-01-01 cutoff set
+# belong to Nextstrain clades 24A (JN.1) and 24E (KP.3.1.1) -- lineages that did
+# not exist in 2023 -- with reported dates from 2020-01-10 to 2022-12-09 and
+# chronumental predicted dates 337 to 570 days *past* the cutoff. Their pango
+# calls (JN.1.4, KP.3.1.1, MC.24) agree with the tree and not with the date.
+# They arrive in batches sharing one placeholder value: 20-odd
+# ``Spain/AR-IACS_LaSARD-*`` records all report exactly 2021-07-16 or
+# 2022-10-18, nine ``USA/ND-NDDH-260xx`` all report 2021-09-02. That is a
+# submission date written into the collection field, not independent mistakes.
+#
+# ``pcp_max_predicted_days_past_cutoff`` therefore drops a strain from a cutoff
+# set when its *predicted* date lands more than that many days after the cutoff.
+# Four things about the shape are load-bearing.
+#
+# *The test is against the cutoff, not against the reported date.* Comparing the
+# two dates to each other -- dropping when they disagree by more than N -- is the
+# obvious alternative and it is a different, broader filter: it also removes
+# records whose dates disagree while *both* sit comfortably before the cutoff,
+# which are untrustworthy but not leaks. What a temporal holdout can actually be
+# wrong about is admitting a genome from after the cutoff, so that is what is
+# tested. It also means the predicate depends on the cutoff: the same strain can
+# be kept at a later cutoff and dropped at an earlier one, which is correct.
+#
+# *The tolerance exists because the predicted date is fitted, not observed.* A
+# sample genuinely collected days before the cutoff can predict past it on
+# ordinary fit noise: over every leaf of both v12 trees the median
+# |predicted - reported| is 10 d, p95 is 35/37 d and p99 is 56/62 d under the
+# ``--variance_dates 30`` prior (pattern 13). So the bound is a config value
+# rather than zero and rather than a constant here -- it is a property of the
+# date prior, which pattern 13 has already moved once, and a run that retunes
+# the prior must revisit it.
+#
+# *This filter is applied at a cutoff only, never on the full-tree path.* Not a
+# cost compromise: the full-tree outputs do not read the reported date at all --
+# clade rosters come from the clade column and the windowed path keys on
+# predicted dates -- so filtering there would move every output while fixing
+# nothing. The reported date is load-bearing in exactly two places, the
+# ``min_leaf_date``/``max_leaf_date`` metadata filter and this cutoff selection.
+#
+# *A strain chronumental did not date is kept, and counted.* 154 leaves of the
+# public tree's 2023-01-01 cutoff set have a metadata row and a place in the
+# tree but no ``node_dates.tsv`` entry. Dropping them would remove data on the
+# strength of a missing prediction rather than a contradicting one; keeping them
+# silently would hide a chronumental output that had gone half-missing. So they
+# are kept and reported as ``n_undated_kept`` in ``pcps/cutoff_summary.csv``.
+DISCORDANCE_CONFIG_KEY = "pcp_max_predicted_days_past_cutoff"
+
+
+class CutoffSelection(NamedTuple):
+    """The outcome of selecting one clade's samples for one cutoff.
+
+    Returned as a record rather than a bare list so that the checkpoint's
+    counting and the sample-list writer cannot drift: ``n_samples_upto`` in
+    ``pcps/cutoff_summary.csv`` is ``len(kept)`` from this same call, and
+    ``validate_cutoff_pcps`` reconciles that number against the written file's
+    line count.
+    """
+
+    kept: list
+    n_after_cutoff: int
+    n_predicted_late: int
+    n_undated: int
+
+
+def load_predicted_dates(node_dates_path):
+    """``strain`` -> chronumental predicted date, from ``mat/node_dates.tsv``.
+
+    Internal nodes are in this file too and are simply never looked up; the
+    caller indexes it by the strain names in a clade sample list. Values carry a
+    time component (``2023-12-10 16:57:02.752815``) which ``to_datetime`` keeps
+    and the day-granular comparison below tolerates.
+    """
+    df = pd.read_csv(
+        node_dates_path,
+        sep="\t",
+        usecols=["strain", "predicted_date"],
+        dtype={"strain": "string"},
+        low_memory=False,
+    )
+    dates = pd.to_datetime(df["predicted_date"], errors="coerce")
+    return pd.Series(dates.values, index=df["strain"].values)
+
+
+def select_for_cutoff(
+    strains,
+    strain_dates,
+    cutoff,
+    predicted_dates=None,
+    max_days_past_cutoff=None,
+):
+    """One clade's samples for one cutoff: date-truncated, then tree-checked.
+
+    The single entry point for both callers (the ``get_clades_by_cutoff``
+    checkpoint and ``samples_upto_cutoff``), because they must agree exactly --
+    a filter applied in one and not the other yields a roster whose
+    ``n_samples_upto`` disagrees with the file it describes, and only the
+    validator's line-count check would notice.
+
+    ``predicted_dates=None`` or ``max_days_past_cutoff=None`` disables the
+    predicted-date filter, which is what makes a config without
+    ``pcp_max_predicted_days_past_cutoff`` behave exactly as before.
+    """
+    upto = select_upto(strains, strain_dates, cutoff)
+    n_after_cutoff = len(strains) - len(upto)
+    if predicted_dates is None or max_days_past_cutoff is None:
+        return CutoffSelection(upto, n_after_cutoff, 0, 0)
+
+    grace = int(max_days_past_cutoff)
+    if grace < 0:
+        raise ValueError(
+            f"pcp_max_predicted_days_past_cutoff must be >= 0, got "
+            f"{max_days_past_cutoff!r}. Use null to disable the filter; 0 would "
+            f"demand that no predicted date exceed the cutoff at all, which "
+            f"ordinary fit noise violates for samples collected just before it."
+        )
+    # Day granularity on both sides. ``node_dates.tsv`` carries a time
+    # (``2023-12-10 16:57:02.752815``) while the reported dates and the cutoff
+    # are dates, so comparing raw timestamps would make membership depend on the
+    # time of day chronumental happened to emit: a prediction of exactly
+    # cutoff+X at 12:00 would be excluded and the same prediction at 00:00 kept,
+    # which is a boundary nobody could reason about from the config.
+    bound = pd.Timestamp(parse_cutoff(cutoff, "cutoff")) + pd.Timedelta(days=grace)
+    kept, n_predicted_late, n_undated = [], 0, 0
+    for strain in upto:
+        predicted = predicted_dates.get(strain)
+        if predicted is None or pd.isna(predicted):
+            # Kept deliberately -- see ``n_undated_kept`` in the block above.
+            n_undated += 1
+            kept.append(strain)
+            continue
+        if pd.Timestamp(predicted).normalize() > bound:
+            n_predicted_late += 1
+        else:
+            kept.append(strain)
+    return CutoffSelection(kept, n_after_cutoff, n_predicted_late, n_undated)

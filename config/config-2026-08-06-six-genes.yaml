@@ -208,6 +208,28 @@ pcp_gene_to_fitness_gene:
 pcp_date_cutoffs:
   - "2023-01-01"
 
+# Drop a sample from a cutoff set when its chronumental *predicted* date lands
+# more than this many days after the cutoff (#151). Set to null to disable.
+#
+# Some metadata `date` values are wrong by years, so a cutoff answered from that
+# column alone admits post-cutoff genomes: 16 leaves of the v12 public tree's
+# 2023-01-01 set are JN.1/KP.3.1.1 genomes reported 2020-2022 whose predicted
+# dates land 337-570 days past the cutoff, arriving in batches that share one
+# placeholder date.
+#
+# The tolerance is not zero because the predicted date is fitted: a sample
+# genuinely collected just before the cutoff can predict past it on ordinary fit
+# noise (median |predicted - reported| is 10 days on both production trees, p95
+# 35-37). At 30 days the filter removes 823 (0.011%) and 2,693 (0.018%) leaves
+# from the two 2026-08-06 trees' 2023-01-01 sets while still catching every one
+# of the 36 / 272 that sit more than 90 days past the cutoff. Revisit it if
+# `chronumental_kwargs` changes the date prior.
+#
+# Applies to the cutoff path only. The full-tree outputs never read the reported
+# date -- clade rosters come from the clade column and the windowed path keys on
+# predicted dates -- so filtering there would move every output and fix nothing.
+pcp_max_predicted_days_past_cutoff: 30
+
 # =============================================================================
 # Clade Founder Configuration
 # =============================================================================

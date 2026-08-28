@@ -158,6 +158,37 @@ at `min_clade_size=0` and mutation-tests the floor in `modules/cutoffs.py`.
 `mat/cutoffs/{clade}_samples.txt` for an `included=False` row as a stale
 intermediate.
 
+**Cutoff selection also drops samples the tree dates past the cutoff
+([#151](https://github.com/matsengrp/mat-pcp/issues/151)).** Some metadata
+collection dates are wrong by years, so answering a cutoff from the `date` column
+alone admits post-cutoff genomes: on the v12 public tree's 2023-01-01 set, 16
+leaves are JN.1 / KP.3.1.1 genomes — lineages that did not exist in 2023 —
+reported 2020–2022 and predicted 337–570 days past the cutoff, arriving in
+batches that share one placeholder date. The new optional
+`pcp_max_predicted_days_past_cutoff` (shipped at **30**) drops a sample whose
+chronumental predicted date lands more than that many days after the cutoff.
+
+The tolerance is non-zero because the predicted date is fitted: median
+|predicted − reported| is 10 days on both production trees (p95 35–37), so a
+sample collected days before the cutoff can predict past it on fit noise. At 30
+days the filter removes 823 (0.011%) and 2,693 (0.018%) leaves from the two
+2026-08-06 trees, catching every one of the 36 / 272 that sit more than 90 days
+past the cutoff. It is deliberately tested against the **cutoff** rather than
+against the reported date: dropping on mere disagreement is a broader filter that
+also removes records whose dates disagree while both sit before the cutoff, which
+are untrustworthy but not leaks.
+
+Three consequences for consumers. `pcps/cutoff_summary.csv` gains
+`n_predicted_late_dropped`, `n_undated_kept` and `max_predicted_days_past_cutoff`,
+so the published set records the bound that produced it. The cutoff sets now
+depend on the **node dating**, so changing `chronumental_kwargs` changes which
+PCPs exist — the filter is confined to the cutoff path because the full-tree
+outputs never read the reported date. And a cutoff equal to `max_leaf_date`
+reproduces the full tree byte-for-byte only when the filter removes nothing;
+`validate_cutoff_pcps` reads the drop count and asserts byte-equality or
+byte-inequality accordingly rather than assuming either. At the shipped bound the
+filter removes nothing on the test data, so CI outputs do not move.
+
 **Known leakage, stated rather than hidden.** `{gene}_codon_sites_to_mask.txt` and
 `pcps/{gene}/censored_mutations.csv` are *not* recomputed per cutoff; they come
 from the full tree's count table and from `data/usher_masked_sites.yaml`. A strict
