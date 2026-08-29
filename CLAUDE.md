@@ -786,7 +786,7 @@ mat-pcp/
     and it is a strictly broader filter: it also removes records whose dates
     disagree while *both* sit comfortably before the cutoff, which are
     untrustworthy but not leaks. What a temporal holdout can be wrong about is
-    admitting a post-cutoff genome, so that is what is tested -- 823 / 2,693
+    admitting a post-cutoff genome, so that is what is tested -- 826 / 2,695
     leaves on the two production trees against 2,879 / 13,839 under the
     discordance reading. It also makes the predicate cutoff-dependent: the same
     strain is legitimately kept at a later cutoff and dropped at an earlier one.
@@ -796,8 +796,16 @@ mat-pcp/
     the `--variance_dates 30` prior, so a sample genuinely collected days before
     the cutoff predicts past it on ordinary noise. 30 days removes 0.011% /
     0.018% of leaves while still catching every one of the 36 / 272 that sit
-    more than 90 days past. It is a config value rather than a constant because
-    it is a property of the date prior, which pattern 13 has already moved once.
+    more than 90 days past. *What it removes is whole clades, not a thin
+    margin.* Every clade the filter touched went to **exactly zero**
+    pre-cutoff samples rather than merely fewer, so the 2023-01-01 rosters
+    fell from 38 to 33 included clades on the public tree and 43 to 34 on
+    gisaid-and-public -- 24A (JN.1) had 14 leaves by reported date and none
+    survive. That is the shape to expect: a lineage that did not exist yet
+    has no legitimate pre-cutoff sample, so a clade surviving with a
+    *handful* of leaves would be the surprising outcome, not this. The bound
+    is a config value rather than a constant because it is a property of the
+    date prior, which pattern 13 has already moved once.
 
     The comparison is **day-granular on both sides**. `node_dates.tsv` carries a
     time (`2023-12-10 16:57:02.752815`) while the cutoff is a date, so comparing

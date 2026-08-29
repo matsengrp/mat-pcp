@@ -171,7 +171,7 @@ chronumental predicted date lands more than that many days after the cutoff.
 The tolerance is non-zero because the predicted date is fitted: median
 |predicted − reported| is 10 days on both production trees (p95 35–37), so a
 sample collected days before the cutoff can predict past it on fit noise. At 30
-days the filter removes 823 (0.011%) and 2,693 (0.018%) leaves from the two
+days the filter removes 826 (0.011%) and 2,695 (0.018%) leaves from the two
 2026-08-06 trees, catching every one of the 36 / 272 that sit more than 90 days
 past the cutoff. It is deliberately tested against the **cutoff** rather than
 against the reported date: dropping on mere disagreement is a broader filter that
