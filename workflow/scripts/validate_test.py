@@ -1895,6 +1895,125 @@ def validate_subsample_arms(output_dir):
                     f"tree's fit unchanged."
                 )
 
+    # Check 5: grid invariance. `build_count_table` enumerates the full mutation
+    # grid from `clade_founder_nts.csv` and fills 0, so an arm's grid must differ
+    # from the full tree's in the *count* columns and in nothing else. Comparing
+    # every other column row-for-row catches a clade dropping out of the grid, a
+    # founder changing, `site_include_range` applied differently -- and, because
+    # `exclude` and `masked_in_usher` are among the compared columns, it is also
+    # the check that shows the shared codon mask is a no-op rather than a leak.
+    #
+    # Restricted to the clades the arm kept: an *excluding* arm legitimately has
+    # fewer clades, and comparing the whole file would report that intended
+    # difference as a grid corruption. The clade set itself is already checked
+    # above, so nothing is lost by keying on it here.
+    COUNT_COLUMNS = [
+        "actual_count",
+        "count_terminal",
+        "count_non_terminal",
+        "mean_log_size",
+    ]
+    GRID_KEY = ["clade", "subset", "nt_site", "nt_mutation", "gene"]
+    n_grids = 0
+    full_grid_path = os.path.join(output_dir, "counts_all.csv")
+    for arm in sorted(roster["arm"].unique()):
+        arm_grid_path = os.path.join(output_dir, arm, "counts_all.csv")
+        if not (os.path.isfile(full_grid_path) and os.path.isfile(arm_grid_path)):
+            continue
+        full_grid = pd.read_csv(full_grid_path)
+        arm_grid = pd.read_csv(arm_grid_path)
+        kept = set(arm_grid["clade"].unique())
+        full_kept = full_grid[full_grid["clade"].isin(kept)]
+        compare_cols = [c for c in full_grid.columns if c not in COUNT_COLUMNS]
+        if list(arm_grid.columns) != list(full_grid.columns):
+            diffs.append(
+                f"{arm}: counts_all.csv columns differ from the full tree's "
+                f"({list(arm_grid.columns)} vs {list(full_grid.columns)})"
+            )
+            continue
+        if len(arm_grid) != len(full_kept):
+            diffs.append(
+                f"{arm}: counts_all.csv has {len(arm_grid)} rows over its "
+                f"{len(kept)} clade(s), but the full tree has {len(full_kept)} "
+                f"rows over the same clades. The grid is enumerated from the "
+                f"founders and filled with 0, so it must not depend on "
+                f"sampling depth."
+            )
+            continue
+        n_grids += 1
+        left = full_kept[compare_cols].sort_values(GRID_KEY).reset_index(drop=True)
+        right = arm_grid[compare_cols].sort_values(GRID_KEY).reset_index(drop=True)
+        unequal = [
+            c for c in compare_cols
+            if not left[c].equals(right[c])
+            and not (left[c].isna() & right[c].isna() | (left[c] == right[c])).all()
+        ]
+        if unequal:
+            first = unequal[0]
+            bad = left.index[left[first] != right[first]]
+            where = left.loc[bad[0], GRID_KEY].to_dict() if len(bad) else {}
+            diffs.append(
+                f"{arm}: counts_all.csv differs from the full tree's outside the "
+                f"count columns, in {unequal}. First disagreement at {where}: "
+                f"full={left.loc[bad[0], first] if len(bad) else '?'!r} vs "
+                f"arm={right.loc[bad[0], first] if len(bad) else '?'!r}."
+            )
+
+    # Check 4: the per-clade normalization identity. `evol_time` is set so that
+    # total expected synonymous count equals total observed synonymous count at
+    # the training sites, and `genome_composition` counts *grid* rows -- which
+    # check 5 just established are invariant to sampling depth. So
+    # `K = sum(expected) / sum(actual)` over each clade's synonymous training
+    # rows is a property of the grid and the shared rates alone, and must not
+    # move with the sampling fraction. It is asserted per clade rather than
+    # pooled: pooling lets one clade's K rise while another's falls.
+    #
+    # This is what makes an arm's fitness effects comparable to full depth at
+    # all. A K that moved would mean the arm's expected counts were normalized
+    # against a different total, so every `delta_fitness_ratio` would be shifted
+    # by a factor no correlation against full depth could attribute.
+    n_identities = 0
+    full_exp_path = os.path.join(output_dir, "fitness", "expected_counts_by_clade.csv")
+
+    def _clade_K(path):
+        d = pd.read_csv(path)
+        syn = d[(d["synonymous"] == True) & (d["exclude"] == False)]  # noqa: E712
+        grouped = syn.groupby("clade")[["expected_count", "actual_count"]].sum()
+        return {
+            clade: row["expected_count"] / row["actual_count"]
+            for clade, row in grouped.iterrows()
+            if row["actual_count"] > 0
+        }
+
+    if os.path.isfile(full_exp_path):
+        full_K = _clade_K(full_exp_path)
+        for arm in sorted(roster["arm"].unique()):
+            arm_exp_path = os.path.join(
+                output_dir, "fitness", arm, "expected_counts_by_clade.csv"
+            )
+            if not os.path.isfile(arm_exp_path):
+                continue
+            arm_K = _clade_K(arm_exp_path)
+            for clade, k_arm in sorted(arm_K.items()):
+                if clade not in full_K:
+                    diffs.append(
+                        f"{arm}: clade {clade} has a normalization constant but "
+                        f"the full tree does not, so the two cannot be compared"
+                    )
+                    continue
+                k_full = full_K[clade]
+                n_identities += 1
+                if abs(k_arm - k_full) > 1e-10 * max(abs(k_full), 1.0):
+                    diffs.append(
+                        f"{arm}, clade {clade}: normalization constant "
+                        f"sum(expected)/sum(actual) over synonymous training "
+                        f"rows is {k_arm!r} against the full tree's {k_full!r} "
+                        f"(relative difference "
+                        f"{abs(k_arm - k_full) / abs(k_full):.3e}). The grid is "
+                        f"invariant to sampling depth and the rates are shared, "
+                        f"so this must not move."
+                    )
+
     # A degenerate arm's aggregates must be byte-identical to the full tree's.
     n_compared = 0
     for arm in sorted(set(degenerate_arms)):
@@ -1953,7 +2072,9 @@ def validate_subsample_arms(output_dir):
             f"{len(degenerate_arms)} degenerate "
             f"({n_compared} file(s) byte-compared), {len(excluding_arms)} "
             f"excluding a clade; {n_included} included and {n_excluded} "
-            f"excluded (arm, clade) pair(s)"
+            f"excluded (arm, clade) pair(s); {n_grids} grid(s) invariant "
+            f"outside the count columns; {n_identities} per-clade "
+            f"normalization constant(s) unmoved"
         )
     return diffs, note
 

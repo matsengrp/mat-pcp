@@ -1000,6 +1000,29 @@ mat-pcp/
     in both directions, asserts the arm directory holds *only* unit clades,
     byte-compares the degenerate arm, and reports **VACUOUS** rather than success
     when no arm thinned a surviving clade.
+
+    *Two invariants make an arm comparable to full depth at all, and both must be
+    asserted rather than assumed.* `build_count_table` enumerates the grid from
+    `clade_founder_nts.csv` and fills 0, so an arm's `counts_all.csv` must differ
+    from the full tree's in the **count columns and nothing else** -- compared
+    row-for-row over the clades the arm kept, which is also what shows the shared
+    codon mask is a no-op rather than a leak, since `exclude` and
+    `masked_in_usher` are among the compared columns. And because
+    `genome_composition` counts *grid* rows, the per-clade normalization
+    `K = sum(expected) / sum(actual)` over synonymous training rows is a property
+    of the grid and the shared rates alone: it must not move with the sampling
+    fraction, to 1e-10 relative. A K that moved would shift every
+    `delta_fitness_ratio` by a factor no correlation against full depth could
+    attribute -- the arm would look like a degraded estimate rather than a
+    renormalized one. Asserted **per clade**, since pooling lets one clade's K
+    rise while another's falls. Both were mutation-tested against corrupted
+    output (one flipped `exclude` value; `expected_count` scaled by 1.001) rather
+    than trusted because they passed. The third leg, that the GLM is not refit, is
+    checked two ways: no `glm/{arm}/{curated_counts,master_table,rates_table}*`
+    file exists, and a dry run on an arm target schedules none of those rules
+    while `expected_counts_by_clade` reads the **full-tree**
+    `glm/curated_counts_{era}.csv` -- verified, with the three shared files'
+    md5s unchanged across an arm rebuild.
     See [#151](https://github.com/matsengrp/mat-pcp/issues/151).
 
 
