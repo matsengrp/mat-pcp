@@ -17,6 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `export_newick`, `chronumental`, `chronumental_qc` (tips **and** internal nodes, #139), `chronumental_rtt_plot` (#146), `window_subtree_counts`, `get_ref_fasta`, `ref_coding_sites` |
 | 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade`, `censor_table` (per-clade DASM censor table, #144) |
 | 3b | Date-Cutoff PCPs (#149) | `get_clades_by_cutoff` (checkpoint), `cutoff_pcp_summary`, `samples_upto_cutoff`, `mat_clade_subset_upto`, `extract_pcps_by_clade_upto`, `aggregate_clade_pcps_upto`, `aggregate_filtered_branches_upto`, `curate_pcps_for_dasm_upto`, `curate_all_pcps_for_dasm_upto`, `dasm_ready_pcps_all_clades_upto` |
+| 3c | Subsampling Arms (#151) | `subsample_clade_samples`, `subsample_summary`; everything else an arm rebuilds is an existing rule reached through the optional `{arm_dir}` prefix |
 | 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
 | 5 | Unified Count Table | `build_count_table` (full mutation grid + actual counts + masking flags, via `modules/masking.py`) |
 | 6 | GLM Rate Estimation | `annotate_counts`, `curate_counts`, `master_table`, `get_rates_table`, plus their per-era counterparts `curate_counts_era`, `master_table_era`, `get_rates_table_era` and `era_fit_summary` (#137), `window_expected_counts` (windowed expected counts + `delta_fitness_ratio`; stays on the **pooled** table) |
@@ -95,7 +96,7 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 ### Testing
 ```bash
 # Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
-# all thirteen before the pipeline steps)
+# all fourteen before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 pixi run python tests/test_clade_founder_guards.py
 pixi run python tests/test_founder_codon_background.py
@@ -109,6 +110,7 @@ pixi run python tests/test_node_date_qc.py
 pixi run python tests/test_date_parsing.py
 pixi run python tests/test_censor_table.py
 pixi run python tests/test_pcp_date_cutoffs.py
+pixi run python tests/test_clade_subsamples.py
 
 # Half B of the bte test needs the Snakemake-built bte env, so it runs after a
 # pipeline run; --require-bte makes a missing env a failure rather than a skip.
@@ -131,6 +133,18 @@ pixi run python workflow/scripts/validate_test.py
 > rewrites every line and buries a three-line content edit in a ~2,200-line
 > whitespace diff. Nothing errors and the rendered text is identical, so it is only
 > visible in `git diff --stat`. Check with `file CLAUDE.md` after scripted edits.
+>
+> **The `.py` files are mixed too, so never assume.** 29 of the tracked Python
+> files are CRLF, including `workflow/scripts/count_mutations.py`,
+> `annotate_counts.py`, `expected_counts_by_clade.py`,
+> `get_problematic_sites.py` and `workflow/modules/{glm,rates,load,aamutfit,
+> probfit}.py`; the rest — including `pcp_from_tree.py`, `validate_test.py` and
+> everything under `tests/` — are LF. There is no rule that predicts which, so a
+> scripted edit must read each file's ending:
+> `raw = path.read_bytes(); crlf = b"\r\n" in raw` → edit the decoded,
+> LF-normalized text → write back with the original ending. Enumerate the
+> current set with
+> `for f in $(git ls-files '*.py'); do file -b "$f" | grep -q CRLF && echo "$f"; done`.
 
 ```bash
 
@@ -872,6 +886,123 @@ mat-pcp/
 
     See [#149](https://github.com/matsengrp/mat-pcp/issues/149).
 
+15. **A subsampled arm thins its unit and reuses everything else, and the
+    degenerate arm is the ordinary path rather than a second implementation.**
+    Measuring when a pooled model beats per-clade counts needs the *same* clade
+    re-estimated at several sampling depths (#151, for dasm2-experiments#1130).
+    An **arm** is one sampling fraction applied to one **unit** of clades, and
+    six things about the shape are load-bearing.
+
+    *The hook is one file, which is what makes both arms move together.*
+    `mat/clades/{clade}_samples.txt` is the only input determining a clade's
+    subtree: `translate_mat`, `mat_sample_paths` and `extract_pcps_by_clade` all
+    read `mat_clade_subset` and nothing below it re-reads the full tree. So
+    `subsample_clade_samples` is the *only* rule an arm adds — everything else
+    is an existing rule reached through an optional `{arm_dir}` prefix, and the
+    counts arm and the PCP arm cannot drift apart because there is no second
+    wiring. This diverges from #149, which duplicated nine `_upto` rules; that
+    was affordable for a PCP-only feature and is not for one spanning ~21 rules,
+    and it is why #149's `_upto` family and #151's `{arm_dir}` coexist as two
+    mechanisms for one shape.
+
+    *The optional prefix is what buys byte-identity by construction.*
+    Snakemake has no optional path components, so `arm_dir` is declared as
+    `|(?:frac)_[A-Za-z0-9._+-]+/` — the empty alternative *is* the full-tree
+    path. `sampling_fractions: [1.0]` therefore reproduces the full tree
+    byte-for-byte through the same rule bodies, rather than through a second
+    rule set that has to be kept in sync. Two details make that identity real:
+    the draw sorts its chosen indices back into the input file's order (a
+    sampler emitting picks in draw order is still a correct uniform sample and
+    would silently retire the check), and gzip's FNAME field carries only the
+    *basename*, so a same-named file in a different directory compresses to the
+    same bytes — verified, and the reason byte-equality is available at all
+    given `pcpio.PCP_CSV_COMPRESSION`'s `mtime=0` (pattern 9).
+
+    *There are two fan-outs, not one, and conflating them thins a clade the
+    config never named.* Anything sliced out of the arm's own re-aggregated grid
+    (`fitness/{arm}/...` downward) takes the arm prefix for **every** clade in
+    the roster — `per_clade_inputs`. Anything derived from a clade's **subtree**
+    (`mutation_counts`, `mutations/`, `pcps/`) takes it only for *unit* clades
+    and reads the full tree's file otherwise — `per_unit_clade_inputs`. Using
+    the grid-derived fan-out for the subtree-derived paths requests
+    `mat/clades/{arm}/19A_samples.txt` for a clade the config never named, and
+    `subsample_clade_samples` would dutifully thin it: an arm whose "unchanged"
+    clades are quietly subsampled, with every count still well-formed. The
+    sampler now raises on a non-unit clade as independent defence. The split is
+    also most of the cost saving — an arm re-*aggregates* all 56 clades because
+    `build_count_table` needs the whole grid, but re-*counts* only the unit.
+
+    *`glm/` straddles the reuse line and the cut has to be deliberate.*
+    `glm/{arm}/annotated_counts.csv` is count-bearing and is rebuilt;
+    `glm/curated_counts.csv` is the GLM's *training set* and is not. But the
+    chain `count_mutations_clade → ... → annotate_counts → curate_counts →
+    master_table → rates_table.csv` makes refitting the **default**, so
+    `curate_counts`, `curate_counts_era` and `get_problematic_sites` are pinned
+    to literal full-tree paths rather than `rules.annotate_counts.output` /
+    `rules.build_count_table.output` — those references now carry `{arm_dir}`
+    and would drag the whole GLM into every arm. A refit arm would still produce
+    well-formed tables whose expected counts were normalized against rates
+    fitted to the thinned data, so `validate_subsample_arms` asserts no
+    `glm/{arm}/{curated_counts,master_table,rates_table}*` exists. Sharing the
+    fit is conservative for the hypothesis under test: it can only make the
+    counts estimator look better. The per-clade `evol_time` normalization *does*
+    track the subsample, which is the intended effect.
+
+    *A nominal fraction is not an evidence cut, and the two thresholds differ in
+    kind.* A branch survives whenever **any** sample below it is retained, so
+    `E[retained](p) = Σ k_node (1 - (1-p)^n_node)` and retention is concave: on
+    the v11 gisaid tree 21J's retained/fraction runs 1.79x at p=0.20, 2.22x at
+    0.10, 2.72x at 0.05 and 4.10x at 0.01, making 1% a ~24x evidence cut rather
+    than a 100x one. Every downstream number must key to
+    `subsample_summary.csv`'s measured retention, never to the configured
+    percent. Separately: a unit clade thinned below `min_clade_size` is
+    **excluded and recorded** (`get_clades` applies that threshold to the full
+    metadata and so cannot see a clade that falls below it only after thinning),
+    while one thinned to **zero** is a **hard failure** — `matUtils extract -s`
+    on an empty sample list is undefined. Collapsing those two into one branch
+    is #149's `MIN_SAMPLES_AT_CUTOFF` story restated: there, `min_clade_size: 0`
+    made the skip-and-record mechanism inert on exactly the configs it was
+    written for.
+
+    *Per-limit branch attribution needs its own file, and one precedence order.*
+    `subsample_summary.csv` reports which limit cost an arm its branches,
+    because realized retention falls below the closed form for two *separable*
+    reasons — QC drops and same-site collapse — that one aggregate "branches
+    dropped" number cannot tell apart. Neither producer could say: `fails_filters`
+    returned a bool with early returns and `count_mutations.py` chained three
+    `.query()` calls. Both now attribute to one reason in `failure_reason`'s
+    order, which matters because the limits are ANDed — the order changes only
+    the attribution, never which branches survive — and a different order on the
+    two sides would file one branch under two reasons and make the counts and
+    PCP halves of the summary incomparable. The tally is a **new sidecar file**
+    (`branch_qc/{clade}.csv`) rather than a column on
+    `{clade}_filtered_branches.csv`, because a new file is covered by the
+    additive-output carve-out and a new column is a schema change; and it lives
+    in its own directory because `mutation_counts/{clade}_branch_qc.csv` is
+    itself a valid `{arm_dir}{clade}.csv` match with `clade="19A_branch_qc"`, so
+    two outputs of one rule would claim the same path. It is declared on the
+    `_upto` rule too even though nothing reads it there: a sidecar present under
+    `frac_*/` and absent under `upto_*/` is precisely the absence-vs-wiring-
+    mistake ambiguity `cutoff_summary.csv` exists to prevent.
+
+    **No shipped production config sets `clade_subsamples`, so no production run
+    can check any of this**, and `config_test_data.yaml`'s clade sizes hide two
+    more things: `round(frac * n)` and `floor(frac * n)` agree for 19B at 0.2 and
+    20A at 0.5, and no config carries two spellings of one fraction.
+    `tests/test_clade_subsamples.py` therefore drives the real
+    `subsample_clade_samples.py` and `subsample_summary.py` against fixtures
+    built so each failure moves a sample (`n=7` at `0.5`, where `round` gives 4
+    and `floor` gives 3; a deliberately unsorted list), and mutation-tests every
+    guard by editing **`workflow/modules/subsample.py`**, not the script text —
+    patching the script would report the sampler as covered while the operator
+    implementing it sat one file away. `validate_test.py::validate_subsample_arms`
+    is the end-to-end counterpart: it reconciles the roster against the file tree
+    in both directions, asserts the arm directory holds *only* unit clades,
+    byte-compares the degenerate arm, and reports **VACUOUS** rather than success
+    when no arm thinned a surviving clade.
+    See [#151](https://github.com/matsengrp/mat-pcp/issues/151).
+
+
 ### Configuration Sections
 
 The configuration (`config/config.yaml`) is organized into:
@@ -930,6 +1061,10 @@ The configuration (`config/config.yaml`) is organized into:
      from `aamut_fitness`) and `ORF1b` (a slice of `ORF1ab`). The offset is
      re-derived from the CDS blocks and cross-checked against the configured
      value, so a stale number fails loudly.
+6b. **Clade Subsampling** (#151): `clade_subsamples` — a list of
+   `{unit, sampling_fractions, seed}` entries, each expanding to one **arm** per
+   fraction. Empty in every production config; arms are launched by naming their
+   paths. See pattern 15.
 7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources),
    `roemer_nextstrain_to_pango` (Nextstrain clade → Pango lineage, for clades not
    in the Neher JSON), `allow_reference_identical_founders` (optional; clades
@@ -952,7 +1087,8 @@ The configuration (`config/config.yaml`) is organized into:
 Results are stored per tree in `{output_root}/{label}_{version}/`:
 - `mat/`: Filtered trees, clade subtrees
 - `windows/`: Sliding-window subtree counts + founders (Phase 2) + per-window expected counts / `delta_fitness_ratio` trajectory (Phase 3)
-- `pcps/`: Curated parent-child pairs, plus each gene's `censored_mutations.csv` DASM training censor table and its `.clades.txt` roster (#144), each gene's `upto_{cutoff}/` date-truncated PCP families and the `cutoff_summary.csv` roster (#149)
+- `pcps/`: Curated parent-child pairs, plus each gene's `censored_mutations.csv` DASM training censor table and its `.clades.txt` roster (#144), each gene's `upto_{cutoff}/` date-truncated PCP families and the `cutoff_summary.csv` roster (#149), each gene's `{arm}/` reduced-depth PCP families and `branch_qc/{clade}.csv` tallies (#151)
+- `subsample_summary.csv` (output root): the subsampling-arm roster and realized retention (#151)
 - `ref/`: Reference genome, coding sites
 - `mutation_counts/`: Per-clade and aggregated counts
 - `clade_founders/`: Founder sequences and mutations

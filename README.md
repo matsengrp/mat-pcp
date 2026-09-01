@@ -141,6 +141,9 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `<gene>_codon_sites_to_mask.txt` | Problematic codon sites per configured protein (e.g. `S_codon_sites_to_mask.txt`) |
 | `pcps/{gene}/censored_mutations.csv` | Per-clade, per-nucleotide censor table for DASM training (v11+, #144), with a `censored_mutations.clades.txt` clade roster alongside. Carries the clade-specific UShER masks the codon mask drops; a training run applies **both** |
 | `pcps/{gene}/upto_{cutoff}/…` | The whole per-gene PCP family rebuilt from the subtree of samples collected at or before `{cutoff}` (v12+, [#149](https://github.com/matsengrp/mat-pcp/issues/149)). Filenames match the full-tree ones, so a consumer just points at a different root. Re-extracted, **not** a row filter — `matUtils` collapses unifurcations and merges their mutations, so a cutoff table is not a subset of the full one |
+| `{arm}/…`, `pcps/{gene}/{arm}/…`, `aamut_fitness/{arm}/…` | The per-clade counts **and** PCP families rebuilt from subtrees re-extracted at a configured fraction of each unit clade's samples (v12+, [#151](https://github.com/matsengrp/mat-pcp/issues/151)). `{arm}` is an *optional* path segment inserted before the basename, so filenames match the full-tree ones. Only the configured unit is thinned; every other clade's per-clade files are the full tree's, read in place |
+| `subsample_summary.csv` | The arm roster: one row per (arm, clade) — `gene` empty — plus one per (arm, clade, gene), **including the pairs that were not built**. Carries the *realized* retention, because a nominal fraction is not an evidence cut: 1% of 21J's samples keeps 4.1% of its nucleotide mutations (v12+) |
+| `mutation_counts/branch_qc/{clade}.csv`, `pcps/{gene}/branch_qc/{clade}.csv` | Per-limit branch-QC tallies plus the pre-QC mutation-count histogram, in long format. Written on the full-tree path and under every `upto_{cutoff}/` and `{arm}/` prefix (v12+) |
 | `pcps/cutoff_summary.csv` | The cutoff roster: one row per (cutoff, clade) **including the pairs that were not built**, so a clade skipped for being below `min_clade_size` at that date is distinguishable from a wiring mistake (v12+) |
 | `fitness/expected_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
@@ -319,6 +322,14 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 |-----------|-------------|---------|
 | `pcp_date_cutoffs` | List of `YYYY-MM-DD` dates. For each, the whole per-gene PCP family is rebuilt under `pcps/{gene}/upto_{cutoff}/` from the samples collected at or before it ([#149](https://github.com/matsengrp/mat-pcp/issues/149)). Per-tree overridable, like `max_leaf_date`. Each entry must postdate `min_leaf_date` and must not exceed the tree's `max_leaf_date`; a cutoff *equal* to `max_leaf_date` is the degenerate case and reproduces the full tree byte-for-byte | `[]` |
 | `pcp_max_predicted_days_past_cutoff` | Drop a sample from a cutoff set when its chronumental predicted date lands more than this many days after that cutoff ([#149](https://github.com/matsengrp/mat-pcp/issues/149)). Some metadata `date` values are wrong by years, so the `date` column alone admits post-cutoff genomes. The tolerance is non-zero because the predicted date is fitted (median \|predicted − reported\| is 10 days on the production trees, p95 35–37); at 30 it removes 0.011% / 0.018% of leaves. Set to `null` to disable. Applies to the cutoff path only | `30` |
+
+### Clade Subtrees at Reduced Sampling Depth
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `clade_subsamples` | List of entries, each `{unit: [clade, ...], sampling_fractions: [float, ...], seed: int}`. Each (unit, seed, fraction) is one **arm**: the per-clade counts and PCP families rebuilt from subtrees re-extracted at that fraction of each unit clade's samples ([#151](https://github.com/matsengrp/mat-pcp/issues/151)). Arms are named `frac_{unit joined by -}_{seed}_{fraction in basis points}bp`. Fractions must satisfy `0 < frac <= 1.0`; `1.0` is the degenerate arm and reproduces the full tree byte-for-byte. A unit clade thinned below `min_clade_size` is excluded from the arm and recorded in `subsample_summary.csv`; one thinned to **zero** samples is a hard failure, since `matUtils extract -s` on an empty list is undefined. Clade names must be dash-free (the arm name joins the unit with `-`) and must be clades this tree actually processes. Empty in every production config — arms are launched by naming their paths, since four full-size arms cost ~44 wall-hours | `[]` |
+
+The GLM neutral fit, the clade founders and each gene's codon mask and censor table are **not** recomputed per arm. The shared fit is deliberate and conservative (it can only make the counts estimator look better than genuinely thin sampling would); the shared mask is a no-op rather than a leak, since it is derived from config, the ProblematicSites VCF, `usher_masked_sites.yaml` and the founder grid, never from a count column.
 
 ### Window Fitness (sliding time windows)
 
@@ -543,8 +554,11 @@ results/
 │       ├── all_pcps_dasm_ready.csv.gz # DASM-training-ready aggregate (v2+)
 │       ├── pcp_curation_report.txt    # PCP curation statistics
 │       ├── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
-│       └── upto_{cutoff}/             # The same family, samples collected <= {cutoff} (v12+, #149)
+│       ├── branch_qc/{clade}.csv      # Per-limit branch QC tally + pre-QC histogram (v12+, #151)
+│       ├── upto_{cutoff}/             # The same family, samples collected <= {cutoff} (v12+, #149)
+│       └── {arm}/                     # The same family at reduced sampling depth (v12+, #151)
 │   └── cutoff_summary.csv         # Cutoff roster, including the (cutoff, clade) pairs skipped
+├── subsample_summary.csv          # Arm roster + realized retention, including the pairs skipped (v12+, #151)
 ├── ref/
 │   ├── ref.fa                     # Reference genome (FASTA)
 │   ├── original_ref.gtf           # Original GTF annotations

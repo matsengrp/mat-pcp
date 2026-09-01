@@ -253,6 +253,20 @@ jobs:
       run: |
         pixi run python tests/test_pcp_date_cutoffs.py
 
+    # The clade-subsampling arms (#151). The CI pipeline run covers the roster,
+    # the degenerate arm's byte-equality and a clade thinned below
+    # min_clade_size, but it cannot see two things. `config_test_data.yaml`'s
+    # clade sizes make `round(frac * n)` and `floor(frac * n)` agree (19B at 0.2,
+    # 20A at 0.5), so the rounding rule is unobservable end-to-end; and no config
+    # carries two spellings of one fraction, so the basis-point encoding that
+    # keeps `0.10` and `0.1` from naming two arms is never exercised. Both are
+    # checked here on fixtures built so each failure moves a sample (n=7 at 0.5,
+    # where round gives 4 and floor gives 3), against a deliberately broken
+    # `workflow/modules/subsample.py` rather than patched script text.
+    - name: Verify the clade-subsample draw, naming and guards
+      run: |
+        pixi run python tests/test_clade_subsamples.py
+
     # The steps above name each test file so a failure points at a readable log.
     # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]
     # is empty, so a *new* tests/test_*.py runs zero times and CI stays green --
@@ -305,7 +319,15 @@ jobs:
           --configfile config/config_test_data.yaml
 
     - name: Run test pipeline
-      timeout-minutes: 30
+      # Raised from 30 with #151. The three clade-subsampling arms in
+      # `config_test_data.yaml` add 13.7 min of benchmarked job time to a 6.0 min
+      # baseline (measured on the dev node; `ntmut_fitness_by_clade` at ~72 s per
+      # (arm, clade) is ~11 min of it), so the margin against the old bound had
+      # fallen to roughly 2x once runner speed and conda setup are allowed for.
+      # The arms are not trimmed to fit because each covers a property nothing
+      # else does: one is degenerate (the byte-identity check), one truncates,
+      # and one thins a clade below `min_clade_size` so it drops out of the grid.
+      timeout-minutes: 45
       run: |
         # Ensure snakemake's conda uses our channel configuration
         export CONDARC="$HOME/.condarc"

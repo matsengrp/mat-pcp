@@ -18,6 +18,74 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### Unreleased (no version bump)
+
+#### Counts and PCPs for clade subtrees at reduced sampling depth
+
+[#151](https://github.com/matsengrp/mat-pcp/issues/151). Additive by the
+`CLAUDE.md` carve-out: `{arm_dir}` is an *optional* path segment, so every
+existing output path is byte-for-byte unchanged — pinned by a degenerate
+`sampling_fractions: [1.0]` arm rather than by inspection. No existing schema is
+read or moved, and the arm rules read one existing output
+(`glm/curated_counts*.csv`) without changing it. Ships no-bump and rides the next
+schema-breaking bump.
+
+**New config section.** `clade_subsamples` — a list of entries, each thinning a
+*unit* of clades to a list of sampling fractions:
+
+```yaml
+clade_subsamples:
+  - unit: [21J, 21I]   # a founder neighbourhood, not one clade
+    sampling_fractions: [0.01, 0.05, 0.10, 0.20]
+    seed: 0
+```
+
+Each `(unit, seed, fraction)` is one **arm**, named
+`frac_{unit joined by -}_{seed}_{fraction in basis points}bp` (e.g.
+`frac_21J-21I_0_1000bp`). Empty in every production config; the arms are launched
+by naming their paths, since four full-size arms cost ~44 wall-hours.
+
+**New outputs.** Per arm, under an inserted `{arm}/` path segment:
+`mat/clades/{arm}/`, `mutations/{arm}/`, `mutation_counts/{arm}/`,
+`{arm}/counts_all.csv`, `glm/{arm}/annotated_counts.csv`, `fitness/{arm}/`,
+`aamut_fitness/{arm}/` and `pcps/{gene}/{arm}/`. Plus `subsample_summary.csv` at
+the output root, naming every `(arm, clade)` pair with `included` true/false and
+the *realized* retention — samples, branches and nucleotide mutations — because a
+nominal fraction is not an evidence cut (1% of 21J's samples keeps 4.1% of its
+nucleotide mutations).
+
+**New sidecar on the existing paths.** `mutation_counts/branch_qc/{clade}.csv`
+and `pcps/{gene}/branch_qc/{clade}.csv` (and the `upto_{cutoff}/` and `{arm}/`
+counterparts) tally, per branch-QC limit, how many branches it dropped, plus the
+pre-QC mutation-count histogram. Additive: nothing existing reads them. They
+exist because realized retention falls below the closed form for two separable
+reasons — QC drops and same-site collapse — which one aggregate "branches
+dropped" number cannot tell apart.
+
+**What an arm does not rebuild.** The GLM neutral fit
+(`glm/curated_counts*.csv`, `glm/master_table*.csv`, `rates_table*.csv`), the
+clade founders, `ref/`, `mat/node_dates*`, `windows/`, and each gene's codon mask
+and censor table. The fit being shared hands the counts arm full-tree neutral
+information it would not have if the clade were genuinely this thinly sampled,
+which is conservative for the hypothesis being tested. The codon mask being
+shared is a *no-op* rather than a leak — it is derived from config, the
+ProblematicSites VCF, `usher_masked_sites.yaml` and the founder grid, never from
+a count column — unlike #149's temporal carve-out.
+
+**Operational note.** `pcp_from_tree.py` and `count_mutations.py` changed, so
+snakemake's `code` trigger marks the released v12 trees out of date. The new
+`branch_qc` sidecars are genuinely missing there and will rebuild even under
+`--rerun-triggers mtime`; that affects `extract_pcps_by_clade`,
+`extract_pcps_by_clade_upto` and `count_mutations_clade`. The count and PCP
+payloads themselves are unchanged.
+
+The three test-data arms also add **13.7 min** of benchmarked job time to a
+**6.0 min** baseline (`ntmut_fitness_by_clade` at ~72 s per (arm, clade) is ~11
+min of it), so CI's `Run test pipeline` timeout moves 30 -> 45 minutes. The arms
+are not trimmed to fit: one is degenerate (the byte-identity check), one
+truncates, and one thins a clade below `min_clade_size` so it drops out of the
+grid, and no other arm covers any of the three.
+
 ### v12
 
 **The reason for the bump is `chronumental_kwargs: --variance_dates 30`

@@ -1684,6 +1684,280 @@ def validate_cutoff_pcps(output_dir):
     return diffs, note
 
 
+def validate_subsample_arms(output_dir):
+    """The subsampling arms reconcile with their roster, in both directions.
+
+    Five properties, each of which fails silently without a check (#151).
+
+    **The skip is real, not just recorded.** ``subsample_summary.csv`` names
+    every (arm, clade) pair with ``included`` true/false, and a false row must
+    have no arm subtree, no arm counts and no arm PCPs, while a true row must
+    have all of them. Checking only the true rows would pass a run that also
+    published a clade the sizing arithmetic said to thin away; checking only the
+    file tree would pass a run whose roster omitted a clade it built -- the
+    ambiguity ("thinned away" vs "wiring mistake") the roster exists to resolve.
+
+    **An arm's samples are a subset of the clade's, of exactly the right size.**
+    Set containment over the emitted lists, ``|arm| == round(frac * n_full)``,
+    and no duplicates. This is check 1 of the issue, and it is the only
+    statement that the sampler drew from the list it was pointed at.
+
+    **A non-unit clade's per-clade files are the full tree's, byte-for-byte.**
+    An arm re-aggregates every clade but re-counts only its unit, so the
+    non-unit rows of ``mutation_counts/{arm}/aggregated.csv`` come from files
+    that were never rewritten. Asserting the arm directory contains *only* unit
+    clades is what makes that true by construction rather than by inspection --
+    and it is what would catch a fan-out that routed an untouched clade through
+    the sampler.
+
+    **A degenerate arm is byte-identical to the full tree.** An arm whose every
+    included clade retained all of its samples selected everything, so its
+    aggregates must reproduce the full-tree ones exactly. Detected from the
+    summary rather than read from the config, so this function needs no
+    knowledge of ``clade_subsamples``. Byte-equality rather than row-equality
+    because ``pcpio.PCP_CSV_COMPRESSION`` pins ``mtime=0`` (pattern 9), and
+    because order is exactly what the draw's sort and ``arm_clades``' ordering
+    are written to preserve -- equal row counts would miss a reordering.
+
+    **The GLM was not refit.** No arm may have its own ``curated_counts*.csv``,
+    ``master_table*.csv`` or ``rates_table*.csv``. The dependency chain
+    ``annotate_counts -> curate_counts -> master_table -> rates_table`` makes
+    refitting the default, so the cut has to be asserted rather than assumed:
+    a refit arm would still produce well-formed tables, and its expected counts
+    would silently be normalized against neutral rates fitted to the thinned
+    data.
+
+    If every arm turns out degenerate the result is reported as such rather than
+    as a success, for #133's reason: "every arm agreed" is true of a comparison
+    that thinned nothing.
+    """
+    import pandas as pd
+
+    summary_path = os.path.join(output_dir, "subsample_summary.csv")
+    if not os.path.isfile(summary_path):
+        return [], (
+            f"SKIPPED: no {summary_path}; this config sets no clade_subsamples"
+        )
+
+    diffs = []
+    summary = pd.read_csv(summary_path)
+    expected_cols = {
+        "arm", "unit", "seed", "sampling_fraction", "clade", "gene", "included",
+        "n_samples_full", "n_samples_arm", "sample_fraction_realized",
+        "n_nt_mutations_full", "n_nt_mutations_arm", "nt_mutation_retention",
+    }
+    missing_cols = expected_cols - set(summary.columns)
+    if missing_cols:
+        return [
+            f"subsample_summary.csv is missing column(s) {sorted(missing_cols)}"
+        ], None
+    if summary.empty:
+        return [f"{summary_path} has no rows, but the file was requested"], None
+
+    # The counts-arm rows are the per-(arm, clade) roster; the gene rows repeat
+    # each pair once per gene.
+    roster = summary[summary["gene"].isna() | (summary["gene"] == "")]
+    clades_root = os.path.join(output_dir, "mat", "clades")
+    n_included = 0
+    n_excluded = 0
+    # Three kinds of arm, kept distinct because they support different claims:
+    # a *degenerate* arm retained every sample of every clade it kept and so
+    # must be byte-identical to the full tree; a *truncating* arm actually
+    # thinned something and is the only kind that says the machinery does the
+    # thing it exists for; an *excluding* arm dropped a clade below
+    # ``min_clade_size`` and so differs from the full tree without having
+    # thinned any surviving clade. Collapsing the last two into "not
+    # degenerate" would let a run where nothing was ever thinned report success.
+    degenerate_arms = []
+    truncating_arms = set()
+    excluding_arms = set()
+
+    for arm, arm_rows in roster.groupby("arm"):
+        unit = sorted(set(str(arm_rows["unit"].iloc[0]).split("-")))
+        arm_samples_dir = os.path.join(clades_root, arm)
+        included_clades = []
+
+        for _, row in arm_rows.iterrows():
+            clade = str(row["clade"])
+            included = bool(row["included"])
+            samples_path = os.path.join(arm_samples_dir, f"{clade}_samples.txt")
+            exists = os.path.isfile(samples_path)
+
+            if included and not exists:
+                diffs.append(
+                    f"{arm}/{clade}: summary says included but {samples_path} "
+                    f"is missing"
+                )
+                continue
+            if not included:
+                n_excluded += 1
+                excluding_arms.add(arm)
+                if exists:
+                    diffs.append(
+                        f"{arm}/{clade}: summary says included=False but "
+                        f"{samples_path} exists -- a stale intermediate would be "
+                        f"read as a legitimate exclusion"
+                    )
+                # An excluded clade must also have no arm counts or PCPs.
+                stale = os.path.join(
+                    output_dir, "mutation_counts", arm, f"{clade}.csv"
+                )
+                if os.path.isfile(stale):
+                    diffs.append(
+                        f"{arm}/{clade}: summary says included=False but "
+                        f"{stale} exists"
+                    )
+                continue
+
+            n_included += 1
+            included_clades.append(clade)
+            full_path = os.path.join(clades_root, f"{clade}_samples.txt")
+            with open(full_path) as f:
+                full = [line.strip() for line in f if line.strip()]
+            with open(samples_path) as f:
+                drawn = [line.strip() for line in f if line.strip()]
+
+            if not set(drawn) <= set(full):
+                extra = sorted(set(drawn) - set(full))[:3]
+                diffs.append(
+                    f"{arm}/{clade}: drew {len(set(drawn) - set(full))} sample(s) "
+                    f"not in the clade's list, e.g. {extra}"
+                )
+            if len(set(drawn)) != len(drawn):
+                diffs.append(f"{arm}/{clade}: the drawn list has duplicates")
+
+            frac = float(row["sampling_fraction"])
+            expected_n = int(round(frac * len(full)))
+            if len(drawn) != expected_n:
+                diffs.append(
+                    f"{arm}/{clade}: drew {len(drawn)} samples, expected "
+                    f"round({frac} * {len(full)}) = {expected_n}"
+                )
+            if int(row["n_samples_arm"]) != len(drawn):
+                diffs.append(
+                    f"{arm}/{clade}: summary records n_samples_arm="
+                    f"{row['n_samples_arm']} but the file holds {len(drawn)}"
+                )
+            # Retention must run at or above the sample fraction: a branch
+            # survives whenever any sample below it does. Strictly below would
+            # mean mutations were lost that no collapse can explain.
+            if row["n_nt_mutations_full"] and float(row["n_nt_mutations_full"]) > 0:
+                retention = float(row["nt_mutation_retention"])
+                realized = float(row["sample_fraction_realized"])
+                if retention < realized - 1e-9:
+                    diffs.append(
+                        f"{arm}/{clade}: retained {retention:.4f} of the "
+                        f"nucleotide mutations from {realized:.4f} of the "
+                        f"samples; retention cannot fall below the sample "
+                        f"fraction"
+                    )
+            if len(drawn) != len(full):
+                truncating_arms.add(arm)
+
+        # Only unit clades may have arm-local per-clade files. A non-unit clade
+        # appearing here means the fan-out thinned a clade the config never
+        # named, and its "unchanged" rows are not.
+        if os.path.isdir(arm_samples_dir):
+            present = sorted(
+                name[: -len("_samples.txt")]
+                for name in os.listdir(arm_samples_dir)
+                if name.endswith("_samples.txt")
+            )
+            off_unit = [c for c in present if c not in unit]
+            if off_unit:
+                diffs.append(
+                    f"{arm}: {arm_samples_dir} holds sample lists for non-unit "
+                    f"clade(s) {off_unit}; only {unit} should be thinned"
+                )
+
+        # Degenerate only if it kept at least one clade, thinned none of them
+        # and excluded none: an arm missing a clade from its grid cannot
+        # reproduce the full tree's aggregates and must not be byte-compared.
+        if (
+            included_clades
+            and arm not in truncating_arms
+            and arm not in excluding_arms
+        ):
+            degenerate_arms.append(arm)
+
+    # The GLM must not be refit per arm.
+    for arm in sorted(roster["arm"].unique()):
+        glm_arm_dir = os.path.join(output_dir, "glm", arm)
+        if os.path.isdir(glm_arm_dir):
+            refit = sorted(
+                name for name in os.listdir(glm_arm_dir)
+                if name.startswith(("curated_counts", "master_table", "rates_table"))
+            )
+            if refit:
+                diffs.append(
+                    f"{arm}: glm/{arm}/ holds {refit}, so the neutral model was "
+                    f"refit on the thinned data. An arm must read the full "
+                    f"tree's fit unchanged."
+                )
+
+    # A degenerate arm's aggregates must be byte-identical to the full tree's.
+    n_compared = 0
+    for arm in sorted(set(degenerate_arms)):
+        pairs = [
+            (os.path.join(output_dir, "mutation_counts", "aggregated.csv"),
+             os.path.join(output_dir, "mutation_counts", arm, "aggregated.csv")),
+            (os.path.join(output_dir, "counts_all.csv"),
+             os.path.join(output_dir, arm, "counts_all.csv")),
+            (os.path.join(output_dir, "aamut_fitness", "all_aamut_fitness.csv"),
+             os.path.join(output_dir, "aamut_fitness", arm, "all_aamut_fitness.csv")),
+        ]
+        pcps_root = os.path.join(output_dir, "pcps")
+        if os.path.isdir(pcps_root):
+            for gene in sorted(os.listdir(pcps_root)):
+                gene_dir = os.path.join(pcps_root, gene)
+                if not os.path.isdir(gene_dir):
+                    continue
+                for name in ("all_pcps.csv.gz", "all_pcps_dasm_ready.csv.gz"):
+                    pairs.append((
+                        os.path.join(gene_dir, name),
+                        os.path.join(gene_dir, arm, name),
+                    ))
+        for full_path, arm_path in pairs:
+            if not (os.path.isfile(full_path) and os.path.isfile(arm_path)):
+                continue
+            n_compared += 1
+            with open(full_path, "rb") as f:
+                full_bytes = f.read()
+            with open(arm_path, "rb") as f:
+                arm_bytes = f.read()
+            if full_bytes != arm_bytes:
+                diffs.append(
+                    f"degenerate arm {arm}: {os.path.relpath(arm_path, output_dir)} "
+                    f"is not byte-identical to "
+                    f"{os.path.relpath(full_path, output_dir)} "
+                    f"({len(arm_bytes)} vs {len(full_bytes)} bytes)"
+                )
+
+    n_arms = int(roster["arm"].nunique())
+    if not truncating_arms:
+        note = (
+            f"VACUOUS: none of the {n_arms} arm(s) thinned a surviving clade, so "
+            f"nothing here compares a subsampled arm against full depth "
+            f"({len(degenerate_arms)} degenerate, {len(excluding_arms)} "
+            f"excluding a clade)"
+        )
+    elif not degenerate_arms:
+        note = (
+            f"{n_arms} arm(s): {len(truncating_arms)} truncating, but none "
+            f"degenerate -- no arm pins the byte-identity of the ordinary path "
+            f"({n_included} included and {n_excluded} excluded pair(s))"
+        )
+    else:
+        note = (
+            f"{n_arms} arm(s): {len(truncating_arms)} truncating, "
+            f"{len(degenerate_arms)} degenerate "
+            f"({n_compared} file(s) byte-compared), {len(excluding_arms)} "
+            f"excluding a clade; {n_included} included and {n_excluded} "
+            f"excluded (arm, clade) pair(s)"
+        )
+    return diffs, note
+
+
 def validate_censor_table(output_dir, yaml_path="data/usher_masked_sites.yaml"):
     """Every PCP gene's censor table is well formed and its roster is complete.
 
@@ -1945,10 +2219,11 @@ def main():
     censor_diffs, censor_summary = validate_censor_table(output_dir)
     rtt_diffs, rtt_summary = validate_root_to_tip_cloud(output_dir)
     cutoff_diffs, cutoff_summary = validate_cutoff_pcps(output_dir)
+    arm_diffs, arm_summary = validate_subsample_arms(output_dir)
     differences += (
         site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
         + orf1ab_diffs + orf1b_diffs + glm_syn_diffs + codon_bg_diffs + era_diffs
-        + censor_diffs + rtt_diffs + cutoff_diffs
+        + censor_diffs + rtt_diffs + cutoff_diffs + arm_diffs
     )
 
     if differences:
@@ -1995,6 +2270,8 @@ def main():
             print(f"  - {rtt_summary}")
         if cutoff_summary:
             print(f"  - Date-cutoff PCPs: {cutoff_summary}")
+        if arm_summary:
+            print(f"  - Clade-subsampling arms: {arm_summary}")
         sys.exit(0)
 
 
