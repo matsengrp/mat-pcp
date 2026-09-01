@@ -28,14 +28,21 @@ the sampling fraction by construction, so correlating over them measures
 ``build_count_table``'s enumeration and returns a confident number describing
 nothing.
 
-**Evidence is reported as a count distribution, not as an observed/unobserved
-flag.** Whether ``actual_count > 0`` is a poor summary: a strongly deleterious
-mutation is *expected* to carry zero counts at any depth, so the flag conflates
-lost evidence with a correct prediction of absence -- 12.7% of 21J's
-ground-truth set and 25.6% of 21I's have zero counts at *full* depth. The
-survival curves below give the whole distribution instead: the fraction of
-ground-truth mutations with at least x counts, one curve per depth. Sampling
-shifts that curve left, and how far it shifts is the cost of thinning.
+**Evidence is reported as a count distribution over the whole grid, not as an
+observed/unobserved flag on the scored set.** Whether ``actual_count > 0`` is a
+poor summary: a strongly deleterious mutation is *expected* to carry zero counts
+at any depth, so the flag conflates lost evidence with a correct prediction of
+absence. The survival curves give the whole distribution instead, over **every
+single-nucleotide mutation away from the clade founder** -- read at nucleotide
+level from ``fitness/ntmut_fitness/``. Taking them over the ground-truth subset
+would truncate the curve by construction, since the full-depth max curve passes
+through 1.0 at the threshold that defined the subset. Sampling shifts the curve
+left, and how far it shifts is the cost of thinning.
+
+So the notebook uses two populations on purpose, and labels which is which: the
+**fixed ground-truth set** for the correlations, because a comparison needs a
+target that does not move; the **whole grid** for the survival curves, because
+that is the space a model must predict over.
 """
 
 import marimo
@@ -317,75 +324,111 @@ def _(mo, plt, thinned):
 @app.cell
 def _(mo):
     mo.md("""
-    ## How much evidence is left: count survival over the fixed set
+    ## How much evidence is there: count survival over the whole nucleotide grid
 
-    Each curve is the fraction of ground-truth mutations carrying at least *x*
-    counts, at one sampling depth. This replaces any observed/unobserved flag on
-    purpose: a strongly deleterious mutation is *expected* to carry zero
-    observations, so a binary flag scores a correct prediction of absence as
-    lost evidence.
+    Each curve is the fraction of mutations carrying at least *x* counts, at one
+    sampling depth. The population here is **every single-nucleotide mutation
+    away from the clade founder** — the whole grid, not the ground-truth subset
+    the correlations are scored on. Two reasons that is the right population for
+    this figure:
 
-    Three panels per clade, because the ground-truth set is defined on the
-    **max** of the two and the two halves behave differently:
+    - Restricting to the ground-truth set truncates the curve *by construction*:
+      the full-depth max panel would pass through 1.0 at the threshold and the
+      interesting left tail would be cut away.
+    - The grid is the space a model has to predict over. How much of it carries
+      any evidence at all is the question, and most of it does not.
+
+    This is read at nucleotide level from `fitness/ntmut_fitness/`, which is one
+    row per single-nt change from the founder. (The amino-acid table used for
+    the correlations has *more* rows, because a nucleotide in a gene-overlap
+    region contributes an amino-acid mutation to each gene.)
+
+    Three panels, because the ground-truth cut is taken on the max of the two
+    and the halves behave differently:
 
     - **actual counts** — what was observed. Thinning drives mass toward zero.
-    - **expected counts** — the neutral-model prediction under the arm's own
+    - **expected counts** — the neutral-model prediction under each arm's own
       `evol_time` normalization. It scales down smoothly with depth and never
-      reaches zero, so it degrades without ever vanishing.
-    - **max(actual, expected)** — the quantity the ground-truth cut is taken on,
-      so the dotted line at *x* = 10 on this panel is exactly the selection
-      threshold, and the full-depth curve passes through 1.0 there by
-      construction.
+      reaches zero, so it degrades without vanishing.
+    - **max(actual, expected)** — the quantity the ground-truth cut uses, so the
+      dotted line at *x* = 10 is exactly that threshold.
     """)
     return
 
 
 @app.cell
-def _(ground_truth, joined, mo, np, plt, thinned):
+def _(arm_fraction, arms, mo, np, os, output_dir, pd, plt, thinned):
     mo.stop(thinned.empty)
 
-    _clades = sorted(thinned["clade"].unique())
+    _NT_DIR = os.path.join(output_dir.value, "fitness", "ntmut_fitness")
+    mo.stop(
+        not os.path.isdir(_NT_DIR),
+        mo.md(f"**No `fitness/ntmut_fitness/` under `{output_dir.value}`.**"),
+    )
+
     _PANELS = [
         ("actual_count", "actual counts"),
         ("expected_count", "expected counts"),
         ("max_count", "max(actual, expected)"),
     ]
-    fig3, _axes = plt.subplots(
-        len(_clades), 3, figsize=(5.4 * 3, 4.3 * len(_clades)), squeeze=False
-    )
+    _USE = ["actual_count", "expected_count"]
+
+    def _nt_counts(clade, arm=None):
+        """The clade's nucleotide grid at one depth: two count columns only.
+
+        No join is needed -- a survival curve is a marginal distribution, and
+        the grid is enumerated from the clade founder so it does not depend on
+        sampling depth. The row counts are asserted equal below, which is the
+        part a marginal cannot check for itself.
+        """
+        _d = _NT_DIR if arm is None else os.path.join(_NT_DIR, arm)
+        return pd.read_csv(
+            os.path.join(_d, f"{clade}_ntmut_fitness.csv"), usecols=_USE
+        )
+
+    def _quantity(frame, which):
+        if which == "max_count":
+            return frame[["actual_count", "expected_count"]].max(axis=1)
+        return frame[which]
 
     def _surv(values, xs):
         _v = np.asarray(values, dtype=float)
         return [float((_v >= _x).mean()) for _x in xs]
 
-    def _column(frame, which, side):
-        """One of the three quantities, on the given side of the join."""
-        if which == "max_count":
-            return frame[[f"actual_count{side}", f"expected_count{side}"]].max(axis=1)
-        return frame[f"{which}{side}"]
+    _clades = sorted(thinned["clade"].unique())
+    fig3, _axes = plt.subplots(
+        len(_clades), 3, figsize=(5.4 * 3, 4.3 * len(_clades)), squeeze=False
+    )
 
     for _row, _clade in enumerate(_clades):
-        _gt = ground_truth(_clade)
-        _g = thinned[thinned["clade"] == _clade].sort_values(
-            "fraction", ascending=False
-        )
-        # Loaded once per clade rather than once per panel: three panels read the
-        # same four arm tables, and these are ~120k-row CSVs.
-        _armed = [(_r["fraction"], joined(_r["arm"], _clade)) for _, _r in _g.iterrows()]
+        _full = _nt_counts(_clade)
+        _by_depth = [(None, _full)]
+        for _arm in sorted(arms, key=arm_fraction, reverse=True):
+            _a = _nt_counts(_clade, _arm)
+            if len(_a) != len(_full):
+                raise ValueError(
+                    f"{_arm}/{_clade}: nucleotide grid has {len(_a)} rows against "
+                    f"{len(_full)} at full depth; the grid must not depend on "
+                    f"sampling depth, so these survival curves would have "
+                    f"different denominators"
+                )
+            _by_depth.append((arm_fraction(_arm), _a))
 
         for _col, (_which, _label) in enumerate(_PANELS):
             _ax = _axes[_row][_col]
-            _full = _column(_gt.assign(**{}), _which, "")
-            _hi = max(float(np.nanmax(_full)), 2.0)
-            _xs = np.geomspace(0.5, _hi, 80)
-            _ax.plot(_xs, _surv(_full, _xs), lw=2.5, c="black", label="full depth")
-            for _frac, _m in _armed:
-                _ax.plot(_xs, _surv(_column(_m, _which, "_arm"), _xs), label=f"{_frac:g}")
+            _hi = max(float(np.nanmax(_quantity(_full, _which))), 2.0)
+            _xs = np.geomspace(0.05, _hi, 90)
+            for _frac, _frame in _by_depth:
+                _y = _surv(_quantity(_frame, _which), _xs)
+                if _frac is None:
+                    _ax.plot(_xs, _y, lw=2.5, c="black", label="full depth")
+                else:
+                    _ax.plot(_xs, _y, label=f"{_frac:g}")
             _ax.axvline(10, ls=":", c="grey", lw=1)
             _ax.set_xscale("log")
             _ax.set_xlabel(f"x  ({_label})")
-            _ax.set_ylabel("fraction of ground truth with ≥ x")
-            _ax.set_title(f"{_clade} — {_label}, n = {len(_gt):,}")
+            _ax.set_ylabel("fraction of grid with ≥ x")
+            _ax.set_title(f"{_clade} — {_label}, grid n = {len(_full):,}")
             _ax.set_ylim(0, 1.02)
             _ax.grid(alpha=0.3)
             if _col == 0:
