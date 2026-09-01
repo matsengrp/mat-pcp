@@ -1504,7 +1504,20 @@ rule mat_clade_subset:
         tree=os.path.join(OUTDIR, "mat/clades/{arm_dir}{clade}_tree.pb")
     threads: get_threads("mat_clade_subset")
     resources:
-        mem_mb=8000,
+        # Measured: 104 benchmarks on the v12 gisaid tree peak at 25.0 GB,
+        # median 23.3 GB, against a previous declaration of 8000. Like every
+        # other `mem_mb` here this is inert -- production uses the local
+        # executor with no `--resources` ceiling -- so it is a record of what
+        # the rule costs rather than a limit, kept accurate for the same reason
+        # as #146's chronumental correction: a number 3x under the real peak
+        # reads as measured when it is not, and would over-subscribe whoever
+        # first runs this under a scheduler that honours the request.
+        #
+        # The cost is a property of the *input tree*, not of how many samples
+        # the clade keeps: `matUtils extract -s` loads the whole MAT before
+        # pruning, and 21I at 8% of 21J's sample count measured slightly more.
+        # So it does not fall as a subsampling fraction falls.
+        mem_mb=28000,
         runtime=60
     benchmark:
         os.path.join(OUTDIR, "benchmarks/{arm_dir}mat_clade_subset_{clade}.tsv")
@@ -1859,7 +1872,20 @@ rule mat_clade_subset_upto:
         tree=os.path.join(OUTDIR, "mat/cutoffs/upto_{cutoff}/{clade}_tree.pb")
     threads: get_threads("mat_clade_subset")
     resources:
-        mem_mb=8000,
+        # Measured: 104 benchmarks on the v12 gisaid tree peak at 25.0 GB,
+        # median 23.3 GB, against a previous declaration of 8000. Like every
+        # other `mem_mb` here this is inert -- production uses the local
+        # executor with no `--resources` ceiling -- so it is a record of what
+        # the rule costs rather than a limit, kept accurate for the same reason
+        # as #146's chronumental correction: a number 3x under the real peak
+        # reads as measured when it is not, and would over-subscribe whoever
+        # first runs this under a scheduler that honours the request.
+        #
+        # The cost is a property of the *input tree*, not of how many samples
+        # the clade keeps: `matUtils extract -s` loads the whole MAT before
+        # pruning, and 21I at 8% of 21J's sample count measured slightly more.
+        # So it does not fall as a subsampling fraction falls.
+        mem_mb=28000,
         runtime=60
     benchmark:
         os.path.join(OUTDIR, "benchmarks/mat_clade_subset_upto_{cutoff}_{clade}.tsv")

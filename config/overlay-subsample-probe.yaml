@@ -20,11 +20,25 @@
 # defined), so it produces no subtree and cannot set a floor -- which is what
 # makes {21J, 21I} sufficient.
 #
-# One fraction, not the four the issue budgets for: this is a probe to find out
-# whether the noise at 20% is already too large to bother measuring 10%, 5% and
-# 1%. Add fractions here to extend the ladder; the draw is a pure function of
-# (unit, seed, clade, fraction), so existing arms do not move.
+# All four fractions, run concurrently. A probe-then-extend approach would be
+# the wrong economics here, and the benchmarks say why: on the 20% arm's own
+# 186 jobs, `ntmut_fitness` is **88% of the 8.51 CPU-h** an arm costs (56
+# clades at a flat 8.0 min), and it is **independent of the sampling
+# fraction**, because it works over the mutation grid, which
+# `build_count_table` enumerates from the clade founders and fills with zeros.
+# So a 1% arm costs essentially the same as a 20% arm: everything that shrinks
+# with the fraction is subtree-derived, and that is ~7 CPU-min of the total
+# (`mat_clade_subset` 4.0, the three sample-path rules and
+# `count_mutations_clade` 2.8). The arms are also mutually independent --
+# different `arm_dir`, no shared outputs -- so one snakemake invocation fills
+# its job slots across all four.
+#
+# Two per-arm jobs are *not* fraction-scaled and set the floor on any arm:
+# `build_count_table` at 11.1 min and `expected_counts_by_clade` at 3.0.
+#
+# The draw is a pure function of (unit, seed, clade, fraction), so adding
+# fractions here cannot move an arm that has already been built.
 clade_subsamples:
   - unit: [21J, 21I]
-    sampling_fractions: [0.20]
+    sampling_fractions: [0.01, 0.05, 0.10, 0.20]
     seed: 0
