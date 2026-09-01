@@ -1,18 +1,41 @@
 """Clade subsampling: how far do fitness effects drift as depth falls? (#151)
 
-Reads `correlation_summary.csv` and the per-clade fitness tables an arm produced,
-and draws the two figures the analysis turns on: the per-(clade, fraction)
-scatter of arm effect against full depth, and the rho-vs-fraction curves.
+Reads each arm's per-clade fitness tables and draws the three figures the
+analysis turns on: r vs sampling fraction, the count-survival curves that say
+how much evidence is left, and the per-(clade, fraction) scatter.
 
 Run with:
 
     pixi run marimo edit notebooks/subsample_correlations.py
 
-Point `OUTPUT_DIR` at any tree's output directory. It defaults to the test
-tree, where -- deliberately -- the answer is that there is no answer: every
-scored mutation carries exactly one observation, so the coefficients are
-arithmetic rather than agreement. The notebook says so rather than drawing a
-reassuring line through it.
+**The population is a fixed ground-truth set defined by full depth alone**:
+every mutation whose full-depth row has ``max(actual_count, expected_count) >=
+GT_THRESHOLD``. Three properties make that the right target and each of the
+alternatives wrong.
+
+*It is identical across fractions*, so the coefficients are comparable. Keying
+on the arm's own scored rows instead makes the denominator move with the
+sampling fraction, and it selects on the outcome -- keeping exactly the
+mutations the arm happened to observe well, which is survivorship.
+
+*Every arm has an estimate for every member.* The grid is enumerated from the
+clade founder and does not depend on sampling depth, so a mutation the arm never
+observed still carries a ``delta_fitness_ratio``. Dropping those rows discards
+the largest part of the cost of thinning.
+
+*It is not the whole grid.* Rows with no evidence on either side are invariant to
+the sampling fraction by construction, so correlating over them measures
+``build_count_table``'s enumeration and returns a confident number describing
+nothing.
+
+**Evidence is reported as a count distribution, not as an observed/unobserved
+flag.** Whether ``actual_count > 0`` is a poor summary: a strongly deleterious
+mutation is *expected* to carry zero counts at any depth, so the flag conflates
+lost evidence with a correct prediction of absence -- 12.7% of 21J's
+ground-truth set and 25.6% of 21I's have zero counts at *full* depth. The
+survival curves below give the whole distribution instead: the fraction of
+ground-truth mutations with at least x counts, one curve per depth. Sampling
+shifts that curve left, and how far it shifts is the cost of thinning.
 """
 
 import marimo
@@ -30,7 +53,23 @@ def _():
     import numpy as np
     import pandas as pd
 
-    return mo, np, os, pd, plt
+    # Ground truth: a full-depth row needs this many actual *or* expected counts.
+    GT_THRESHOLD = 10
+    # Reported points on the count-survival curve.
+    COUNT_THRESHOLDS = [1, 3, 10, 30, 100]
+    JOIN_KEY = ["cluster", "gene", "aa_mutation"]
+    ESTIMATORS = ["delta_fitness_ratio", "delta_fitness_bayesian"]
+    return (
+        COUNT_THRESHOLDS,
+        ESTIMATORS,
+        GT_THRESHOLD,
+        JOIN_KEY,
+        mo,
+        np,
+        os,
+        pd,
+        plt,
+    )
 
 
 @app.cell
@@ -39,16 +78,16 @@ def _(mo):
     # Clade subsampling: fitness effects vs sampling depth
 
     Each **arm** re-estimates a clade's per-mutation fitness effects from a
-    thinned sample list. This notebook asks how far those estimates drift
-    from the full-depth ones, and — just as importantly — how many
-    mutations survive to be compared at all.
+    thinned sample list. Ground truth is a **fixed** set of mutations, chosen
+    by full depth only, so every arm is scored against the same target and the
+    coefficients are comparable across fractions.
 
-    Two numbers are needed to read any of it:
+    Two things have to be read together:
 
-    - **`n_mutations`** — the count filter raises rho partly by dropping
-      hard cases, so a coefficient without its n is not interpretable.
-    - **`coverage`** — rho is computed on the intersection of *scored*
-      mutations, so it says nothing about mutations that vanish entirely.
+    - **agreement** — Pearson r and RMSE against the full-depth estimate.
+    - **evidence** — the count-survival curve. A nominal sampling fraction is
+      not an evidence cut, and the count distribution is what actually moves.
+      Read every coefficient against it.
     """)
     return
 
@@ -56,7 +95,7 @@ def _(mo):
 @app.cell
 def _(mo):
     output_dir = mo.ui.text(
-        value="results/test_data_v12",
+        value="results/gisaid-and-public_2026-08-06_v12",
         label="Tree output directory",
         full_width=True,
     )
@@ -66,151 +105,211 @@ def _(mo):
 
 @app.cell
 def _(mo, os, output_dir, pd):
-    summary_path = os.path.join(output_dir.value, "correlation_summary.csv")
-    mo.stop(
-        not os.path.isfile(summary_path),
-        mo.md(
-            f"**No `correlation_summary.csv` at `{summary_path}`.** "
-            "Build it with `snakemake <outdir>/correlation_summary.csv`, or "
-            "point the box above at a tree that has arms."
-        ),
-    )
-    corr = pd.read_csv(summary_path)
     subsample_path = os.path.join(output_dir.value, "subsample_summary.csv")
     retention = (
         pd.read_csv(subsample_path) if os.path.isfile(subsample_path) else None
     )
-    return corr, retention
-
-
-@app.cell
-def _(corr, mo):
-    # The single most important thing this notebook can say. When every scored
-    # mutation carries one observation, delta_fitness_ratio is a deterministic
-    # function of the expected count, the two columns are collinear by
-    # construction, and a scatter of them is a straight line that means nothing.
-    # Saying so up front is the point -- a reader who scrolls to the figures
-    # first should not be able to miss it.
-    max_count = int(corr["max_actual_count_full"].max())
-    banner = (
-        mo.callout(
-            mo.md(
-                f"**These coefficients do not measure subsampling noise.** The "
-                f"highest full-depth `actual_count` anywhere in this table is "
-                f"**{max_count}**. With one observation per scored mutation, "
-                f"`delta_fitness_ratio` is a deterministic function of the "
-                f"expected count, so any correlation it shows is arithmetic. "
-                f"Use a production tree, where a clade has thousands of scored "
-                f"mutations at counts much greater than 1."
-            ),
-            kind="danger",
-        )
-        if max_count <= 1
-        else mo.callout(
-            mo.md(
-                f"Highest full-depth `actual_count`: **{max_count}**. "
-                f"Coefficients below are interpretable to the extent that this "
-                f"is comfortably above 1."
-            ),
-            kind="success",
-        )
+    fitness_dir = os.path.join(output_dir.value, "aamut_fitness")
+    mo.stop(
+        not os.path.isdir(fitness_dir),
+        mo.md(f"**No `aamut_fitness/` under `{output_dir.value}`.**"),
     )
-    banner
-    return
+    # Arms are the frac_* subdirectories; the fraction is recoverable from the
+    # trailing basis-point token, which is how the Snakefile builds the name
+    # (``frac_<unit>_<seed>_<bp>bp``).
+    arms = sorted(
+        d
+        for d in os.listdir(fitness_dir)
+        if os.path.isdir(os.path.join(fitness_dir, d)) and d.startswith("frac_")
+    )
+    mo.stop(not arms, mo.md("**No `frac_*` arm directories found.**"))
+
+    def arm_fraction(arm):
+        return int(arm.rsplit("_", 1)[-1][:-2]) / 10000.0
+
+    def arm_unit(arm):
+        return arm.split("_")[1].split("-")
+    return arm_fraction, arm_unit, arms, fitness_dir, retention
 
 
 @app.cell
-def _(corr, mo):
-    thinned = corr[corr["thinned"]]
-    control = corr[~corr["thinned"]]
-    # Control clades are not padding: an arm re-aggregates every clade in its
-    # grid but thins only its unit, so a non-unit clade must reproduce full
-    # depth exactly. A control rmse above 0 means the arm reached a clade the
-    # config never named -- the fan-out bug this feature had to fix once.
-    control_bad = control[control["rmse"].fillna(0) > 0]
-    mo.md(
-        f"""
-        **{corr['arm'].nunique()} arm(s)**, {len(thinned)} thinned row(s) and
-        {len(control)} control row(s).
+def _(
+    COUNT_THRESHOLDS,
+    ESTIMATORS,
+    GT_THRESHOLD,
+    JOIN_KEY,
+    arm_fraction,
+    arm_unit,
+    arms,
+    fitness_dir,
+    np,
+    os,
+    pd,
+):
+    def pearson(x, y):
+        """Pearson r, or None where it is undefined rather than merely small."""
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        if len(x) < 3 or np.ptp(x) == 0 or np.ptp(y) == 0:
+            return None
+        return float(np.corrcoef(x, y)[0, 1])
 
-        Control clades (not in the arm's unit) must reproduce full depth
-        exactly: **{len(control_bad)}** of {len(control)} disagree
-        {'— a leak into a clade the config never named' if len(control_bad) else '✓'}.
+    def rmse(a, b):
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
+        return float(np.sqrt(((a - b) ** 2).mean()))
+
+    def ground_truth(clade):
+        """The fixed target set for one clade, from its full-depth table only."""
+        full = pd.read_csv(os.path.join(fitness_dir, f"{clade}_aamut_fitness.csv"))
+        keep = full[["actual_count", "expected_count"]].max(axis=1) >= GT_THRESHOLD
+        return full[keep]
+
+    def joined(arm, clade):
+        """Ground truth joined to the arm's estimate for every one of its rows.
+
+        The row count must not change: the grid does not depend on sampling
+        depth, so a shrinking join would mean two different mutation sets were
+        being compared and every coefficient would be meaningless.
         """
+        gt = ground_truth(clade)
+        armd = pd.read_csv(
+            os.path.join(fitness_dir, arm, f"{clade}_aamut_fitness.csv")
+        )
+        m = gt.merge(
+            armd, on=JOIN_KEY, suffixes=("_full", "_arm"), validate="one_to_one"
+        )
+        if len(m) != len(gt):
+            raise ValueError(
+                f"{arm}/{clade}: ground truth has {len(gt)} rows but the join "
+                f"yields {len(m)}; the arm's grid does not cover it"
+            )
+        return m
+
+    def survival(counts):
+        """``{x: P(count >= x)}`` -- the complement of the count eCDF."""
+        return {t: float((counts >= t).mean()) for t in COUNT_THRESHOLDS}
+
+    rows = []
+    for _arm in arms:
+        _unit = set(arm_unit(_arm))
+        for _name in sorted(os.listdir(os.path.join(fitness_dir, _arm))):
+            if not _name.endswith("_aamut_fitness.csv") or _name.startswith("all_"):
+                continue
+            _clade = _name[: -len("_aamut_fitness.csv")]
+            _m = joined(_arm, _clade)
+            _row = {
+                "arm": _arm,
+                "clade": _clade,
+                "fraction": arm_fraction(_arm),
+                "thinned": _clade in _unit,
+                "n_ground_truth": len(_m),
+                "median_count_full": float(_m["actual_count_full"].median()),
+                "median_count_arm": float(_m["actual_count_arm"].median()),
+                "total_counts_arm": int(_m["actual_count_arm"].sum()),
+            }
+            for _est in ESTIMATORS:
+                _row[f"r_{_est}"] = pearson(_m[f"{_est}_full"], _m[f"{_est}_arm"])
+                _row[f"rmse_{_est}"] = (
+                    rmse(_m[f"{_est}_full"], _m[f"{_est}_arm"]) if len(_m) else None
+                )
+            for _t, _v in survival(_m["actual_count_arm"]).items():
+                _row[f"frac_count_ge_{_t}"] = _v
+            for _t, _v in survival(_m["actual_count_full"]).items():
+                _row[f"full_frac_count_ge_{_t}"] = _v
+            rows.append(_row)
+
+    summary = pd.DataFrame(rows)
+    thinned = summary[summary["thinned"]]
+    control = summary[~summary["thinned"]]
+    return control, ground_truth, joined, summary, thinned
+
+
+@app.cell
+def _(control, mo, summary, thinned):
+    # An arm re-aggregates every clade in its grid but thins only its unit, so a
+    # non-unit clade must reproduce full depth exactly. A control r below 1 means
+    # the arm reached a clade the config never named.
+    bad = control[
+        (control["r_delta_fitness_ratio"].fillna(1.0) < 1.0)
+        | (control["rmse_delta_fitness_ratio"].fillna(0.0) > 0.0)
+    ]
+    mo.callout(
+        mo.md(
+            f"**{summary['arm'].nunique()} arm(s)**, {len(thinned)} thinned "
+            f"(clade, fraction) pair(s), {len(control)} control pair(s). "
+            f"Controls must reproduce full depth exactly: **{len(bad)}** of "
+            f"{len(control)} disagree"
+            + (
+                " — an arm reached a clade the config never named."
+                if len(bad)
+                else " ✓ the grid-derived and subtree-derived fan-outs stayed separate."
+            )
+        ),
+        kind="danger" if len(bad) else "success",
     )
-    return (thinned,)
+    return
 
 
 @app.cell
 def _(mo):
     mo.md("""
-    ## rho vs sampling fraction, faceted by estimator
+    ## Pearson r vs sampling fraction, over the fixed ground-truth set
+
+    n is constant along each curve by construction — the same mutations are
+    scored at every depth, so only the arm-side estimate moves.
     """)
     return
 
 
 @app.cell
-def _(mo, np, plt, thinned):
+def _(mo, plt, thinned):
     mo.stop(
         thinned.empty,
-        mo.md("**No thinned rows** — no arm subsampled a surviving clade."),
+        mo.md("**No thinned rows** — no arm subsampled a clade in its unit."),
     )
 
-    estimators = sorted(thinned["estimator"].unique())
-    fig, axes = plt.subplots(
-        2, len(estimators), figsize=(5.5 * len(estimators), 8), squeeze=False
+    _clades = sorted(thinned["clade"].unique())
+    fig, _axes = plt.subplots(
+        1, len(_clades), figsize=(5.6 * len(_clades), 4.4), squeeze=False
     )
 
-    for col, est in enumerate(estimators):
-        top, bottom = axes[0][col], axes[1][col]
-        sub = thinned[thinned["estimator"] == est]
-        for filt, grp in sub.groupby("filter"):
-            for clade, g in grp.groupby("clade"):
-                g = g.sort_values("fraction")
-                # Rows with no mutations are plotted as gaps, not as zeros: an
-                # empty population is an absent measurement, and joining
-                # through it would draw a curve descending to zero correlation
-                # that was never measured.
-                ok = g["n_mutations"] > 0
-                top.plot(
-                    g.loc[ok, "fraction"],
-                    g.loc[ok, "spearman_rho"],
-                    marker="o",
-                    label=f"{clade} · {filt}",
-                )
-                for _, r in g[ok].iterrows():
-                    top.annotate(
-                        f"n={int(r['n_mutations'])}",
-                        (r["fraction"], r["spearman_rho"]),
-                        fontsize=7,
-                        xytext=(3, 3),
-                        textcoords="offset points",
-                    )
-        top.set_title(f"{est}\nSpearman rho vs full depth")
-        top.set_xlabel("nominal sampling fraction")
-        top.set_ylabel("spearman rho")
-        top.set_xscale("log")
-        top.grid(alpha=0.3)
-        top.legend(fontsize=7)
-
-        # Coverage is per (clade, fraction, filter) and does not depend on the
-        # estimator, so the bottom row repeats across columns by design -- it
-        # sits under each estimator so a reader comparing two panels never has
-        # to look away to find how many mutations the coefficient rests on.
-        cov = sub[sub["filter"] == "unfiltered"]
-        for clade, g in cov.groupby("clade"):
-            g = g.sort_values("fraction")
-            bottom.plot(g["fraction"], g["coverage"], marker="s", label=clade)
-        bottom.plot([0, 1], [0, 1], ls=":", c="grey", lw=1, label="y = x")
-        bottom.set_title("coverage: scored mutations the arm still scores")
-        bottom.set_xlabel("nominal sampling fraction")
-        bottom.set_ylabel("coverage")
-        bottom.set_ylim(0, 1.05)
-        bottom.grid(alpha=0.3)
-        bottom.legend(fontsize=7)
+    for _col, _clade in enumerate(_clades):
+        _g = thinned[thinned["clade"] == _clade].sort_values("fraction")
+        _ax = _axes[0][_col]
+        for _est, _marker in [
+            ("delta_fitness_ratio", "o"),
+            ("delta_fitness_bayesian", "s"),
+        ]:
+            _ax.plot(
+                _g["fraction"],
+                _g[f"r_{_est}"],
+                marker=_marker,
+                label=_est.replace("delta_fitness_", ""),
+            )
+        _ax2 = _ax.twinx()
+        _ax2.plot(
+            _g["fraction"],
+            _g["rmse_delta_fitness_ratio"],
+            marker="x",
+            ls="--",
+            c="grey",
+            label="RMSE (ratio)",
+        )
+        _ax2.set_ylabel("RMSE, log-fitness units")
+        _ax2.set_ylim(0, None)
+        _ax.set_title(
+            f"{_clade} — fixed ground truth, n = {int(_g['n_ground_truth'].iloc[0]):,}"
+        )
+        _ax.set_xlabel("nominal sampling fraction")
+        _ax.set_ylabel("Pearson r vs full depth")
+        _ax.set_xscale("log")
+        _ax.set_ylim(0, 1.02)
+        _ax.grid(alpha=0.3)
+        _ax.legend(fontsize=8, loc="lower right")
+        _ax2.legend(fontsize=8, loc="upper left")
 
     fig.tight_layout()
-    _ = np  # keeps the import honest if the annotate loop is edited away
     fig
     return
 
@@ -218,101 +317,166 @@ def _(mo, np, plt, thinned):
 @app.cell
 def _(mo):
     mo.md("""
-    ## Per-(clade, fraction) scatter: arm effect vs full depth
+    ## How much evidence is left: count survival over the fixed set
 
-    The diagonal is perfect agreement. Scatter *off* the diagonal is the
-    drift; mutations missing from the plot entirely are the coverage loss,
-    which a scatter cannot show — read it off the panel above.
+    Each curve is the fraction of ground-truth mutations carrying at least *x*
+    counts, at one sampling depth. This replaces any observed/unobserved flag on
+    purpose: a strongly deleterious mutation is *expected* to carry zero
+    observations, so a binary flag scores a correct prediction of absence as
+    lost evidence.
+
+    Three panels per clade, because the ground-truth set is defined on the
+    **max** of the two and the two halves behave differently:
+
+    - **actual counts** — what was observed. Thinning drives mass toward zero.
+    - **expected counts** — the neutral-model prediction under the arm's own
+      `evol_time` normalization. It scales down smoothly with depth and never
+      reaches zero, so it degrades without ever vanishing.
+    - **max(actual, expected)** — the quantity the ground-truth cut is taken on,
+      so the dotted line at *x* = 10 on this panel is exactly the selection
+      threshold, and the full-depth curve passes through 1.0 there by
+      construction.
     """)
     return
 
 
 @app.cell
-def _(mo, os, output_dir, pd, thinned):
+def _(ground_truth, joined, mo, np, plt, thinned):
+    mo.stop(thinned.empty)
+
+    _clades = sorted(thinned["clade"].unique())
+    _PANELS = [
+        ("actual_count", "actual counts"),
+        ("expected_count", "expected counts"),
+        ("max_count", "max(actual, expected)"),
+    ]
+    fig3, _axes = plt.subplots(
+        len(_clades), 3, figsize=(5.4 * 3, 4.3 * len(_clades)), squeeze=False
+    )
+
+    def _surv(values, xs):
+        _v = np.asarray(values, dtype=float)
+        return [float((_v >= _x).mean()) for _x in xs]
+
+    def _column(frame, which, side):
+        """One of the three quantities, on the given side of the join."""
+        if which == "max_count":
+            return frame[[f"actual_count{side}", f"expected_count{side}"]].max(axis=1)
+        return frame[f"{which}{side}"]
+
+    for _row, _clade in enumerate(_clades):
+        _gt = ground_truth(_clade)
+        _g = thinned[thinned["clade"] == _clade].sort_values(
+            "fraction", ascending=False
+        )
+        # Loaded once per clade rather than once per panel: three panels read the
+        # same four arm tables, and these are ~120k-row CSVs.
+        _armed = [(_r["fraction"], joined(_r["arm"], _clade)) for _, _r in _g.iterrows()]
+
+        for _col, (_which, _label) in enumerate(_PANELS):
+            _ax = _axes[_row][_col]
+            _full = _column(_gt.assign(**{}), _which, "")
+            _hi = max(float(np.nanmax(_full)), 2.0)
+            _xs = np.geomspace(0.5, _hi, 80)
+            _ax.plot(_xs, _surv(_full, _xs), lw=2.5, c="black", label="full depth")
+            for _frac, _m in _armed:
+                _ax.plot(_xs, _surv(_column(_m, _which, "_arm"), _xs), label=f"{_frac:g}")
+            _ax.axvline(10, ls=":", c="grey", lw=1)
+            _ax.set_xscale("log")
+            _ax.set_xlabel(f"x  ({_label})")
+            _ax.set_ylabel("fraction of ground truth with ≥ x")
+            _ax.set_title(f"{_clade} — {_label}, n = {len(_gt):,}")
+            _ax.set_ylim(0, 1.02)
+            _ax.grid(alpha=0.3)
+            if _col == 0:
+                _ax.legend(fontsize=8, title="sampling fraction")
+
+    fig3.tight_layout()
+    fig3
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## Per-(clade, fraction) scatter: arm estimate vs full depth
+
+    Every panel holds the **same** mutations — only the arm-side estimate
+    changes. Points are coloured by how many observations the arm actually has
+    for that mutation, so the shrinking-evidence gradient is visible rather
+    than collapsed into a yes/no flag. The band along the bottom is where the
+    arm's count has fallen far enough that its estimate is driven by the
+    expected count rather than by data.
+    """)
+    return
+
+
+@app.cell
+def _(joined, np, plt, thinned):
     pairs = (
         thinned[["arm", "clade", "fraction"]]
         .drop_duplicates()
         .sort_values(["clade", "fraction"])
     )
-
-    def load_pair(arm, clade):
-        """Full-depth and arm fitness tables joined on the invariant key.
-
-        ``clade_founder_aa`` is invariant to sampling fraction, so the same
-        ``aa_mutation`` string means the same substitution on both sides.
-        """
-        d = os.path.join(output_dir.value, "aamut_fitness")
-        full = pd.read_csv(os.path.join(d, f"{clade}_aamut_fitness.csv"))
-        arm_df = pd.read_csv(os.path.join(d, arm, f"{clade}_aamut_fitness.csv"))
-        m = full.merge(
-            arm_df,
-            on=["cluster", "gene", "aa_mutation"],
-            suffixes=("_full", "_arm"),
-        )
-        # Scored at both depths. Every grid row carries a fitness value even
-        # when nothing was observed, and those rows are invariant to sampling
-        # fraction -- plotting them would fill the diagonal with points that
-        # agree by construction and hide the ones that do not.
-        return m[(m["actual_count_full"] > 0) & (m["actual_count_arm"] > 0)]
-
-    mo.stop(pairs.empty, mo.md("**Nothing thinned to scatter.**"))
-    return load_pair, pairs
-
-
-@app.cell
-def _(load_pair, pairs, plt):
-    n = len(pairs)
-    ncol = min(3, n)
-    nrow = (n + ncol - 1) // ncol
-    fig2, axes2 = plt.subplots(
-        nrow, ncol, figsize=(4.6 * ncol, 4.4 * nrow), squeeze=False
+    _ncol = min(4, len(pairs))
+    _nrow = (len(pairs) + _ncol - 1) // _ncol
+    fig2, _axes = plt.subplots(
+        _nrow, _ncol, figsize=(4.7 * _ncol, 4.3 * _nrow), squeeze=False
     )
-    flat = [ax for row in axes2 for ax in row]
+    _flat = [_a for _row in _axes for _a in _row]
 
-    for ax, (_, row) in zip(flat, pairs.iterrows()):
-        both = load_pair(row["arm"], row["clade"])
-        # ``_est`` rather than ``est``: marimo requires a variable to be
-        # defined in exactly one cell, and the rho-vs-fraction cell above
-        # already binds ``est``. The underscore marks it cell-private.
-        for _est, _colour in [
-            ("delta_fitness_ratio", "tab:blue"),
-            ("delta_fitness_bayesian", "tab:orange"),
-        ]:
-            ax.scatter(
-                both[f"{_est}_full"],
-                both[f"{_est}_arm"],
-                s=18,
-                alpha=0.6,
+    # Bins rather than a continuous colourmap: the interesting structure is at
+    # 0 and at single digits, which a linear norm renders as one indistinct
+    # colour, and a log norm cannot show 0 at all.
+    _BINS = [
+        (0, 0, "0", "tab:red"),
+        (1, 2, "1–2", "tab:orange"),
+        (3, 9, "3–9", "tab:olive"),
+        (10, None, "≥10", "tab:blue"),
+    ]
+
+    for _ax, (_, _r) in zip(_flat, pairs.iterrows()):
+        _both = joined(_r["arm"], _r["clade"])
+        _counts = _both["actual_count_arm"]
+        for _lo, _hi, _label, _colour in _BINS:
+            _sel = (_counts >= _lo) if _hi is None else ((_counts >= _lo) & (_counts <= _hi))
+            _sub = _both[_sel]
+            if _sub.empty:
+                continue
+            _ax.scatter(
+                _sub["delta_fitness_ratio_full"],
+                _sub["delta_fitness_ratio_arm"],
+                s=4,
+                alpha=0.3,
                 c=_colour,
-                label=_est.replace("delta_fitness_", ""),
+                label=f"{_label} ({len(_sub):,})",
+                linewidths=0,
             )
-        lo = min(
-            both[["delta_fitness_ratio_full", "delta_fitness_bayesian_full"]]
-            .min()
-            .min(),
-            both[["delta_fitness_ratio_arm", "delta_fitness_bayesian_arm"]]
-            .min()
-            .min(),
+        _lo_v = float(
+            np.nanmin(
+                [
+                    _both["delta_fitness_ratio_full"].min(),
+                    _both["delta_fitness_ratio_arm"].min(),
+                ]
+            )
         )
-        hi = max(
-            both[["delta_fitness_ratio_full", "delta_fitness_bayesian_full"]]
-            .max()
-            .max(),
-            both[["delta_fitness_ratio_arm", "delta_fitness_bayesian_arm"]]
-            .max()
-            .max(),
+        _hi_v = float(
+            np.nanmax(
+                [
+                    _both["delta_fitness_ratio_full"].max(),
+                    _both["delta_fitness_ratio_arm"].max(),
+                ]
+            )
         )
-        ax.plot([lo, hi], [lo, hi], ls="--", c="grey", lw=1)
-        ax.set_title(
-            f"{row['clade']} @ {row['fraction']:g}\nn={len(both)} scored in both"
-        )
-        ax.set_xlabel("full-depth effect")
-        ax.set_ylabel("arm effect")
-        ax.grid(alpha=0.3)
-        ax.legend(fontsize=7)
+        _ax.plot([_lo_v, _hi_v], [_lo_v, _hi_v], ls="--", c="black", lw=1)
+        _ax.set_title(f"{_r['clade']} @ {_r['fraction']:g}   n={len(_both):,}")
+        _ax.set_xlabel("full-depth delta_fitness_ratio")
+        _ax.set_ylabel("arm delta_fitness_ratio")
+        _ax.grid(alpha=0.3)
+        _ax.legend(fontsize=7, markerscale=2, title="arm counts", title_fontsize=7)
 
-    for ax in flat[len(pairs) :]:
-        ax.axis("off")
+    for _ax in _flat[len(pairs) :]:
+        _ax.axis("off")
     fig2.tight_layout()
     fig2
     return
@@ -321,29 +485,22 @@ def _(load_pair, pairs, plt):
 @app.cell
 def _(mo):
     mo.md("""
-    ## The table itself, and the evidence it is keyed to
+    ## The numbers behind the figures
     """)
     return
 
 
 @app.cell
-def _(corr, mo):
+def _(COUNT_THRESHOLDS, mo, thinned):
+    cols = (
+        ["clade", "fraction", "n_ground_truth"]
+        + ["r_delta_fitness_ratio", "r_delta_fitness_bayesian"]
+        + ["rmse_delta_fitness_ratio"]
+        + [f"frac_count_ge_{t}" for t in COUNT_THRESHOLDS]
+        + ["median_count_arm", "median_count_full"]
+    )
     mo.ui.table(
-        corr[
-            [
-                "arm",
-                "clade",
-                "fraction",
-                "thinned",
-                "estimator",
-                "filter",
-                "n_mutations",
-                "coverage",
-                "pearson_r",
-                "spearman_rho",
-                "rmse",
-            ]
-        ],
+        thinned[cols].sort_values(["clade", "fraction"]),
         page_size=20,
     )
     return
@@ -354,11 +511,9 @@ def _(mo, retention):
     mo.stop(retention is None, mo.md("_No `subsample_summary.csv` found._"))
     mo.md(
         """
-        **Realized retention.** A nominal fraction is not an evidence cut: a
-        branch survives whenever *any* sample below it is retained, so mutation
-        retention runs above the sample fraction and the curve is concave. Key
-        every coefficient above to the measured columns here, never to the
-        configured percent.
+        **Realized retention.** A branch survives whenever *any* sample below it
+        is retained, so nucleotide-mutation retention runs above the sample
+        fraction and the curve is concave.
         """
     )
     return
@@ -380,7 +535,6 @@ def _(mo, retention):
                 "n_nt_mutations_arm",
                 "nt_mutation_retention",
                 "predicted_nt_mutation_retention",
-                "nt_mutation_deviation_sd",
             ]
         ],
         page_size=20,
