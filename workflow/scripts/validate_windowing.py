@@ -58,11 +58,32 @@ SUBTREE_COUNTS_COLUMNS = [
 # UPDATE these deliberately when the output intentionally changes (a
 # windowing-logic change, OR a chronumental/jax version bump that shifts a node
 # across a window boundary). A mismatch with no such intended change is a bug.
+#
+# **v12 re-baseline (#146).** Adopting `--variance_dates 30` moved these, and the
+# mechanism is worth recording rather than just the numbers: `window_end_time` is
+# `null` in every shipped config, so the grid is anchored at the tree's *latest
+# predicted* node date and tiled backwards. Loosening the leaf-date likelihood
+# from sd 0.3 d to sd 30 d moved that anchor on the test tree from 2022-05-13 to
+# 2022-06-03 -- 21 days later, and 2 days past the metadata's own
+# `max_leaf_date` of 2022-06-01 -- so the whole grid slid 21 days
+# (first window 2019-11-25 -> 2019-12-16) and every branch re-bucketed. The
+# window *count* is unchanged at 19; the earliest node date (the root, 2020-01-15)
+# did not move at all.
+#
+# The move is attributable: `data/test_data/expected_summary.json` passes
+# unchanged, so the entire clade-based path -- PCPs, mutation counts, GLM rates,
+# fitness -- is byte-stable under the new prior, and only the node-date-dependent
+# windowing outputs shifted. Every structural and invariant check in this file
+# (the per-window synonymous calibration, the delta_fitness_ratio identity, the
+# multi-founder accumulation) passed at the new values.
+#
+#   v11 values, for comparison: n_windows 19, n_founder_rows 370,
+#   n_count_rows 4041, total_count 4150.
 WINDOW_COUNT_SENTINELS = {
     "n_windows": 19,
-    "n_founder_rows": 370,
-    "n_count_rows": 4041,
-    "total_count": 4150,
+    "n_founder_rows": 357,
+    "n_count_rows": 4169,
+    "total_count": 4270,
 }
 COUNT_REL_TOL = 1e-6
 
@@ -96,14 +117,23 @@ SYN_CENTER_ABS_TOL_MEAN = 0.3
 # Integer-valued counts are exact (COUNT_REL_TOL); expected_count is a float sum
 # and gets the looser FITNESS_FLOAT_REL_TOL, matching how validate_test.py treats
 # the clade delta_fitness_*_sum. Update deliberately on an intended change.
-# n_windows is 18 (not 19): window 2020-05-23 has no observed synonymous mutations,
-# so its evol_time T is undefined and it is skipped (logged), unlike the actual-only
-# subtree_counts.csv which keeps all 19 windows.
+#
+# **v12 re-baseline (#146), same cause as WINDOW_COUNT_SENTINELS above.**
+# n_windows is now 19 and no longer one short of subtree_counts'. Through v11 it
+# was 18 because window 2020-05-23 had no observed synonymous mutation, leaving
+# its evol_time T undefined so that it was skipped and logged; the 21-day grid
+# slide means no window is synonymous-empty any more. So this equality with
+# subtree_counts is a property of the current grid, not an invariant -- a future
+# tree or window_size can legitimately put it back to n-1, and that is a logged
+# skip rather than a regression. Check the log before treating a drop here as one.
+#
+#   v11 values, for comparison: n_traj_rows 1277219, n_windows 18,
+#   actual_sum 4112.0, expected_sum 5600.3459.
 WINDOW_FITNESS_SENTINELS = {
-    "n_traj_rows": 1277219,
-    "n_windows": 18,
-    "actual_sum": 4112.0,
-    "expected_sum": 5600.3459,
+    "n_traj_rows": 1347569,
+    "n_windows": 19,
+    "actual_sum": 4221.0,
+    "expected_sum": 5929.9540,
 }
 FITNESS_FLOAT_REL_TOL = 0.01
 

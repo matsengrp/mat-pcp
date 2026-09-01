@@ -49,3 +49,6 @@ run-*.exit
 
 # marimo notebook session cache (analysis/ notebooks)
 **/__marimo__/
+
+# Local production-run driver logs (multi-MB, machine-specific).
+logs/

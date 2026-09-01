@@ -99,6 +99,57 @@ Sorted by `(clade, nt_index, to_nt)`. The sort is required, not cosmetic: `maski
 
 **The roster sidecar is part of the deliverable.** A clade with nothing censored contributes zero rows, so in the CSV alone it is indistinguishable from a mistyped clade name. `censored_mutations.clades.txt` lists every clade the run processed, one per line, sorted; a consumer materializes `{clade: [] for clade in roster}` before filling from the CSV so that absence-from-roster (an error) and absence-from-rows (normal) stay distinguishable.
 
+### `pcps/{gene}/upto_{cutoff}/…` — date-cutoff PCP subtrees (v12+)
+
+For each date in the per-tree config key `pcp_date_cutoffs`, the whole per-gene PCP family is rebuilt from the subtree of samples collected **at or before** that date, so a model can be trained on what was knowable then ([#149](https://github.com/matsengrp/mat-pcp/issues/149)). Additive: no existing output changed.
+
+**Filenames inside the cutoff directory are identical to the full-tree ones**, so a consumer points at a different root and its existing globbing works unchanged:
+
+| Path | Same schema as |
+|------|----------------|
+| `pcps/{gene}/upto_{cutoff}/{clade}_pcps.csv.gz` | `pcps/{gene}/{clade}_pcps.csv.gz` |
+| `pcps/{gene}/upto_{cutoff}/all_pcps.csv.gz` | `pcps/{gene}/all_pcps.csv.gz` |
+| `pcps/{gene}/upto_{cutoff}/{clade}_filtered_branches.csv` | `pcps/{gene}/{clade}_filtered_branches.csv` |
+| `pcps/{gene}/upto_{cutoff}/filtered_branch_ids.csv` | `pcps/{gene}/filtered_branch_ids.csv` |
+| `pcps/{gene}/upto_{cutoff}/pcp_curation_report.txt` | `pcps/{gene}/pcp_curation_report.txt` |
+| `pcps/{gene}/upto_{cutoff}/{clade}_pcps_dasm_ready.csv.gz`, `all_pcps_dasm_ready.csv.gz` | their full-tree counterparts |
+| `pcps/{gene}/upto_{cutoff}/*_dasm_filter_report.txt`, `*_dasm_filter_stats.json` | their full-tree counterparts |
+
+Supporting outputs: `mat/cutoffs/upto_{cutoff}/{clade}_samples.txt` (the sample list handed to `matUtils`), `mat/cutoffs/upto_{cutoff}/{clade}_tree.pb` (the truncated subtree), and `mat/clade_counts_by_cutoff.csv` (the checkpoint's per-(cutoff, clade) counts).
+
+**The cutoff is inclusive.** A sample collected *on* the cutoff date is in the set — "at or before". The comparison is against the *coerced* `date` column of `mat/filtered_metadata.tsv.gz`, so a month-resolution value would be compared as the 15th; every shipped config lists `MONTH`/`YEAR` in `invalid_date_resolutions`, so in practice every retained sample is day-resolution.
+
+**These are re-extracted, not filtered, and the difference is measurable.** `matUtils extract -s` returns the subtree *induced* on the retained samples: internal nodes that lose all but one child are collapsed and their mutations merged onto the surviving branch. A cutoff PCP table is therefore **not** a subset of the full-tree one. On the test data's `2020-06-01` arm, 2 of 7 ORF1ab cutoff PCPs carry a (parent, child) sequence pair occurring nowhere in the full table — e.g. `MEX/SEARCH-3636-TIJ/2020` has parent `node_13` at branch length 1 in the full tree and parent `node_1` at branch length 4 at the cutoff. Do not attempt to reconstruct these files by filtering `all_pcps.csv.gz`: the result would keep PCPs whose parent is not reconstructible from pre-cutoff samples and drop the mutations of every branch whose child vanished, leaving a set of pairs that is the branch set of no tree.
+
+**A cutoff equal to the tree's `max_leaf_date` is byte-identical to the full tree.** It selects every sample, and the sample list preserves the full clade list's order, so `upto_{cutoff}/all_pcps.csv.gz` equals `all_pcps.csv.gz` byte-for-byte (`pcpio.PCP_CSV_COMPRESSION` pins `mtime=0`, so byte-equality is available at all). That degenerate arm is what makes "the cutoff machinery did not perturb the ordinary path" a measurement rather than an inspection; `config_test_data.yaml` carries it and `validate_test.py::validate_cutoff_pcps` checks it.
+
+**Not recomputed per cutoff — a known, bounded leak.** `{gene}_codon_sites_to_mask.txt` and `pcps/{gene}/censored_mutations.csv` come from the full tree's count table and from `data/usher_masked_sites.yaml`, so a cutoff's DASM-ready files are filtered with a mask that saw post-cutoff data. A strict holdout would rebuild the mask from pre-cutoff data only, which means re-running the whole counting and GLM path per cutoff. The leak is confined to which sites are flagged as *sequencing artifacts* — not to any fitness signal — and the censor table is keyed by clade, so extra post-cutoff clades in it are inert for a consumer that looks masks up per clade. Clade founders are likewise shared: a clade's founder is a property of its defining mutations, not of which of its samples have been collected yet.
+
+### `pcps/cutoff_summary.csv` (v12+)
+
+The roster for the above: one row per (cutoff, clade), including the pairs that were **not** built.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `cutoff` | string | The configured cutoff date, `YYYY-MM-DD`. |
+| `clade` | string | Nextstrain clade, from the `get_clades` checkpoint's adequate set. |
+| `output_subdir` | string | `upto_{cutoff}` — the directory under `pcps/{gene}/`. |
+| `n_samples_full` | int | Samples in the clade on the whole filtered tree. |
+| `n_samples_upto` | int | Samples actually selected: collected at or before the cutoff **and** not predicted well past it (see below). |
+| `n_predicted_late_dropped` | int | Samples reported at or before the cutoff but whose chronumental predicted date lands more than `max_predicted_days_past_cutoff` days after it, so they were dropped. |
+| `n_undated_kept` | int | Samples with no `mat/node_dates.tsv` entry, kept because a missing prediction is not a contradicting one. |
+| `max_predicted_days_past_cutoff` | int or empty | The configured bound that produced this selection; empty when the filter is disabled. |
+| `adequate_sample_counts` | bool | `n_samples_upto >= max(min_clade_size, 2)`. The floor is not the configured threshold: every production config sets `min_clade_size: 0`, under which a clade that does not exist yet at the cutoff would score adequate on `0 >= 0`, and a one-sample subtree segfaults `bte.MATree`. Defined once in `modules/cutoffs.py::adequate_at_cutoff`. |
+| `included` | bool | Whether the pipeline actually built this pair's PCPs. |
+
+**Why this file exists.** A clade that does not yet exist at a cutoff, or that falls below `min_clade_size` there, is skipped at DAG-construction time and contributes no files — so in the output tree alone it is indistinguishable from a clade dropped by a wiring mistake. This is the same problem `glm/era_fit_summary.csv` solves for empty eras and `censored_mutations.clades.txt` solves for empty censor tables. A consumer that needs to know whether a clade was omitted deliberately must read this file, not infer from the directory listing.
+
+**Selection is not the `date` column alone.** Some metadata collection dates are wrong by years, so a cutoff answered from that column admits genomes from after it: on the v12 public tree's 2023-01-01 set, 16 leaves are JN.1 / KP.3.1.1 genomes — lineages that did not exist in 2023 — reported 2020-2022 and predicted 337-570 days past the cutoff, arriving in batches sharing one placeholder date. `pcp_max_predicted_days_past_cutoff` therefore also drops a sample whose *predicted* date lands more than that many days after the cutoff. The tolerance is non-zero because the predicted date is fitted: median |predicted − reported| is 10 days on both production trees (p95 35-37), so a sample collected days before the cutoff can predict past it on fit noise. At the shipped 30 days the filter removes 826 (0.011%) and 2,695 (0.018%) leaves from the two 2026-08-06 trees, which reduces the 2023-01-01 rosters from 38 to 33 included clades (public) and 43 to 34 (gisaid-and-public): every clade it touched went to exactly zero pre-cutoff samples.
+
+Two consequences for a consumer. The cutoff sets depend on the **node dating**, so changing `chronumental_kwargs` changes which PCPs exist. And a cutoff equal to `max_leaf_date` reproduces the full tree byte-for-byte only when this filter removes nothing — `validate_cutoff_pcps` reads `n_predicted_late_dropped` and checks byte-equality or byte-*inequality* accordingly, rather than assuming either.
+
+`included` is not a copy of `adequate_sample_counts`: it is reported by the Snakefile function that drove the fan-out, and the two are reconciled **in both directions**, raising on either kind of disagreement. Requested-but-inadequate means an empty or undersized subtree is about to be published; adequate-but-not-requested is a silently declined clade, and recording it as `included=False` would hide a broken fan-out in the artifact meant to expose it.
+
 ## Fitness Estimates
 
 ### `aamut_fitness/all_aamut_fitness.csv`
@@ -346,6 +397,20 @@ node of `mat/filtered_tree.nwk`.
 |--------|------|-------------|
 | `strain` | string | Node identifier — a strain name for tips, an internal-node id (e.g. `node_123`) for internal nodes. Matches the `bte` `node.id` used downstream. |
 | `predicted_date` | date | chronumental-inferred date (`YYYY-MM-DD`). |
+
+**v12 moves every date in this file.** `chronumental_kwargs` gained
+`--variance_dates 30` ([#146](https://github.com/matsengrp/mat-pcp/issues/146)),
+which loosens the leaf-date likelihood from sd 0.3 d to sd 30 d and so stops the
+fit buying leaf-date accuracy with inflated branch durations
+([#145](https://github.com/matsengrp/mat-pcp/issues/145)). On
+`public_2026-08-06`, the zero-mutation share of total branch-time drops from
+45.9% to 1.4%, `length_cor` rises from 0.40 to 0.85, and the fitted clock moves
+from 0.40x to 1.14x the 23.9 subs/yr nominal. What it spends is tip-residual
+accuracy: the median absolute tip residual rises from 1 d to 10 d against the 30 d
+gate, and the p95 to 35 d. **v11 and v12 node dates are not interchangeable**, and
+neither are the `windows/` outputs derived from them. The root's own date barely
+moves (2019-12-10 → 2019-12-11): the inflation this removes was interior to the
+tree, not a displaced root.
 
 ### `mat/chronumental_timetree.nwk`
 
