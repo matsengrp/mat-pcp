@@ -339,6 +339,29 @@ It refuses to flatter the data: when every scored mutation carries a single
 observation — which is the case on the test tree — it opens with a red callout
 saying the coefficients are arithmetic rather than agreement.
 
+### Launching an Arm Without Editing a Production Config
+
+Every shipped production config leaves `clade_subsamples` empty, because a
+full-size arm costs tens of wall-hours. To launch one, layer an overlay config —
+Snakemake merges multiple `--configfile` values in order:
+
+```bash
+pixi run snakemake -j 16 --use-conda \
+  results/gisaid-and-public_2026-08-06_v12/aamut_fitness/frac_21J-21I_0_2000bp/all_aamut_fitness.csv \
+  --rerun-triggers mtime \
+  --configfile config/config-2026-08-06-six-genes.yaml config/overlay-subsample-probe.yaml
+```
+
+`config/overlay-subsample-probe.yaml` is a worked example (21J + 21I at 20%).
+Two things about that command line are easy to get wrong: `--rerun-triggers
+mtime` is required, or the `code` trigger rebuilds the whole released tree; and
+both `--configfile` and `--rerun-triggers` take *multiple* values, so the target
+path must come **before** them or argparse swallows it.
+
+Targeting `aamut_fitness/{arm}/all_aamut_fitness.csv` builds the counts arm
+only. `correlation_summary.csv` additionally pulls in the PCP arm, since
+`subsample_summary.csv` reconciles the per-gene branch-QC sidecars.
+
 ### Clade Subtrees at Reduced Sampling Depth
 
 | Parameter | Description | Default |

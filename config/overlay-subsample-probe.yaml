@@ -1,0 +1,30 @@
+# Overlay: one clade-subsampling probe arm (#151).
+#
+# Layered on top of a production config rather than edited into it:
+#
+#   pixi run snakemake --configfile config/config-2026-08-06-six-genes.yaml \
+#                                   config/overlay-subsample-probe.yaml ...
+#
+# Snakemake merges multiple --configfile values in order, so this adds the arm
+# without touching the config that built the released tree. That matters for two
+# reasons: every shipped production config is required to leave
+# `clade_subsamples` empty (arms are launched by naming their paths, because
+# full-size arms cost tens of wall-hours), and a modified production config would
+# otherwise have to be reverted by hand afterwards.
+#
+# 21J and 21I are one unit because clade labels are finer than backgrounds: 21I's
+# spike founder differs from 21J's by a single amino acid while carrying 424,135
+# samples, 9.8% of 21J's 4,344,573 on the gisaid tree. Thinning 21J alone would
+# leave that ~10% at full depth as an evidence floor and mask the bottom of the
+# ladder. 21A is Delta too but sits in `clades_to_exclude` (no founder is
+# defined), so it produces no subtree and cannot set a floor -- which is what
+# makes {21J, 21I} sufficient.
+#
+# One fraction, not the four the issue budgets for: this is a probe to find out
+# whether the noise at 20% is already too large to bother measuring 10%, 5% and
+# 1%. Add fractions here to extend the ladder; the draw is a pure function of
+# (unit, seed, clade, fraction), so existing arms do not move.
+clade_subsamples:
+  - unit: [21J, 21I]
+    sampling_fractions: [0.20]
+    seed: 0
