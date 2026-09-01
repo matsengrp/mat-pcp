@@ -209,7 +209,7 @@ pcp_date_cutoffs:
   - "2023-01-01"
 
 # Drop a sample from a cutoff set when its chronumental *predicted* date lands
-# more than this many days after the cutoff (#151). Set to null to disable.
+# more than this many days after the cutoff (#149). Set to null to disable.
 #
 # Some metadata `date` values are wrong by years, so a cutoff answered from that
 # column alone admits post-cutoff genomes: 16 leaves of the v12 public tree's

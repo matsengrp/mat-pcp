@@ -159,7 +159,7 @@ at `min_clade_size=0` and mutation-tests the floor in `modules/cutoffs.py`.
 intermediate.
 
 **Cutoff selection also drops samples the tree dates past the cutoff
-([#151](https://github.com/matsengrp/mat-pcp/issues/151)).** Some metadata
+([#149](https://github.com/matsengrp/mat-pcp/issues/149)).** Some metadata
 collection dates are wrong by years, so answering a cutoff from the `date` column
 alone admits post-cutoff genomes: on the v12 public tree's 2023-01-01 set, 16
 leaves are JN.1 / KP.3.1.1 genomes — lineages that did not exist in 2023 —

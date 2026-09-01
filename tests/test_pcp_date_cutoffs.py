@@ -620,7 +620,7 @@ def check_config_validation():
 
 
 # ---------------------------------------------------------------------------
-# The predicted-date filter (#151)
+# The predicted-date filter (#149)
 # ---------------------------------------------------------------------------
 
 # Every strain here is reported at or before the 2020-06-01 cutoff, so the date
@@ -702,7 +702,7 @@ def check_predicted_late_samples_are_dropped():
                 "detect a filter that reorders its output. Fix the fixture."
             )
 
-        # With the filter off, every row survives: the pre-#151 behaviour is
+        # With the filter off, every row survives: the unfiltered behaviour is
         # reproduced exactly rather than approximately.
         unfiltered = run_samples_upto(
             meta, samples, Path(tmp) / "off.txt", FILTER_CUTOFF, "22A",

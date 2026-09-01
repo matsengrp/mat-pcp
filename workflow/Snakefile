@@ -326,7 +326,7 @@ def get_final_tree():
 # (``pcps/S/``, ``clade_founders/S/``).
 # Drop a sample from a *cutoff* set when its chronumental predicted date lands
 # more than this many days after that cutoff. Optional; ``None`` disables the
-# filter and reproduces the pre-#151 selection exactly.
+# filter and reproduces the unfiltered cutoff selection exactly.
 #
 # A cutoff asks what had been collected by a date, and some metadata dates are
 # wrong by years -- 16 leaves of the v12 public tree's 2023-01-01 set are JN.1 or

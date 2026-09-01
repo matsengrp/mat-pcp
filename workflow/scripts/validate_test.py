@@ -1345,7 +1345,7 @@ def validate_founder_codon_background(output_dir):
 def validate_cutoff_pcps(output_dir):
     """The date-cutoff PCP families reconcile with their roster, in both directions.
 
-    Four properties, each of which fails silently without a check (#149, #151).
+    Four properties, each of which fails silently without a check (#149).
 
     **The skip is real, not just recorded.** ``pcps/cutoff_summary.csv`` names
     every (cutoff, clade) pair with ``included`` true/false, and a false row must
@@ -1364,7 +1364,7 @@ def validate_cutoff_pcps(output_dir):
     live.
 
     **No published sample is predicted well past its cutoff.** The
-    reported-date check above cannot see the case #151 exists for: a metadata
+    reported-date check above cannot see the case the filter exists for: a metadata
     ``date`` that is simply wrong, which passes every date comparison because
     the comparison is against that same wrong value. So the published sample
     lists are re-checked against ``mat/node_dates.tsv`` using the bound the
@@ -1514,7 +1514,7 @@ def validate_cutoff_pcps(output_dir):
                         )
             n_checked_pcps += len(pcps)
 
-    # Independent recomputation of the #151 filter over what was actually
+    # Independent recomputation of the predicted-date filter over what was actually
     # published. Reads the bound from the roster, so it cannot drift from the
     # config, and skips silently only when chronumental's output is absent --
     # which is reported, not swallowed.
@@ -1592,7 +1592,7 @@ def validate_cutoff_pcps(output_dir):
     #
     # "Degenerate" means the *cutoff date* excluded nothing, which is not the
     # same as ``n_samples_upto == n_samples_full`` once the predicted-date
-    # filter (#151) can also remove samples. Comparing the totals directly would
+    # filter (#149) can also remove samples. Comparing the totals directly would
     # reclassify a degenerate arm as truncating the moment one predicted-late sample
     # was dropped, and the byte-equality check below -- the one check that says
     # the cutoff machinery left the ordinary path alone -- would simply stop
