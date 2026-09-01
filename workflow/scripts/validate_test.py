@@ -2052,6 +2052,72 @@ def validate_subsample_arms(output_dir):
                     f"({len(arm_bytes)} vs {len(full_bytes)} bytes)"
                 )
 
+    # correlation_summary.csv is the headline deliverable, and the two things a
+    # run can check about it are that it exists for every arm and that its
+    # coefficients rest on a population the reader can see. A coefficient
+    # reported over an unstated n is the failure this table was designed against.
+    corr_path = os.path.join(output_dir, "correlation_summary.csv")
+    n_corr_thinned = 0
+    corr_note = "absent"
+    if not os.path.isfile(corr_path):
+        diffs.append(
+            f"correlation_summary.csv is missing from {output_dir}, so the arms "
+            f"were built and never compared against full depth"
+        )
+    else:
+        corr = pd.read_csv(corr_path)
+        missing_arms = set(roster["arm"].unique()) - set(corr["arm"].unique())
+        if missing_arms:
+            diffs.append(
+                f"correlation_summary.csv omits arm(s) {sorted(missing_arms)}, "
+                f"which subsample_summary.csv lists"
+            )
+        # Every row must carry its n, including the empty ones: a row with a
+        # coefficient and no n is unreadable, and a row silently dropped for
+        # having an empty population is indistinguishable from one never asked.
+        if corr["n_mutations"].isna().any():
+            diffs.append(
+                "correlation_summary.csv has row(s) with no n_mutations; a "
+                "coefficient is not interpretable without the population it "
+                "was computed on"
+            )
+        has_coef = corr["pearson_r"].notna()
+        if (has_coef & (corr["n_mutations"].fillna(0) < 3)).any():
+            bad = corr[has_coef & (corr["n_mutations"].fillna(0) < 3)]
+            diffs.append(
+                f"correlation_summary.csv reports {len(bad)} coefficient(s) "
+                f"over fewer than 3 mutations, where Pearson r is undefined"
+            )
+        # A control clade reproducing full depth is the end-to-end evidence that
+        # an arm did not reach a clade its config never named.
+        control_moved = corr[(~corr["thinned"]) & (corr["rmse"].fillna(0) > 0)]
+        if len(control_moved):
+            diffs.append(
+                f"correlation_summary.csv shows {len(control_moved)} control "
+                f"row(s) (clades outside an arm's unit) whose fitness effects "
+                f"differ from full depth: the arm reached a clade the config "
+                f"never named"
+            )
+        thinned_rows = corr[corr["thinned"] & (corr["n_mutations"] > 0)]
+        n_corr_thinned = len(thinned_rows)
+        n_control = int((~corr["thinned"]).sum())
+        maxcount = int(corr["max_actual_count_full"].max()) if len(corr) else 0
+        if not n_corr_thinned:
+            corr_note = (
+                f"{len(corr)} row(s) but VACUOUS -- no thinned (arm, clade) "
+                f"pair retained a scored mutation to compare"
+            )
+        else:
+            corr_note = (
+                f"{len(corr)} row(s), {n_corr_thinned} populated thinned "
+                f"row(s), {n_control} control row(s) all matching full depth"
+            )
+            if maxcount <= 1:
+                corr_note += (
+                    f"; NOT A NOISE MEASUREMENT -- max full-depth actual_count "
+                    f"is {maxcount}, so the coefficients are arithmetic"
+                )
+
     n_arms = int(roster["arm"].nunique())
     if not truncating_arms:
         note = (
@@ -2074,7 +2140,7 @@ def validate_subsample_arms(output_dir):
             f"excluding a clade; {n_included} included and {n_excluded} "
             f"excluded (arm, clade) pair(s); {n_grids} grid(s) invariant "
             f"outside the count columns; {n_identities} per-clade "
-            f"normalization constant(s) unmoved"
+            f"normalization constant(s) unmoved; correlations: {corr_note}"
         )
     return diffs, note
 

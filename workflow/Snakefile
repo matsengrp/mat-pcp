@@ -465,6 +465,7 @@ def arm_targets():
     for label in TREE_LABELS:
         outdir = tree_outdir(label)
         targets.append(os.path.join(outdir, "subsample_summary.csv"))
+        targets.append(os.path.join(outdir, "correlation_summary.csv"))
         for arm in SUBSAMPLE_ARMS:
             targets += [
                 os.path.join(outdir, "aamut_fitness", arm, "all_aamut_fitness.csv"),
@@ -2128,6 +2129,67 @@ rule subsample_summary:
         "envs/default.yml"
     script:
         "scripts/subsample_summary.py"
+
+
+def arm_fitness_tables(wildcards):
+    """Every arm's per-clade fitness table, plus the full-depth ones to compare.
+
+    The full-depth side is requested for the arm's *whole* grid rather than for
+    its unit, because non-unit clades are the control: an arm re-aggregates all
+    of them and their effects must come out identical, so their rows are what
+    show the arm did not reach a clade the config never named.
+    """
+    outdir = OUTDIR.format(tree=wildcards.tree)
+    full = clades_w_adequate_counts(wildcards)
+    retained = arm_retained_counts(wildcards)
+    targets = []
+    for arm, spec in SUBSAMPLE_ARMS.items():
+        unit = set(spec["unit"])
+        kept = retained[arm]
+        # Mirrors ``arm_clades``: every clade the full tree processes except a
+        # unit clade thinned below ``min_clade_size``. Spelled out rather than
+        # calling it, since that helper reads ``wildcards.arm_dir`` and this rule
+        # has no such wildcard -- it spans every arm at once.
+        for clade in (c for c in full if c not in unit or c in kept):
+            targets.append(
+                os.path.join(outdir, "aamut_fitness", arm, f"{clade}_aamut_fitness.csv")
+            )
+            targets.append(
+                os.path.join(outdir, "aamut_fitness", f"{clade}_aamut_fitness.csv")
+            )
+    return sorted(set(targets))
+
+
+rule subsample_correlations:
+    """Correlate each arm's per-clade fitness effects against full depth (#151).
+
+    The headline result the arms exist to produce. One row per
+    ``(arm, clade, estimator, filter)``, always carrying the ``n_mutations`` the
+    coefficient was computed on: the count filter raises rho partly by dropping
+    hard cases, so a coefficient without its n is not readable.
+
+    The population is the **intersection of scored mutations**, not the grid.
+    Every grid row carries a ``delta_fitness_ratio`` even when nothing was
+    observed -- 121,348 of 121,427 rows for 20A on the test data -- and those
+    rows are invariant to sampling fraction by construction, so correlating over
+    them returns a confident number describing the grid rather than the
+    estimates. What the vanished mutations contribute instead is ``coverage``.
+    """
+    input:
+        fitness=arm_fitness_tables,
+        summary=os.path.join(OUTDIR, "subsample_summary.csv")
+    output:
+        summary=os.path.join(OUTDIR, "correlation_summary.csv")
+    params:
+        roster=_arm_roster_param,
+        outdir=lambda wc: OUTDIR.format(tree=wc.tree),
+        count_threshold=config.get("subsample_count_threshold", 10)
+    log:
+        os.path.join(OUTDIR, "log/subsample_correlations.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/subsample_correlations.py"
 
 
 # =============================================================================

@@ -304,6 +304,14 @@ jobs:
         echo "Ran $found test files."
         exit "$status"
 
+    # The analysis notebook (#151). marimo notebooks are plain .py files whose
+    # reactive structure is easy to break silently -- a variable defined in two
+    # cells, or a cycle -- and nothing else here imports it, so without this
+    # step it would rot unnoticed until someone opened it.
+    - name: Validate the subsampling analysis notebook
+      run: |
+        pixi run marimo check --strict notebooks/subsample_correlations.py
+
     - name: Validate Snakefile syntax
       run: |
         # Note: --lint returns non-zero for style suggestions (e.g., "Mixed rules and functions")

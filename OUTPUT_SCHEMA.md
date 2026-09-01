@@ -224,6 +224,29 @@ A branch failing several limits is attributed to **one**, in the early-return or
 
 The histogram is in the same file as the outcome tally on purpose: the `max_nt_mutations` drop count is only checkable against the histogram's over-the-limit tail, and splitting them invites reading one without the other.
 
+### `correlation_summary.csv` (output root, #151)
+
+Per-clade fitness effects at reduced sampling depth against full depth. One row
+per `(arm, clade, estimator, filter)`.
+
+| Column | Description |
+|---|---|
+| `arm`, `unit`, `seed`, `fraction` | The arm and the entry that produced it |
+| `clade` | The clade being compared |
+| `thinned` | `True` if this clade is in the arm's unit; `False` rows are **controls** and must reproduce full depth exactly |
+| `estimator` | `delta_fitness_ratio` or `delta_fitness_bayesian`, never pooled |
+| `filter` | `unfiltered`, or `max(actual,expected)_arm>=N` applied to the **arm's** row |
+| `n_mutations` | Size of the population the coefficients were computed on. **Always present**, including 0 |
+| `n_scored_full`, `n_scored_arm` | Mutations with `actual_count > 0` at each depth |
+| `coverage` | `n_scored_both / n_scored_full` — what the correlation cannot see |
+| `max_actual_count_full` | Highest full-depth count anywhere. At 1, `delta_fitness_ratio` is collinear with the expected count and the coefficients are arithmetic, not agreement |
+| `pearson_r`, `spearman_rho` | Empty when the population is smaller than 3 or one side is constant; the row is **kept** so an unmeasurable population is distinguishable from an unasked one |
+| `rmse`, `median_abs_diff` | Direct magnitude of the drift, in fitness units |
+
+The population is the **intersection of scored mutations**, not the grid: every
+grid row carries a fitness value even where nothing was observed, and those rows
+do not depend on sampling fraction.
+
 ## Fitness Estimates
 
 ### `aamut_fitness/all_aamut_fitness.csv`

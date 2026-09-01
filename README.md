@@ -323,6 +323,22 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 | `pcp_date_cutoffs` | List of `YYYY-MM-DD` dates. For each, the whole per-gene PCP family is rebuilt under `pcps/{gene}/upto_{cutoff}/` from the samples collected at or before it ([#149](https://github.com/matsengrp/mat-pcp/issues/149)). Per-tree overridable, like `max_leaf_date`. Each entry must postdate `min_leaf_date` and must not exceed the tree's `max_leaf_date`; a cutoff *equal* to `max_leaf_date` is the degenerate case and reproduces the full tree byte-for-byte | `[]` |
 | `pcp_max_predicted_days_past_cutoff` | Drop a sample from a cutoff set when its chronumental predicted date lands more than this many days after that cutoff ([#149](https://github.com/matsengrp/mat-pcp/issues/149)). Some metadata `date` values are wrong by years, so the `date` column alone admits post-cutoff genomes. The tolerance is non-zero because the predicted date is fitted (median \|predicted − reported\| is 10 days on the production trees, p95 35–37); at 30 it removes 0.011% / 0.018% of leaves. Set to `null` to disable. Applies to the cutoff path only | `30` |
 
+### Analysis Notebook
+
+`notebooks/subsample_correlations.py` is a [marimo](https://docs.marimo.io/)
+notebook drawing the subsampling analysis: per-`(clade, fraction)` scatters of
+arm effect against full depth, rho-vs-fraction curves faceted by estimator, and
+the coverage panel underneath. It reads `correlation_summary.csv` and
+`subsample_summary.csv`.
+
+```bash
+pixi run marimo edit notebooks/subsample_correlations.py
+```
+
+It refuses to flatter the data: when every scored mutation carries a single
+observation — which is the case on the test tree — it opens with a red callout
+saying the coefficients are arithmetic rather than agreement.
+
 ### Clade Subtrees at Reduced Sampling Depth
 
 | Parameter | Description | Default |

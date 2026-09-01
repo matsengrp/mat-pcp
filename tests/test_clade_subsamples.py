@@ -52,6 +52,7 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DRAW_SCRIPT = REPO_ROOT / "workflow" / "scripts" / "subsample_clade_samples.py"
 SUMMARY_SCRIPT = REPO_ROOT / "workflow" / "scripts" / "subsample_summary.py"
+CORR_SCRIPT = REPO_ROOT / "workflow" / "scripts" / "subsample_correlations.py"
 MODULE_REL = "modules/subsample.py"
 
 
@@ -853,6 +854,234 @@ def check_summary_catches_a_draw_of_the_wrong_size():
     return failures
 
 
+
+# ---------------------------------------------------------------------------
+# correlation_summary.csv (#151): the headline result
+# ---------------------------------------------------------------------------
+
+def _write_fitness(path, rows):
+    """One clade's aamut_fitness table. ``rows`` is (aa_mutation, actual, ratio, bayes)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "cluster": CLADE,
+                "gene": "S",
+                "aa_site": i + 1,
+                "aa_mutation": mut,
+                "clade_founder_aa": "A",
+                "mutant_aa": "V",
+                "expected_count": 0.5,
+                "actual_count": actual,
+                "delta_fitness_ratio": ratio,
+                "subset_of_ORF1ab": False,
+                "delta_fitness_bayesian": bayes,
+                "uncertainty": 1.0,
+            }
+            for i, (mut, actual, ratio, bayes) in enumerate(rows)
+        ]
+    ).to_csv(path, index=False)
+
+
+def _corr_fixture(root, arm, scored_disagree=True):
+    """A grid where the scored and whole-grid correlations MUST disagree.
+
+    Eighty unscored rows (``actual_count`` 0 on both sides) carry values that
+    agree perfectly, as real unscored grid rows do -- they are functions of the
+    expected count, which is invariant to sampling depth. Six scored rows carry
+    values that are *anti*-correlated between the two depths.
+
+    So the whole-grid Pearson r is near +1 and the scored-only r is near -1. A
+    script that correlated over the grid would report a confident positive
+    number, which is precisely the mistake this fixture exists to catch.
+    """
+    root = Path(root)
+    d = root / "aamut_fitness"
+    unscored = [(f"A{i}V", 0, 0.1 * i, 0.2 * i) for i in range(80)]
+    scored_full = [(f"S{i}V", 3, float(i), float(i)) for i in range(6)]
+    scored_arm = (
+        [(f"S{i}V", 3, float(5 - i), float(5 - i)) for i in range(6)]
+        if scored_disagree
+        else [(f"S{i}V", 3, float(i), float(i)) for i in range(6)]
+    )
+    _write_fitness(d / f"{CLADE}_aamut_fitness.csv", unscored + scored_full)
+    _write_fitness(d / arm / f"{CLADE}_aamut_fitness.csv", unscored + scored_arm)
+    return root
+
+
+def run_correlations(root, roster, count_threshold=10):
+    out = Path(root) / "correlation_summary.csv"
+    snake = _Namespace(
+        input=_Namespace(fitness=[], summary=""),
+        output=_Namespace(summary=str(out)),
+        params=_Namespace(
+            roster=roster, outdir=str(root), count_threshold=count_threshold
+        ),
+        log=[],
+    )
+    _exec_script(CORR_SCRIPT, {"snakemake": snake})
+    return pd.read_csv(out)
+
+
+def check_correlation_uses_scored_mutations_not_the_grid():
+    """The population is the scored intersection, never the whole grid.
+
+    Every grid row carries a fitness value even when nothing was observed, and
+    those rows are invariant to sampling fraction, so correlating over them
+    measures the grid's construction and returns a confident number describing
+    nothing. Measured on the real test tree: 0.619 over 121,427 grid rows where
+    the 29 genuinely scored mutations give 1.000.
+    """
+    failures = []
+    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    with tempfile.TemporaryDirectory() as tmp:
+        _corr_fixture(tmp, arm)
+        got = run_correlations(tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}))
+        row = got[
+            (got["estimator"] == "delta_fitness_ratio")
+            & (got["filter"] == "unfiltered")
+        ].iloc[0]
+        if int(row["n_mutations"]) != 6:
+            failures.append(
+                f"correlated over {row['n_mutations']} mutations, expected the "
+                f"6 scored ones (the fixture has 80 unscored grid rows that "
+                f"must be excluded)"
+            )
+        if row["pearson_r"] > -0.99:
+            failures.append(
+                f"pearson_r is {row['pearson_r']}, expected about -1.0. The "
+                f"fixture's scored rows are anti-correlated and its unscored "
+                f"rows agree perfectly, so a positive value means the whole "
+                f"grid was correlated instead of the scored intersection."
+            )
+        if abs(row["coverage"] - 1.0) > 1e-9:
+            failures.append(
+                f"coverage is {row['coverage']}, expected 1.0 (all 6 scored "
+                f"mutations are scored at both depths)"
+            )
+    return failures
+
+
+def check_correlating_the_whole_grid_is_caught():
+    """Mutating the script to drop the scored filter must move the answer."""
+    failures = []
+    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "tree"
+        _corr_fixture(root, arm)
+        scripts = _mutated_workflow(
+            tmp,
+            {
+                "scripts/subsample_correlations.py": (
+                    "both = merged[scored_full & scored_arm]",
+                    "both = merged",
+                )
+            },
+        )
+        out = root / "correlation_summary.csv"
+        snake = _Namespace(
+            input=_Namespace(fitness=[], summary=""),
+            output=_Namespace(summary=str(out)),
+            params=_Namespace(
+                roster=_roster(arm, 0.5, [CLADE], [], {CLADE: 4}),
+                outdir=str(root),
+                count_threshold=10,
+            ),
+            log=[],
+        )
+        try:
+            _exec_script(
+                scripts / "subsample_correlations.py", {"snakemake": snake}
+            )
+        except Exception:
+            return failures  # raising is an acceptable way to be caught
+        got = pd.read_csv(out)
+        row = got[
+            (got["estimator"] == "delta_fitness_ratio")
+            & (got["filter"] == "unfiltered")
+        ].iloc[0]
+        if int(row["n_mutations"]) == 6 and row["pearson_r"] < -0.99:
+            failures.append(
+                "correlating the whole grid produced the same answer as "
+                "correlating the scored intersection, so the test cannot tell "
+                "them apart"
+            )
+    return failures
+
+
+def check_correlation_keeps_empty_populations_as_rows():
+    """An unmeasurable population is a row with n=0, not a missing row.
+
+    A silently absent row reads as "not applicable"; an explicit ``n_mutations``
+    of 0 next to a blank coefficient reads as "asked, and there was nothing to
+    answer with". On the real test tree the ``>=10`` filter matches nothing, so
+    this is the ordinary case rather than a corner.
+    """
+    failures = []
+    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    with tempfile.TemporaryDirectory() as tmp:
+        _corr_fixture(tmp, arm)
+        # Threshold far above any count in the fixture, so the filtered
+        # population is empty for both estimators.
+        got = run_correlations(
+            tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}), count_threshold=1000
+        )
+        filtered = got[got["filter"].str.contains(">=1000")]
+        if len(filtered) != 2:
+            failures.append(
+                f"expected 2 filtered rows (one per estimator), got "
+                f"{len(filtered)} -- an empty population was dropped instead "
+                f"of recorded"
+            )
+        if not (filtered["n_mutations"] == 0).all():
+            failures.append(
+                f"filtered rows report n_mutations "
+                f"{filtered['n_mutations'].tolist()}, expected 0"
+            )
+        if not filtered["pearson_r"].isna().all():
+            failures.append(
+                f"filtered rows report a coefficient "
+                f"{filtered['pearson_r'].tolist()} over an empty population"
+            )
+    return failures
+
+
+def check_a_control_clade_that_disagrees_raises():
+    """A non-unit clade must reproduce full depth, or the arm leaked into it.
+
+    This is the fan-out bug (#151 development) turned into an assertion: an arm
+    re-aggregates every clade in its grid but thins only its unit, so a clade
+    outside the unit whose effects moved means the sampler reached a clade the
+    config never named.
+    """
+    failures = []
+    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    with tempfile.TemporaryDirectory() as tmp:
+        _corr_fixture(tmp, arm)
+        # Same tree, but the roster says this clade is NOT in the arm's unit --
+        # so its (deliberately disagreeing) effects must be reported as a leak.
+        roster = {
+            arm: {
+                "unit": ["21J"],
+                "seed": SEED,
+                "frac": 0.5,
+                "included": ["21J"],
+                "excluded": [],
+                "n_retained": {"21J": 4},
+            }
+        }
+        try:
+            run_correlations(tmp, roster)
+            failures.append(
+                "a control clade whose fitness effects differ from full depth "
+                "did not raise; an arm reaching a clade outside its unit would "
+                "go unreported"
+            )
+        except ValueError as exc:
+            if "never named" not in str(exc):
+                failures.append(f"raised, but not about the leak: {exc}")
+    return failures
+
 CHECKS = [
     ("degenerate arm is byte-identical", check_degenerate_arm_reproduces_the_input_byte_for_byte),
     ("draw preserves file order", check_draw_preserves_file_order),
@@ -871,6 +1100,10 @@ CHECKS = [
     ("summary records an excluded clade", check_summary_records_an_excluded_clade),
     ("summary reconciles in both directions", check_summary_reconciles_in_both_directions),
     ("summary catches a wrong-size draw", check_summary_catches_a_draw_of_the_wrong_size),
+    ("correlation uses scored mutations, not the grid", check_correlation_uses_scored_mutations_not_the_grid),
+    ("correlating the whole grid is caught", check_correlating_the_whole_grid_is_caught),
+    ("empty populations stay as rows with n=0", check_correlation_keeps_empty_populations_as_rows),
+    ("a control clade that disagrees raises", check_a_control_clade_that_disagrees_raises),
 ]
 
 

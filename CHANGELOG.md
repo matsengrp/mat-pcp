@@ -54,6 +54,21 @@ the *realized* retention — samples, branches and nucleotide mutations — beca
 nominal fraction is not an evidence cut (1% of 21J's samples keeps 4.1% of its
 nucleotide mutations).
 
+**The analysis, not just the arms.** `correlation_summary.csv` at the output root
+is the headline deliverable: one row per `(arm, clade, estimator, filter)` with
+`pearson_r`, `spearman_rho` and — always — the `n_mutations` they were computed
+on and the `coverage` they say nothing about. The population is the
+**intersection of scored mutations** (`actual_count > 0` on both sides), not the
+grid: every grid row carries a fitness value even when nothing was observed, and
+those rows are invariant to sampling fraction, so correlating over them returns a
+confident number describing the grid's construction. Measured on the test tree,
+that mistake reads 0.619 where the 29 genuinely scored mutations give 1.000.
+Non-unit clades are reported as controls (`thinned=False`) and must reproduce
+full depth exactly, which is the end-to-end evidence that an arm did not reach a
+clade its config never named. `notebooks/subsample_correlations.py` (marimo)
+draws the per-`(clade, fraction)` scatters and the rho-vs-fraction curves from
+it.
+
 **New sidecar on the existing paths.** `mutation_counts/branch_qc/{clade}.csv`
 and `pcps/{gene}/branch_qc/{clade}.csv` (and the `upto_{cutoff}/` and `{arm}/`
 counterparts) tally, per branch-QC limit, how many branches it dropped, plus the

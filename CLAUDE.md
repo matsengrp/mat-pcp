@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `export_newick`, `chronumental`, `chronumental_qc` (tips **and** internal nodes, #139), `chronumental_rtt_plot` (#146), `window_subtree_counts`, `get_ref_fasta`, `ref_coding_sites` |
 | 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade`, `censor_table` (per-clade DASM censor table, #144) |
 | 3b | Date-Cutoff PCPs (#149) | `get_clades_by_cutoff` (checkpoint), `cutoff_pcp_summary`, `samples_upto_cutoff`, `mat_clade_subset_upto`, `extract_pcps_by_clade_upto`, `aggregate_clade_pcps_upto`, `aggregate_filtered_branches_upto`, `curate_pcps_for_dasm_upto`, `curate_all_pcps_for_dasm_upto`, `dasm_ready_pcps_all_clades_upto` |
-| 3c | Subsampling Arms (#151) | `subsample_clade_samples`, `subsample_summary`; everything else an arm rebuilds is an existing rule reached through the optional `{arm_dir}` prefix |
+| 3c | Subsampling Arms (#151) | `subsample_clade_samples`, `subsample_summary`, `subsample_correlations`; everything else an arm rebuilds is an existing rule reached through the optional `{arm_dir}` prefix |
 | 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
 | 5 | Unified Count Table | `build_count_table` (full mutation grid + actual counts + masking flags, via `modules/masking.py`) |
 | 6 | GLM Rate Estimation | `annotate_counts`, `curate_counts`, `master_table`, `get_rates_table`, plus their per-era counterparts `curate_counts_era`, `master_table_era`, `get_rates_table_era` and `era_fit_summary` (#137), `window_expected_counts` (windowed expected counts + `delta_fitness_ratio`; stays on the **pooled** table) |
@@ -96,7 +96,7 @@ pixi run snakemake --delete-all-output --configfile config/config.yaml
 ### Testing
 ```bash
 # Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
-# all fourteen before the pipeline steps)
+# all fourteen, plus a `marimo check` on the analysis notebook, before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 pixi run python tests/test_clade_founder_guards.py
 pixi run python tests/test_founder_codon_background.py
@@ -1023,6 +1023,37 @@ mat-pcp/
     while `expected_counts_by_clade` reads the **full-tree**
     `glm/curated_counts_{era}.csv` -- verified, with the three shared files'
     md5s unchanged across an arm rebuild.
+
+    *The analysis is part of the deliverable, and its population is not the
+    grid.* `correlation_summary.csv` reports rho per
+    `(arm, clade, estimator, filter)` over the **intersection of scored
+    mutations** -- `actual_count > 0` on both sides. Every grid row carries a
+    `delta_fitness_ratio` even where nothing was observed (121,348 of 121,427
+    rows for 20A on the test tree), and those rows are invariant to sampling
+    fraction by construction, so correlating over them measures
+    `build_count_table`'s enumeration and returns a confident number describing
+    nothing: 0.619 for the ratio estimator where the 29 genuinely scored
+    mutations give 1.000. What the vanished mutations contribute is `coverage`,
+    reported separately, and on the test tree it is the more alarming number --
+    50% of samples keeps 61.6% of nucleotide *events* but only **37%** of
+    20A's scored amino-acid mutations, because a mutation resting on one
+    observation is deleted rather than degraded when that observation goes.
+    Three further points. `n_mutations` is on **every** row including the empty
+    ones, and an unmeasurable population is kept with a blank coefficient rather
+    than dropped, since a missing row reads as "not applicable" where `n=0`
+    reads as "asked, and nothing to answer with" -- on the test tree the
+    `>=10` filter matches zero rows, so this is the ordinary case. Non-unit
+    clades are reported as **controls** and must reproduce full depth exactly,
+    which is the end-to-end assertion that the two fan-outs stayed separate.
+    And `max_actual_count_full` is reported because when it is 1 the ratio
+    estimator is collinear with the expected count by construction, so its
+    r = 1.000 is arithmetic -- the test tree's whole regime, which is why both
+    `validate_test.py` and `notebooks/subsample_correlations.py` say
+    **NOT A NOISE MEASUREMENT** rather than printing a reassuring coefficient.
+    Guarded by four checks in `tests/test_clade_subsamples.py`, whose fixture is
+    built so the grid correlation and the scored correlation must **disagree in
+    sign** (80 unscored rows agreeing perfectly, 6 scored rows anti-correlated),
+    so a script correlating the grid is caught rather than merely unproven.
     See [#151](https://github.com/matsengrp/mat-pcp/issues/151).
 
 
@@ -1112,6 +1143,8 @@ Results are stored per tree in `{output_root}/{label}_{version}/`:
 - `windows/`: Sliding-window subtree counts + founders (Phase 2) + per-window expected counts / `delta_fitness_ratio` trajectory (Phase 3)
 - `pcps/`: Curated parent-child pairs, plus each gene's `censored_mutations.csv` DASM training censor table and its `.clades.txt` roster (#144), each gene's `upto_{cutoff}/` date-truncated PCP families and the `cutoff_summary.csv` roster (#149), each gene's `{arm}/` reduced-depth PCP families and `branch_qc/{clade}.csv` tallies (#151)
 - `subsample_summary.csv` (output root): the subsampling-arm roster and realized retention (#151)
+- `correlation_summary.csv` (output root): arm-vs-full-depth fitness correlations, keyed to `n_mutations` and `coverage` (#151)
+- `notebooks/subsample_correlations.py`: the marimo notebook drawing the scatters and rho-vs-fraction curves (#151)
 - `ref/`: Reference genome, coding sites
 - `mutation_counts/`: Per-clade and aggregated counts
 - `clade_founders/`: Founder sequences and mutations

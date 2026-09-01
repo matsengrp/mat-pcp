@@ -29,3 +29,10 @@ conda-libmamba-solver = ">=24"
 python = ">=3.9,<3.12"
 pandas = ">=1.5.3,<3"
 setuptools = ">=65.0.0,<70"
+# Notebook + plotting stack for the clade-subsampling analysis (#151). These are
+# development dependencies of `notebooks/`, not of any pipeline rule: the rules
+# get their software from `workflow/envs/*.yml`, so adding here cannot change a
+# conda env hash and cannot hand a released tree a rerun trigger.
+marimo = ">=0.9"
+matplotlib-base = ">=3.7,<4"
+numpy = ">=1.24,<3"
