@@ -247,14 +247,26 @@ per `(arm, clade, estimator, population)`.
 | `population` | `ground_truth_max_full>=N` (the headline) or `scored_at_both_depths` |
 | `n_mutations` | Size of the population the coefficients were computed on. **Always present**, including 0 |
 | `n_ground_truth` | Size of the fixed ground-truth set for this clade — identical across arms |
-| `n_scored_full`, `n_scored_arm` | Mutations with `actual_count > 0` at each depth |
-| `coverage` | `n_scored_both / n_scored_full` — what the correlation cannot see |
+| `sum_actual_full`, `sum_actual_arm` | Total observed mutation counts over the whole grid at each depth |
+| `count_fraction` | `sum_actual_arm / sum_actual_full` — **the evidence statistic**: what share of the clade's observed mutational evidence the arm still has. Sums *observations*, so a mutation falling from 900 counts to 3 registers as the loss it is |
+| `n_scored_full`, `n_scored_arm` | Mutations with `actual_count > 0` at each depth — the raw *deletion* counts, since a mutation that loses its last observation leaves the scored set entirely |
 | `max_actual_count_full` | Highest full-depth count anywhere. At 1, `delta_fitness_ratio` is collinear with the expected count and the coefficients are arithmetic, not agreement |
 | `pearson_r`, `spearman_rho` | Empty when the population is smaller than 3 or one side is constant; the row is **kept** so an unmeasurable population is distinguishable from an unasked one |
 | `rmse`, `median_abs_diff` | Magnitude of the drift in `delta_fitness_ratio`'s own log-fitness units — **not** a ratio of anything |
 | `bias` | Signed `mean(arm − full)`. Positive everywhere on the measured arms: thin evidence estimates mutations as *more fit* |
 | `regression_slope` | Least-squares slope of arm on full. 1.0 if unbiased in scale; falls toward 0 as estimates shrink to the pseudocount's bound |
 | `sd_full`, `sd_arm` | The two spreads, which is what makes the compression readable |
+
+**There is one retention fraction, deliberately.** A *coverage* column —
+`n_scored_both / n_scored_full`, the share of full-depth-scored mutations the arm
+still scores at all — was reported through an earlier revision of this PR and has
+been removed. It counts each mutation once however much evidence it lost, so it
+diverges from `count_fraction` by up to 30× on real data (21J at cap 5,000: 0.103
+against 0.0033) and predicts the fitted regression slope worse (Spearman 0.940
+against 0.985 over the 120 completed cap fits). Shipping both would ship two
+retention fractions differing threefold with no stated reason to prefer one.
+`n_scored_full` / `n_scored_arm` remain as the raw counts; a consumer who wants
+the ratio can divide.
 
 **The population is fixed on the full-depth row**: a mutation is in the
 ground-truth set when `max(actual_count, expected_count) >= subsample_count_threshold`

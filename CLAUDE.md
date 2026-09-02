@@ -1035,11 +1035,22 @@ mat-pcp/
     fraction by construction, so correlating over them measures
     `build_count_table`'s enumeration and returns a confident number describing
     nothing: 0.619 for the ratio estimator where the 29 genuinely scored
-    mutations give 1.000. What the vanished mutations contribute is `coverage`,
-    reported separately, and on the test tree it is the more alarming number --
-    50% of samples keeps 61.6% of nucleotide *events* but only **37%** of
-    20A's scored amino-acid mutations, because a mutation resting on one
-    observation is deleted rather than degraded when that observation goes.
+    mutations give 1.000. What the thinning cost is reported as
+    `count_fraction` -- `sum(actual_count_arm) / sum(actual_count_full)` over
+    the whole grid -- and that is the **only** retention fraction reported. A
+    fraction of *distinct scored mutations* is the obvious alternative and is
+    deliberately absent: counting mutations rather than observations treats one
+    falling from 900 counts to 3 as fully retained, so it diverges by up to 30x
+    (21J at cap 5,000, 0.0033 against 0.103) and it predicts the fitted slope
+    *worse* -- Spearman 0.985 for `count_fraction` against 0.940 for it, over
+    the 120 completed cap fits. Two retention fractions differing threefold
+    with no stated reason to prefer one is a standing invitation to quote
+    whichever is kinder, so only one ships. `n_scored_full` / `n_scored_arm`
+    remain as the raw deletion counts, because that channel is real and
+    separable -- a mutation resting on one observation is *deleted* rather than
+    degraded when it goes, which on the test tree is the more alarming number
+    (50% of samples keeps 61.6% of nucleotide *events* but only **37%** of
+    20A's scored amino-acid mutations).
     Three further points. `n_mutations` is on **every** row including the empty
     ones, and an unmeasurable population is kept with a blank coefficient rather
     than dropped, since a missing row reads as "not applicable" where `n=0`
@@ -1227,8 +1238,9 @@ Results are stored per tree in `{output_root}/{label}_{version}/`:
 - `windows/`: Sliding-window subtree counts + founders (Phase 2) + per-window expected counts / `delta_fitness_ratio` trajectory (Phase 3)
 - `pcps/`: Curated parent-child pairs, plus each gene's `censored_mutations.csv` DASM training censor table and its `.clades.txt` roster (#144), each gene's `upto_{cutoff}/` date-truncated PCP families and the `cutoff_summary.csv` roster (#149), each gene's `{arm}/` reduced-depth PCP families and `branch_qc/{clade}.csv` tallies (#151)
 - `subsample_summary.csv` (output root): the subsampling-arm roster and realized retention (#151)
-- `correlation_summary.csv` (output root): arm-vs-full-depth fitness correlations, keyed to `n_mutations` and `coverage` (#151)
-- `notebooks/subsample_correlations.py`: the marimo notebook drawing the scatters and rho-vs-fraction curves (#151)
+- `correlation_summary.csv` (output root): arm-vs-full-depth fitness correlations, keyed to `n_mutations` and `count_fraction` (#151)
+- `notebooks/subsample_correlations.py`: the marimo notebook drawing the scatters and rho-vs-fraction curves for both arm kinds (#151)
+- `notebooks/cap_arm_scatters.py`: the cap-arm marimo notebook -- sequences per clade, then per clade the count fraction, the count eCDFs and the ground-truth scatter, then the tree-level sequence and mutation totals (#151)
 - `ref/`: Reference genome, coding sites
 - `mutation_counts/`: Per-clade and aggregated counts
 - `clade_founders/`: Founder sequences and mutations

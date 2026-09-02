@@ -36,6 +36,33 @@ evidence thins, which is what the pseudocount does to a mutation whose
 observations vanished. ``rmse``, ``bias``, ``regression_slope`` and the two
 standard deviations are reported beside every coefficient for that reason.
 
+*What thinning costs is measured as a fraction of observed counts, not of
+distinct mutations.* ``count_fraction = sum(actual_count_arm) /
+sum(actual_count_full)`` over the whole grid is the headline evidence
+statistic. The rejected alternative was a *coverage* fraction -- the share of
+full-depth-scored mutations the arm still scores at all -- which counts each
+mutation once however much evidence it lost, so a mutation falling from 900
+observations to 3 reads as fully retained. It is not the denominator of the
+cut, it diverges from one by up to 30x on real data (21J at cap 5,000: 0.0033
+against 0.103), and it is the *worse* predictor of the thing the arms exist to
+measure: Spearman against the fitted regression slope over the 120 completed cap
+fits is 0.985 for ``count_fraction`` and 0.940 for coverage. So it is not
+reported at all -- two retention fractions differing threefold with no stated
+reason to prefer one is a standing invitation to quote whichever is kinder.
+
+``n_scored_full`` and ``n_scored_arm`` remain, because the deletion channel is
+real and separable -- a mutation that loses its last observation leaves the
+scored set entirely rather than getting noisier -- and those are its raw
+counts. A consumer who wants the ratio can divide; what is not shipped is a
+second *fraction* competing with the headline one.
+
+It is taken over the **whole grid** rather than the ground-truth subset,
+because it describes the thinning and not the comparison population, and it is
+computed on the amino-acid grid this script already holds. That agrees with the
+nucleotide-level ratio to better than 0.002 on every measured (arm, clade) --
+the two differ only by the double-counting at gene overlaps, which is nearly
+identical in numerator and denominator.
+
 *The two estimators are never pooled.* ``delta_fitness_ratio`` and
 ``delta_fitness_bayesian`` respond differently to thin evidence, so a single
 coefficient would hide which one degrades and where.
@@ -105,9 +132,11 @@ COLUMNS = [
     "population",
     "n_mutations",
     "n_ground_truth",
+    "sum_actual_full",
+    "sum_actual_arm",
+    "count_fraction",
     "n_scored_full",
     "n_scored_arm",
-    "coverage",
     "max_actual_count_full",
     "pearson_r",
     "spearman_rho",
@@ -266,12 +295,23 @@ for arm in sorted(roster):
         ground_truth = merged[gt_mask]
         n_ground_truth = int(gt_mask.sum())
 
+        # The evidence statistic: what share of the clade's observed mutation
+        # *counts* the arm still has. Taken over the whole grid, not the
+        # ground-truth subset, because it is the denominator of the thinning
+        # rather than a property of the comparison population -- and summed
+        # rather than counted, so a mutation dropping from 900 observations to
+        # 3 registers as the loss it is.
+        sum_actual_full = float(merged["actual_count_full"].sum())
+        sum_actual_arm = float(merged["actual_count_arm"].sum())
+        count_fraction = (
+            sum_actual_arm / sum_actual_full if sum_actual_full else None
+        )
+
         scored_full = merged["actual_count_full"] > 0
         scored_arm = merged["actual_count_arm"] > 0
         both = merged[scored_full & scored_arm]
         n_scored_full = int(scored_full.sum())
         n_scored_arm = int(scored_arm.sum())
-        coverage = len(both) / n_scored_full if n_scored_full else None
         thinned = clade in unit and clade in included
         if thinned and n_ground_truth:
             n_thinned_compared += 1
@@ -291,9 +331,11 @@ for arm in sorted(roster):
             "max_samples": "" if cap is None else int(cap),
             "thinned": thinned,
             "n_ground_truth": n_ground_truth,
+            "sum_actual_full": int(sum_actual_full),
+            "sum_actual_arm": int(sum_actual_arm),
+            "count_fraction": fmt(count_fraction),
             "n_scored_full": n_scored_full,
             "n_scored_arm": n_scored_arm,
-            "coverage": fmt(coverage),
             "max_actual_count_full": (
                 int(merged["actual_count_full"].max()) if len(merged) else 0
             ),
@@ -341,7 +383,9 @@ for arm in sorted(roster):
             f"{arm}/{clade}{'' if thinned else ' [control]'}: "
             f"{n_ground_truth} ground-truth mutations "
             f"(max(actual,expected) >= {count_threshold:g} at full depth), "
-            f"{n_scored_arm}/{n_scored_full} scored (coverage {fmt(coverage)}), "
+            f"count fraction {fmt(count_fraction)} "
+            f"({int(sum_actual_arm):,}/{int(sum_actual_full):,} observations), "
+            f"{n_scored_arm}/{n_scored_full} distinct scored, "
             f"max full-depth count {base['max_actual_count_full']}"
         )
 

@@ -74,8 +74,17 @@ nucleotide mutations).
 **The analysis, not just the arms.** `correlation_summary.csv` at the output root
 is the headline deliverable: one row per `(arm, clade, estimator, population)`
 with `pearson_r`, `spearman_rho`, `rmse`, `bias`, `regression_slope` and —
-always — the `n_mutations` they were computed on and the `coverage` they say
-nothing about.
+always — the `n_mutations` they were computed on and the evidence they rest on.
+
+**What the thinning cost is `count_fraction`**, and it is the only retention
+fraction reported. `sum(actual_count_arm) / sum(actual_count_full)` over the
+whole grid, beside `sum_actual_full` / `sum_actual_arm`. A fraction of *distinct
+scored mutations* is deliberately not also shipped: counting mutations rather
+than observations treats one falling from 900 counts to 3 as fully retained, it
+diverges from the count fraction by up to 30× in practice (21J at cap 5,000:
+0.0033 against 0.103), and it predicts the fitted slope worse (Spearman 0.940
+against 0.985 over the 120 completed cap fits). `n_scored_full` /
+`n_scored_arm` remain as the raw deletion counts.
 
 The population is a **fixed ground-truth set defined on the full-depth row**:
 `max(actual_count, expected_count) >= subsample_count_threshold` at full depth,

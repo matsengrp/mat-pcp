@@ -2259,8 +2259,18 @@ rule subsample_correlations:
     correlation. Correlating over the whole grid measures the grid: every row
     carries a ``delta_fitness_ratio`` even where nothing was observed (121,348
     of 121,427 rows for 20A on the test data) and those rows are invariant to
-    sampling depth by construction. What the vanished mutations contribute
-    instead is ``coverage``.
+    sampling depth by construction.
+
+    What the thinning cost is reported as ``count_fraction`` --
+    ``sum(actual_count_arm) / sum(actual_count_full)`` over the whole grid. A
+    fraction of *distinct scored mutations* is deliberately **not** also
+    reported: counting mutations rather than observations treats one falling
+    from 900 counts to 3 as fully retained, it diverges from the count fraction
+    by up to 30x in practice (21J at cap 5,000: 0.0033 against 0.103), and it
+    predicts the fitted slope worse (Spearman 0.940 against 0.985 over the 120
+    completed cap fits). Shipping both would be shipping two retention
+    fractions that differ threefold with no stated reason to prefer one.
+    ``n_scored_full`` / ``n_scored_arm`` remain as the raw deletion counts.
 
     ``subsample_summary.csv`` is deliberately **not** an input. The script never
     reads it, and declaring it would make this rule wait on every arm's PCP

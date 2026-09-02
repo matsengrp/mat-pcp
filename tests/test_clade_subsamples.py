@@ -1025,9 +1025,10 @@ def check_correlation_uses_the_ground_truth_set_not_the_grid():
                 f"for a fixture whose arm values are the full-depth values "
                 f"reversed"
             )
-        if abs(row["coverage"] - 1.0) > 1e-9:
+        if int(row["n_scored_full"]) != 6 or int(row["n_scored_arm"]) != 6:
             failures.append(
-                f"coverage is {row['coverage']}, expected 1.0 (all 6 scored "
+                f"n_scored_full/n_scored_arm are {row['n_scored_full']}/"
+                f"{row['n_scored_arm']}, expected 6/6 (all six scored "
                 f"mutations are scored at both depths)"
             )
     return failures
@@ -1076,6 +1077,65 @@ def check_correlating_the_whole_grid_is_caught():
                 "correlating the whole grid produced the same answer as "
                 "correlating the ground-truth set, so the test cannot tell "
                 "them apart"
+            )
+    return failures
+
+
+def check_count_fraction_counts_observations_not_mutations():
+    """``count_fraction`` sums observations; the rejected alternative counted mutations.
+
+    A mutation falling from 900 observations to 3 has lost almost everything,
+    and a *coverage* fraction -- the share of full-depth-scored mutations the
+    arm still scores at all -- calls it fully retained. That alternative is not
+    shipped (it diverges from ``count_fraction`` by up to 30x on real data and
+    predicts the fitted slope worse: Spearman 0.940 against 0.985), but the
+    mistake it represents is one line away from the correct implementation, so
+    the fixture is built to catch it.
+
+    All six scored mutations are still scored in the arm and each falls from 12
+    counts to 3, so summing observations gives exactly 0.25 while counting
+    distinct mutations gives exactly 1.0. The two readings are therefore
+    separated by the widest possible margin on this fixture, rather than by a
+    few percent.
+
+    The denominator is the **whole grid**, not the ground-truth subset: the
+    fraction describes the thinning, not the comparison population. The 80
+    unscored rows contribute 0 to both sums, so they do not move it, which is
+    what makes the expected value exactly 0.25 rather than approximately so.
+    """
+    failures = []
+    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    with tempfile.TemporaryDirectory() as tmp:
+        # Still scored on both sides, but at a quarter of the counts.
+        _corr_fixture(tmp, arm, arm_actual=3)
+        got = run_correlations(tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}))
+        row = got[
+            (got["estimator"] == "delta_fitness_ratio")
+            & (got["population"] == GT_POPULATION)
+        ].iloc[0]
+        if int(row["sum_actual_full"]) != 72:
+            failures.append(
+                f"sum_actual_full is {row['sum_actual_full']}, expected 72 "
+                f"(six scored mutations at 12 counts each, over the whole grid)"
+            )
+        if int(row["sum_actual_arm"]) != 18:
+            failures.append(
+                f"sum_actual_arm is {row['sum_actual_arm']}, expected 18 "
+                f"(six scored mutations at 3 counts each)"
+            )
+        if abs(row["count_fraction"] - 0.25) > 1e-9:
+            failures.append(
+                f"count_fraction is {row['count_fraction']}, expected 0.25. "
+                f"The arm keeps every scored mutation but only a quarter of "
+                f"the observations, so a fraction that counted mutations "
+                f"instead of counts would read 1.0"
+            )
+        if int(row["n_scored_arm"]) != 6:
+            failures.append(
+                f"n_scored_arm is {row['n_scored_arm']}, expected 6 -- the "
+                f"fixture keeps every mutation scored so that summing "
+                f"observations and counting mutations must disagree, so if "
+                f"this has moved the two readings are no longer separated"
             )
     return failures
 
@@ -1468,6 +1528,7 @@ CHECKS = [
     ("cap arms size and exclude like fraction arms", check_cap_arms_size_and_exclude_like_fraction_arms),
     ("correlation uses the ground-truth set, not the grid", check_correlation_uses_the_ground_truth_set_not_the_grid),
     ("correlating the whole grid is caught", check_correlating_the_whole_grid_is_caught),
+    ("count_fraction sums observations, not distinct mutations", check_count_fraction_counts_observations_not_mutations),
     ("the ground-truth set is fixed across sampling depths", check_ground_truth_set_is_fixed_across_sampling_depths),
     ("empty populations stay as rows with n=0", check_correlation_keeps_empty_populations_as_rows),
     ("a control clade that disagrees raises", check_a_control_clade_that_disagrees_raises),

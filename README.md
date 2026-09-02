@@ -323,16 +323,40 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 | `pcp_date_cutoffs` | List of `YYYY-MM-DD` dates. For each, the whole per-gene PCP family is rebuilt under `pcps/{gene}/upto_{cutoff}/` from the samples collected at or before it ([#149](https://github.com/matsengrp/mat-pcp/issues/149)). Per-tree overridable, like `max_leaf_date`. Each entry must postdate `min_leaf_date` and must not exceed the tree's `max_leaf_date`; a cutoff *equal* to `max_leaf_date` is the degenerate case and reproduces the full tree byte-for-byte | `[]` |
 | `pcp_max_predicted_days_past_cutoff` | Drop a sample from a cutoff set when its chronumental predicted date lands more than this many days after that cutoff ([#149](https://github.com/matsengrp/mat-pcp/issues/149)). Some metadata `date` values are wrong by years, so the `date` column alone admits post-cutoff genomes. The tolerance is non-zero because the predicted date is fitted (median \|predicted − reported\| is 10 days on the production trees, p95 35–37); at 30 it removes 0.011% / 0.018% of leaves. Set to `null` to disable. Applies to the cutoff path only | `30` |
 
-### Analysis Notebook
+### Analysis Notebooks
 
-`notebooks/subsample_correlations.py` is a [marimo](https://docs.marimo.io/)
-notebook drawing the subsampling analysis: per-`(clade, fraction)` scatters of
-arm effect against full depth, rho-vs-fraction curves faceted by estimator, and
-the coverage panel underneath. It reads `correlation_summary.csv` and
-`subsample_summary.csv`.
+Two [marimo](https://docs.marimo.io/) notebooks read `correlation_summary.csv`
+and the per-clade fitness tables. Neither is a pipeline rule; both are run by
+hand against a built tree.
+
+`notebooks/subsample_correlations.py` covers **both** arm kinds: per-`(clade,
+depth)` scatters of arm effect against full depth, rho-vs-depth curves faceted
+by estimator, and the count-survival curves underneath. It also reads
+`subsample_summary.csv` when one is present.
+
+`notebooks/cap_arm_scatters.py` is the **cap** kind in depth, one clade at a
+time. It opens with sequences per clade — the stage-setter, since a cap
+intervenes on the tree's composition and so does nothing at all to a clade that
+already sits below it — and then per clade reports the three statistics that say
+what the cap cost:
+
+1. the **count fraction**, `sum(actual_count_arm) / sum(actual_count_full)`,
+   drawn against the nominal cut so the concavity is visible;
+2. the **count eCDFs** at every depth over the clade's whole nucleotide grid;
+3. the **correlation with the ground-truth effects**, drawn as a hexbin scatter
+   against `y = x` with its fitted line, because Pearson r is invariant to a
+   linear transform and so cannot see the shrinkage the slope reports.
+
+It closes with the tree-level totals — total sequences and total mutation counts
+across **all** clades at each cap, which is the size of the training set a DASM
+would actually see. Controls count there: a cap leaves every clade at or below
+it untouched, so the tree total falls far less steeply than its largest clade's
+(at cap 5,000 the v12 gisaid tree keeps 1.5% of sequences and 3.5% of counts,
+where 21J alone keeps 0.12% and 0.33%).
 
 ```bash
 pixi run marimo edit notebooks/subsample_correlations.py
+pixi run marimo edit notebooks/cap_arm_scatters.py
 ```
 
 It refuses to flatter the data: when every scored mutation carries a single
