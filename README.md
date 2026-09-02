@@ -141,6 +141,7 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `<gene>_codon_sites_to_mask.txt` | Problematic codon sites per configured protein (e.g. `S_codon_sites_to_mask.txt`) |
 | `pcps/{gene}/censored_mutations.csv` | Per-clade, per-nucleotide censor table for DASM training (v11+, #144), with a `censored_mutations.clades.txt` clade roster alongside. Carries the clade-specific UShER masks the codon mask drops; a training run applies **both** |
 | `pcps/{gene}/upto_{cutoff}/…` | The whole per-gene PCP family rebuilt from the subtree of samples collected at or before `{cutoff}` (v12+, [#149](https://github.com/matsengrp/mat-pcp/issues/149)). Filenames match the full-tree ones, so a consumer just points at a different root. Re-extracted, **not** a row filter — `matUtils` collapses unifurcations and merges their mutations, so a cutoff table is not a subset of the full one |
+| `{arm}/…`, `pcps/{gene}/{arm}/…`, `aamut_fitness/{arm}/…` | The per-clade counts **and** PCP families rebuilt from subtrees re-extracted at reduced sampling depth (v12+, [#151](https://github.com/matsengrp/mat-pcp/issues/151)). An arm is named `cap_{max_samples}_{seed}` and thins every clade above `max_samples` down to it. `{arm}` is an *optional* path segment inserted before the basename, so filenames match the full-tree ones. Only the thinned clades get arm files; every other clade's per-clade files are the full tree's, read in place |
 | `pcps/cutoff_summary.csv` | The cutoff roster: one row per (cutoff, clade) **including the pairs that were not built**, so a clade skipped for being below `min_clade_size` at that date is distinguishable from a wiring mistake (v12+) |
 | `fitness/expected_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
@@ -319,6 +320,76 @@ See `config/config.yaml` for all configuration options. Key parameters are organ
 |-----------|-------------|---------|
 | `pcp_date_cutoffs` | List of `YYYY-MM-DD` dates. For each, the whole per-gene PCP family is rebuilt under `pcps/{gene}/upto_{cutoff}/` from the samples collected at or before it ([#149](https://github.com/matsengrp/mat-pcp/issues/149)). Per-tree overridable, like `max_leaf_date`. Each entry must postdate `min_leaf_date` and must not exceed the tree's `max_leaf_date`; a cutoff *equal* to `max_leaf_date` is the degenerate case and reproduces the full tree byte-for-byte | `[]` |
 | `pcp_max_predicted_days_past_cutoff` | Drop a sample from a cutoff set when its chronumental predicted date lands more than this many days after that cutoff ([#149](https://github.com/matsengrp/mat-pcp/issues/149)). Some metadata `date` values are wrong by years, so the `date` column alone admits post-cutoff genomes. The tolerance is non-zero because the predicted date is fitted (median \|predicted − reported\| is 10 days on the production trees, p95 35–37); at 30 it removes 0.011% / 0.018% of leaves. Set to `null` to disable. Applies to the cutoff path only | `30` |
+
+### Analysis Notebook
+
+`notebooks/cap_arm_scatters.py` is a [marimo](https://docs.marimo.io/) notebook
+reading the per-clade fitness tables and the arm sample lists. It is not a
+pipeline rule; run it by hand against a built tree.
+
+It opens
+tree-wide, because a cap intervenes on the tree's composition and so does
+nothing at all to a clade that already sits below it: sequences per clade
+against the cap lines, each dot coloured by when the clade appeared (the 1st
+percentile of its samples' reported collection dates — a proxy, and
+deliberately not the minimum, since a few records carry a submission date in
+the collection field), and then the tree-level totals. Those are total
+sequences and total mutation counts across **all** clades at each cap, the size
+of the training set a DASM would actually see. Controls count there: a cap
+leaves every clade at or below it untouched, so the tree total falls far less
+steeply than its largest clade's (at cap 5,000 the v12 gisaid tree keeps 1.5%
+of sequences and 3.5% of counts, where 21J alone keeps 0.12% and 0.33%).
+
+Everything after that is one clade at a time — the three statistics that say
+what the cap cost it:
+
+1. the **count fraction**, `sum(actual_count_arm) / sum(actual_count_full)`,
+   reported against the nominal cut so the concavity is visible;
+2. the **count eCDFs** at every depth over the clade's whole nucleotide grid;
+3. the **correlation with the ground-truth effects**, drawn as a hexbin scatter
+   against `y = x` with its fitted line, because Pearson r is invariant to a
+   linear transform and so cannot see the shrinkage the slope reports.
+
+```bash
+pixi run marimo edit notebooks/cap_arm_scatters.py
+```
+
+It refuses to flatter the data: when every scored mutation carries a single
+observation — which is the case on the test tree — it opens with a red callout
+saying the coefficients are arithmetic rather than agreement.
+
+### Launching an Arm Without Editing a Production Config
+
+Every shipped production config leaves `clade_subsamples` empty, because a
+full-size arm costs tens of wall-hours. To launch one, layer an overlay config —
+Snakemake merges multiple `--configfile` values in order:
+
+```bash
+pixi run snakemake -j 16 --use-conda \
+  results/gisaid-and-public_2026-08-06_v12/aamut_fitness/cap_50000_0/all_aamut_fitness.csv \
+  --rerun-triggers mtime \
+  --configfile config/config-2026-08-06-six-genes.yaml config/overlay-subsample-cap.yaml
+```
+
+`config/overlay-subsample-cap.yaml` is the shipped ladder (caps of 50,000 /
+20,000 / 5,000, with the measurements each one produced in its header
+comment). Two things about that command line are easy to get wrong: `--rerun-triggers
+mtime` is required, or the `code` trigger rebuilds the whole released tree; and
+both `--configfile` and `--rerun-triggers` take *multiple* values, so the target
+path must come **before** them or argparse swallows it.
+
+Targeting `aamut_fitness/{arm}/all_aamut_fitness.csv` builds the counts arm
+only, and `correlation_summary.csv` needs just the two fitness tables it
+correlates — so neither waits on PCP extraction. The PCP arm is built by naming
+a `pcps/{gene}/{arm}/` path.
+
+### Clade Subtrees at Reduced Sampling Depth
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `clade_subsamples` | List of `{max_samples: [int, ...], seed: int}` entries ([#151](https://github.com/matsengrp/mat-pcp/issues/151)), each expanding to one **arm** per cap, named `cap_{max_samples}_{seed}`. An arm thins **every clade above the cap** down to exactly it and leaves smaller ones untouched, so one arm spans a wide range of effective depths and the untouched clades are byte-identical controls by construction. Its unit is *derived* from the tree's clade sizes rather than named — membership is **strictly** above the cap, since a clade of exactly `cap` samples is already at the target — which is why it cannot be written in the config at all. A cap at or above every clade's size thins nothing: that is the **degenerate arm**, whose every output must byte-equal the full tree's. A thinned clade falling below `min_clade_size` is excluded from the arm, and since the arms ship no roster file that exclusion is not recorded in any output — `tests/test_clade_subsamples.py` is its only coverage; a cap below 1 is a hard failure, since `matUtils extract -s` on an empty list is undefined. `sampling_fractions` and `unit` belonged to the fraction arms removed in #151 and are rejected by name. Empty in every production config — arms are launched by naming their paths, since a full-size arm costs ~8 CPU-hours | `[]` |
+
+The GLM neutral fit, the clade founders and each gene's codon mask and censor table are **not** recomputed per arm. The shared fit is deliberate and conservative (it can only make the counts estimator look better than genuinely thin sampling would); the shared mask is a no-op rather than a leak, since it is derived from config, the ProblematicSites VCF, `usher_masked_sites.yaml` and the founder grid, never from a count column.
 
 ### Window Fitness (sliding time windows)
 
@@ -543,7 +614,8 @@ results/
 │       ├── all_pcps_dasm_ready.csv.gz # DASM-training-ready aggregate (v2+)
 │       ├── pcp_curation_report.txt    # PCP curation statistics
 │       ├── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
-│       └── upto_{cutoff}/             # The same family, samples collected <= {cutoff} (v12+, #149)
+│       ├── upto_{cutoff}/             # The same family, samples collected <= {cutoff} (v12+, #149)
+│       └── {arm}/                     # The same family at reduced sampling depth (v12+, #151)
 │   └── cutoff_summary.csv         # Cutoff roster, including the (cutoff, clade) pairs skipped
 ├── ref/
 │   ├── ref.fa                     # Reference genome (FASTA)

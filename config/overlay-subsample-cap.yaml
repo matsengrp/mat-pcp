@@ -1,0 +1,51 @@
+# Overlay: the three per-clade cap arms (#151).
+#
+# Layered on top of a production config rather than edited into it:
+#
+#   pixi run snakemake --configfile config/config-2026-08-06-six-genes.yaml \
+#                                   config/overlay-subsample-cap.yaml ...
+#
+# Snakemake merges multiple --configfile values in order, so this adds the arms
+# without touching the config that built the released tree. Every shipped
+# production config is required to leave `clade_subsamples` empty, because a
+# full-size arm costs ~8 CPU-hours and arms are launched by naming their paths.
+#
+# An arm thins every clade with more than `max_samples` samples down to exactly
+# that many and leaves smaller clades untouched, so it intervenes on the
+# *composition* of the training set rather than only its size -- the intervention
+# dasm2-experiments#1130 A1.1 is asking about. The clades left at or below the
+# cap are byte-identical controls by construction.
+#
+# Why these three values, and what they **measured** on
+# `gisaid-and-public_2026-08-06_v12` (56 clades, 16,984,774 samples, 11,608,598
+# scored nt mutation counts, median clade 59,392). Every number below is from the
+# completed run, not a projection:
+#
+#   X=50000  30 of 56 clades capped. Tree keeps 1,961,678 sequences (11.5%) and
+#            2,690,249 mutation counts (23.2%); median count fraction over the
+#            thinned clades 0.454. Roughly the median clade size -- "equalize to
+#            the typical clade". 21J keeps 5.1% of its counts, at r = 0.778 and a
+#            regression slope of 0.497.
+#   X=20000  41 capped. 933,711 sequences (5.5%), 1,529,815 counts (13.2%);
+#            median count fraction 0.291. 21J at 2.5%, r = 0.683, slope 0.368.
+#   X=5000   49 capped. 257,894 sequences (1.5%), 400,958 counts (3.5%); median
+#            count fraction 0.124. Deliberately past the cliff: 21J at 0.33% of
+#            its counts, r = 0.431 and a slope of 0.117 -- an 8.5x compression
+#            that r prices at a halving.
+#
+# The ladder stops at 5,000. At X=1,000 the whole tree retains 55,588 sequences
+# and 234,806 nt mutations with 55 of 56 clades capped -- probably too little for
+# DASM to learn from, and it leaves a single untouched clade, destroying the
+# internal controls that make an arm self-checking.
+#
+# Mutation retention is *not* the sample fraction: a branch survives whenever any
+# sample below it is retained, so retention is concave and every arm keeps a
+# larger share of counts than of sequences (23.2% against 11.5% at X=50000).
+# Nothing downstream may key to the configured cap; `correlation_summary.csv`
+# reports the measured `count_fraction` instead.
+#
+# The draw is a pure function of (cap, seed, clade), so adding or removing a cap
+# here cannot move an arm that has already been built.
+clade_subsamples:
+  - max_samples: [50000, 20000, 5000]
+    seed: 0

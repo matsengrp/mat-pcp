@@ -18,6 +18,130 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ## Versions
 
+### Unreleased (no version bump)
+
+#### Counts and PCPs for clade subtrees at reduced sampling depth
+
+[#151](https://github.com/matsengrp/mat-pcp/issues/151). Additive by the
+`CLAUDE.md` carve-out: `{arm_dir}` is an *optional* path segment, so every
+existing output path is byte-for-byte unchanged — pinned by a degenerate arm
+(a cap above every clade's size) rather than by inspection. No existing schema is
+read or moved, and the arm rules read one existing output
+(`glm/curated_counts*.csv`) without changing it. Ships no-bump and rides the next
+schema-breaking bump.
+
+**New config section.** `clade_subsamples` — a list of entries, each expanding
+to one **arm** per cap:
+
+```yaml
+clade_subsamples:
+  - max_samples: [50000, 20000, 5000]   # every clade above the cap
+    seed: 0
+```
+
+`max_samples` thins **every clade above the cap** down to it and leaves smaller
+clades untouched, giving one arm per cap, named `cap_{max_samples}_{seed}` (e.g.
+`cap_50000_0`). An arm therefore intervenes on the tree's **composition** rather
+than only its size. Its unit is *derived* from the tree's clade sizes rather than
+named, which is what lets one arm span a wide range of effective depths at once —
+at `max_samples: 50000` on the v12 gisaid tree, 30 of 56 clades are capped with
+effective fractions from 1.15% (21J) to 100% — and makes the untouched clades
+byte-identical controls by construction. Membership is *strictly* above the cap.
+A cap at or above every clade's size thins nothing: that is the **degenerate
+arm**, and must be byte-identical to the full tree.
+
+`sampling_fractions` and `unit` are rejected **by name** rather than as unknown
+keys: they belonged to an earlier fraction-based arm that never shipped, so a
+config written against them says what happened instead of reading as a typo. See
+`CLAUDE.md` pattern 15 for why a cap replaced them.
+
+Empty in every production config; the arms are launched by naming their paths,
+since a full-size arm costs ~8 CPU-hours.
+
+**New outputs.** Per arm, under an inserted `{arm}/` path segment:
+`mat/clades/{arm}/`, `mutations/{arm}/`, `mutation_counts/{arm}/`,
+`{arm}/counts_all.csv`, `glm/{arm}/annotated_counts.csv`, `fitness/{arm}/`,
+`aamut_fitness/{arm}/` and `pcps/{gene}/{arm}/`.
+
+A nominal cut is not an evidence cut — a branch survives whenever any sample
+below it does, so the measured production caps keep 23.2% of the tree's mutation
+counts from 11.5% of its sequences at `max_samples: 50000`. `count_fraction` in
+`correlation_summary.csv` is where that measured retention is reported, and it
+is the only retention fraction the arms ship.
+
+**No roster file.** Unlike #137's `glm/era_fit_summary.csv` and #149's
+`pcps/cutoff_summary.csv`, the arms ship no `(arm, clade)` roster. A clade
+excluded for falling below `min_clade_size` after thinning therefore contributes
+no row and no files, so it is indistinguishable from one a wiring mistake
+dropped; that exclusion needs `min_clade_size > max_samples`, which no config
+sets, and `tests/test_clade_subsamples.py` is its only coverage. Each producer's
+per-limit branch-QC tallies are **log** lines rather than sidecar files.
+
+**The analysis, not just the arms.** `correlation_summary.csv` at the output root
+is the headline deliverable: one row per `(arm, clade, estimator, population)`
+with `pearson_r`, `spearman_rho`, `rmse`, `bias`, `regression_slope` and —
+always — the `n_mutations` they were computed on and the evidence they rest on.
+
+**What the thinning cost is `count_fraction`**, and it is the only retention
+fraction reported. `sum(actual_count_arm) / sum(actual_count_full)` over the
+whole grid, beside `sum_actual_full` / `sum_actual_arm`. A fraction of *distinct
+scored mutations* is deliberately not also shipped: counting mutations rather
+than observations treats one falling from 900 counts to 3 as fully retained, it
+diverges from the count fraction by up to 30× in practice (21J at cap 5,000:
+0.0033 against 0.103), and it predicts the fitted slope worse (Spearman 0.940
+against 0.985 over the 120 completed cap fits). `n_scored_full` /
+`n_scored_arm` remain as the raw deletion counts.
+
+The population is a **fixed ground-truth set defined on the full-depth row**:
+`max(actual_count, expected_count) >= subsample_count_threshold` at full depth,
+so it is the same set of mutations at every sampling depth and coefficients are
+comparable across arms. Two alternatives are both wrong and both look reasonable.
+Reading the threshold off the *arm's* row is survivorship bias — it drops exactly
+the mutations the thinning destroyed, so the denominator moves with the cut and a
+degrading estimator reports a flat correlation over an ever-easier population.
+Correlating over the whole grid measures the grid: every grid row carries a
+fitness value even when nothing was observed and those rows do not depend on
+sampling depth, a mistake that reads 0.619 on the test tree where the 29
+genuinely scored mutations give 1.000.
+
+`pearson_r` is never reported alone, because it is invariant to any linear
+transform of the arm's estimates and so can see neither a systematic shift nor
+the shrinkage toward zero that thin evidence produces: at `cap_5000_0` 21J's
+`regression_slope` is **0.117** while `pearson_r` still reads 0.431, and its
+estimates' sd falls from 1.77 to 0.48 — an 8.5× compression that r prices at a
+halving.
+
+Clades an arm did not thin are reported as controls (`thinned=False`) and must
+reproduce full depth exactly, which is the end-to-end evidence that an arm did
+not reach a clade it was never meant to touch.
+`notebooks/cap_arm_scatters.py` (marimo) opens tree-wide — sequences per clade
+against the cap lines, coloured by when each clade appeared, then the tree-level
+sequence and mutation totals — and then reports each clade's count fraction,
+count eCDFs and ground-truth scatter.
+
+**What an arm does not rebuild.** The GLM neutral fit
+(`glm/curated_counts*.csv`, `glm/master_table*.csv`, `rates_table*.csv`), the
+clade founders, `ref/`, `mat/node_dates*`, `windows/`, and each gene's codon mask
+and censor table. The fit being shared hands the counts arm full-tree neutral
+information it would not have if the clade were genuinely this thinly sampled,
+which is conservative for the hypothesis being tested. The codon mask being
+shared is a *no-op* rather than a leak — it is derived from config, the
+ProblematicSites VCF, `usher_masked_sites.yaml` and the founder grid, never from
+a count column — unlike #149's temporal carve-out.
+
+**Operational note.** `pcp_from_tree.py` and `count_mutations.py` changed, so
+snakemake's `code` trigger marks the released v12 trees out of date. No output
+is missing there, though — both scripts only gained log lines — so
+`--rerun-triggers mtime` leaves the released trees alone. The count and PCP
+payloads are unchanged.
+
+The three test-data arms also add **13.7 min** of benchmarked job time to a
+**6.0 min** baseline (`ntmut_fitness_by_clade` at ~72 s per (arm, clade) is ~11
+min of it), so CI's `Run test pipeline` timeout moves 30 -> 45 minutes. The arms
+are not trimmed to fit: one is degenerate (the byte-identity check), one
+truncates, and one thins a clade below `min_clade_size` so it drops out of the
+grid, and no other arm covers any of the three.
+
 ### v12
 
 **The reason for the bump is `chronumental_kwargs: --variance_dates 30`

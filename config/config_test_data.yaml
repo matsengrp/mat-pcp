@@ -149,6 +149,29 @@ pcp_date_cutoffs:
   - "2020-06-01"
   - "2022-06-01"
 
+# Clade-subsampling arms (#151). Two arms, neither vacuous.
+clade_subsamples:
+  # The three CI clades are 19A (2 samples), 19B (5) and 20A (46), so both cap
+  # shapes are carried:
+  #
+  #   cap_1000_0  caps nothing -- the **degenerate arm**. Its unit is *empty*,
+  #               every clade is a control, and every output must be
+  #               byte-identical to the full tree's. That empty unit is the case
+  #               worth having in CI: it is the one shape where the fan-out
+  #               helpers, the roster and the summary all have nothing to
+  #               iterate, and a crash there would otherwise surface first on a
+  #               production tree.
+  #   cap_20_0    thins 20A (46 -> 20) and leaves 19A and 19B untouched, so one
+  #               run exercises a thinned clade and two controls at once -- which
+  #               is the property an arm's self-checking rests on, since a
+  #               control with rmse > 0 means the arm reached a clade it was
+  #               never meant to touch.
+  #
+  # The shipped production caps (50000/20000/5000) would thin nothing here, so
+  # they cannot be used: every guard below the cap would go unexercised.
+  - max_samples: [1000, 20]
+    seed: 0
+
 # Drop a sample from a cutoff set when its chronumental *predicted* date lands
 # more than this many days after the cutoff (#149). Set to null to disable.
 #

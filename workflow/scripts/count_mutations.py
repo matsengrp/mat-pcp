@@ -93,6 +93,14 @@ nt_muts = pd.read_csv(input_nt_mut_csv).rename(
 log(f"Translated MAT: {len(translated_mat)} rows")
 log(f"NT mutations: {len(nt_muts)} rows")
 
+n_pre_qc = 0
+qc_drops = {
+    "max_nt_mutations": 0,
+    "max_reversions_to_ref": 0,
+    "max_reversions_to_clade_founder": 0,
+}
+n_kept_branches = 0
+
 if len(translated_mat) == 0 or len(nt_muts) == 0:
     log("No data, creating empty output")
     mutation_counts = pd.DataFrame(columns=final_cols)
@@ -124,10 +132,25 @@ else:
             log_size=lambda x: np.log(x["leaves_sharing_mutations"].clip(lower=1)),
         )
         .drop(columns="nt_mutations_coding_and_noncoding")
-        .query("n_reversions_to_ref <= @max_reversions_to_ref")
-        .query("n_reversions_to_founder <= @max_reversions_to_founder")
-        .query("n_nt_mutations <= @max_nt_mutations")
     )
+
+    # Attribute each dropped branch to *one* limit, in the precedence order
+    # below, so the log can say which limit cost this clade its branches. The
+    # three limits are ANDed and all of them are applied, so the order changes
+    # only the attribution and never which branches survive. Nothing keys on
+    # the attribution.
+    n_pre_qc = len(filtered_nodes)
+    qc_drops = {}
+    over_muts = filtered_nodes["n_nt_mutations"] > max_nt_mutations
+    qc_drops["max_nt_mutations"] = int(over_muts.sum())
+    rest = filtered_nodes.loc[~over_muts]
+    over_ref = rest["n_reversions_to_ref"] > max_reversions_to_ref
+    qc_drops["max_reversions_to_ref"] = int(over_ref.sum())
+    rest = rest.loc[~over_ref]
+    over_founder = rest["n_reversions_to_founder"] > max_reversions_to_founder
+    qc_drops["max_reversions_to_clade_founder"] = int(over_founder.sum())
+    filtered_nodes = rest.loc[~over_founder]
+    n_kept_branches = len(filtered_nodes)
 
     log(f"Filtered nodes: {len(filtered_nodes)}")
 
@@ -245,4 +268,12 @@ else:
 
 mutation_counts.to_csv(output_csv, index=False)
 log(f"Counted {len(mutation_counts)} unique mutations for clade {clade}")
+
+# Branch QC diagnostic. ``n_pre_qc`` is the number of branches entering QC,
+# i.e. after the parse-level drop of nodes whose mutation list did not split
+# cleanly -- not a QC limit, so not one of the outcomes below.
+log(f"Branch QC for this clade ({n_pre_qc} scored):")
+log(f"  kept: {n_kept_branches}")
+for _reason, _n in qc_drops.items():
+    log(f"  {_reason}: {_n}")
 log("Done!")

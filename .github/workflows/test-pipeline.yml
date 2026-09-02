@@ -253,6 +253,22 @@ jobs:
       run: |
         pixi run python tests/test_pcp_date_cutoffs.py
 
+    # The clade-subsampling arms (#151). The CI pipeline run covers a thinned
+    # clade, two controls and the degenerate arm's byte-equality, but three
+    # things are unreachable from any config. The membership boundary (`n > cap`
+    # against `n >= cap`) needs a clade of exactly `cap` samples; the
+    # `min_clade_size` exclusion needs `min_clade_size > cap`, which no config
+    # sets; and order preservation is invisible because the test data's clade
+    # lists are already sorted. All three are checked here on fixtures built so
+    # each failure moves a sample (seven deliberately unsorted samples at a cap
+    # of 4, so every draw is partial and the ordering is observable), against a
+    # deliberately broken `workflow/modules/subsample.py` rather than patched
+    # script text -- patching the script would report the sampler as covered
+    # while the operator implementing it sat one file away.
+    - name: Verify the clade-subsample draw, naming and guards
+      run: |
+        pixi run python tests/test_clade_subsamples.py
+
     # The steps above name each test file so a failure points at a readable log.
     # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]
     # is empty, so a *new* tests/test_*.py runs zero times and CI stays green --
@@ -290,6 +306,24 @@ jobs:
         echo "Ran $found test files."
         exit "$status"
 
+    # The analysis notebook (#151). marimo notebooks are plain .py files whose
+    # reactive structure is easy to break silently -- a variable defined in two
+    # cells, or a cycle -- and nothing else here imports it, so without this
+    # step it would rot unnoticed until someone opened it.
+    - name: Validate the subsampling analysis notebook
+      run: |
+        found=0
+        for nb in notebooks/*.py; do
+          [ -e "$nb" ] || continue
+          found=$((found + 1))
+          pixi run marimo check --strict "$nb"
+        done
+        if [ "$found" -eq 0 ]; then
+          echo "No notebooks/*.py matched -- the glob or the layout changed."
+          exit 1
+        fi
+        echo "Checked $found notebook(s)."
+
     - name: Validate Snakefile syntax
       run: |
         # Note: --lint returns non-zero for style suggestions (e.g., "Mixed rules and functions")
@@ -305,7 +339,15 @@ jobs:
           --configfile config/config_test_data.yaml
 
     - name: Run test pipeline
-      timeout-minutes: 30
+      # Raised from 30 with #151. The three clade-subsampling arms in
+      # `config_test_data.yaml` add 13.7 min of benchmarked job time to a 6.0 min
+      # baseline (measured on the dev node; `ntmut_fitness_by_clade` at ~72 s per
+      # (arm, clade) is ~11 min of it), so the margin against the old bound had
+      # fallen to roughly 2x once runner speed and conda setup are allowed for.
+      # The arms are not trimmed to fit because each covers a property nothing
+      # else does: one is degenerate (the byte-identity check), one truncates,
+      # and one thins a clade below `min_clade_size` so it drops out of the grid.
+      timeout-minutes: 45
       run: |
         # Ensure snakemake's conda uses our channel configuration
         export CONDARC="$HOME/.condarc"

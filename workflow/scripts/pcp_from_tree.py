@@ -158,12 +158,19 @@ class PCPHelper:
         if founder_seq:
             log(f"Clade founder sequence loaded ({len(founder_seq)} bp)")
 
-    def fails_filters(self, nt_muts, codon_muts):
-        """Check if a branch fails QC filters.
+    def failure_reason(self, nt_muts, codon_muts):
+        """Name the QC limit this branch fails, or ``None`` if it passes.
 
         Quality filters are applied to CODING mutations only, to align with
         SARS2-mut-fitness behavior and exclude error-prone noncoding regions
         from quality assessment.
+
+        Returns a *reason* rather than a bool so the run log can say which
+        limit cost the gene its branches. The limits are independent and all
+        of them are applied, so the early-return order below decides only the
+        attribution of a branch failing several, never which branches survive
+        -- nothing keys on the attribution, so no other script has to match
+        this order.
         """
         # Extract coding mutations only (exclude noncoding mutations)
         # Uses pre-loaded coding_sites set from coding_sites.csv
@@ -171,11 +178,11 @@ class PCPHelper:
 
         # Too many CODING mutations
         if len(coding_nt_muts) > self.max_nt_mutations:
-            return True
+            return "max_nt_mutations"
 
         # No mutations (coding or noncoding)
         if len(nt_muts) == 0:
-            return True
+            return "no_mutations"
 
         # Too many reversions to reference (CODING only)
         n_reversions = sum(
@@ -183,7 +190,7 @@ class PCPHelper:
             for mut in coding_nt_muts
         )
         if n_reversions > self.max_reversions:
-            return True
+            return "max_reversions_to_ref"
 
         # Too many reversions to clade founder (CODING only)
         if self.founder_seq is not None:
@@ -192,14 +199,14 @@ class PCPHelper:
                 for mut in coding_nt_muts
             )
             if n_reversions_to_founder > self.max_reversions_to_founder:
-                return True
+                return "max_reversions_to_clade_founder"
 
         # Multiple mutations at same codon position (ambiguous)
         codon_positions = {(mut.gene, mut.aa_index) for mut in codon_muts}
         if len(codon_positions) < len(codon_muts):
-            return True
+            return "duplicate_codon_position"
 
-        return False
+        return None
 
     def count_mutations_from_parent(self, parent):
         """Extract PCPs from a parent node."""
@@ -212,7 +219,12 @@ class PCPHelper:
         for node in parent.children:
             nt_muts = node.mutations
             codon_muts = self.translations[node.id]
-            if self.fails_filters(nt_muts, codon_muts):
+            self.qc_hist[
+                sum(1 for m in nt_muts if int(m[1:-1]) in self.coding_sites)
+            ] += 1
+            reason = self.failure_reason(nt_muts, codon_muts)
+            if reason is not None:
+                self.qc_drops[reason] += 1
                 continue
             n_filtered += 1
             pcps[2].append((node.id, nt_muts))
@@ -220,6 +232,9 @@ class PCPHelper:
 
     def count_mutations_on_tree(self):
         """Iterate over all nodes and extract PCPs (no DataFrame conversion yet)."""
+        # Reset per call so a second invocation on one helper cannot double-count.
+        self.qc_drops = defaultdict(int)
+        self.qc_hist = defaultdict(int)
         n_passed = 0
         all_pcps = []
         t0 = time()
@@ -309,6 +324,28 @@ class PCPHelper:
         log(f"Wrote PCPs to {output_path}")
         filtered_df.to_csv(filtered_branches_path, index=False)
         log(f"Wrote {len(filtered_df)} filtered branch IDs to {filtered_branches_path}")
+
+        self.log_branch_qc(n_identical, len(pcp_df))
+
+    def log_branch_qc(self, n_identical, n_kept):
+        """Log why each branch was kept or dropped.
+
+        A diagnostic, not an output. ``identical_slice`` is a *gene-level*
+        outcome with no counterpart on the counts arm: a branch whose only
+        mutations fall outside this gene's CDS blocks is dropped here and kept
+        there.
+        """
+        log(f"Branch QC for this gene ({sum(self.qc_hist.values())} scored):")
+        log(f"  kept: {int(n_kept)}")
+        for reason in (
+            "max_nt_mutations",
+            "no_mutations",
+            "max_reversions_to_ref",
+            "max_reversions_to_clade_founder",
+            "duplicate_codon_position",
+        ):
+            log(f"  {reason}: {int(self.qc_drops.get(reason, 0))}")
+        log(f"  identical_slice: {int(n_identical)}")
 
 
 def main():

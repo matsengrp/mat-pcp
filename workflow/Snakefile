@@ -53,6 +53,11 @@ era_mod = _workflow_loader.load_workflow_module("era", workflow.basedir)
 # pattern that validates a configured cutoff and the pattern that matches it in a
 # path cannot drift apart.
 cutoffs_mod = _workflow_loader.load_workflow_module("cutoffs", workflow.basedir)
+# ``modules/subsample.py``, for the same reason again (#151): the arm naming
+# rule, the ``arm_dir`` wildcard pattern and the draw itself all have to agree
+# between the DAG, the sampling script and the tests, and the way they stay
+# agreed is that there is one copy.
+subsample_mod = _workflow_loader.load_workflow_module("subsample", workflow.basedir)
 
 # =============================================================================
 # Tree Table and Output Directory Template
@@ -259,6 +264,19 @@ wildcard_constraints:
     # ``pcps/{gene}/upto_{cutoff}/{clade}_pcps.csv.gz`` unambiguous against the
     # full-tree ``pcps/{gene}/{clade}_pcps.csv.gz``.
     cutoff=cutoffs_mod.CUTOFF_PATTERN,
+    # A subsampling arm (#151), as an **optional path prefix including its
+    # trailing slash**. Snakemake has no optional path components, so this is
+    # what lets one rule serve both the full-tree path (``arm_dir=""``) and an
+    # arm's (``arm_dir="cap_50000_0/"``) -- which is in turn what makes an arm
+    # whose cap sits above every clade's size byte-identical to the full tree
+    # *by construction* rather than by two rule bodies staying in sync.
+    # ``clade`` and ``gene`` are already slash-free, so the empty alternative
+    # cannot swallow an arm directory and the non-empty one cannot span two
+    # segments.
+    arm_dir=subsample_mod.ARM_DIR_PATTERN,
+    # The same thing without the slash, for the one rule whose output *is* an
+    # arm path (``subsample_clade_samples``) and so has no empty case.
+    arm=subsample_mod.ARM_PATTERN,
 
 
 # Disambiguate the aggregate rules from their per-clade counterparts. The
@@ -335,6 +353,19 @@ def get_final_tree():
 # is a config value rather than a constant because it is a property of the date
 # prior, which #146 has already moved once. See the comment block above
 # ``cutoffs.select_for_cutoff`` for the measured distributions.
+# Clade-subsampling arms (#151). ``max_samples`` thins every clade above the
+# cap down to it and leaves smaller clades untouched, so an arm intervenes on
+# the tree's **composition** -- which is what the pooled-vs-per-clade question
+# actually asks about -- and one arm spans two orders of magnitude of effective
+# depth, with the untouched clades as byte-identical controls by construction.
+#
+# Validated at parse time -- a cap below 1, a missing or non-integer
+# ``max_samples`` and a duplicate arm name are all hard failures, never silent
+# clamps, because a clamped depth produces a well-formed arm at the wrong depth.
+# The removed fraction arms' ``sampling_fractions`` / ``unit`` keys are rejected
+# by name, so a config written against them says what happened.
+SUBSAMPLE_ARMS = subsample_mod.validate_entries(config.get("clade_subsamples"))
+
 PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF = config.get("pcp_max_predicted_days_past_cutoff")
 if PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF is not None:
     PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF = int(PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF)
@@ -417,6 +448,36 @@ def cutoff_targets():
             for gene in PCP_GENES:
                 targets += [
                     os.path.join(outdir, "pcps", gene, subdir, name)
+                    for name in (
+                        "pcp_curation_report.txt",
+                        "all_pcps_dasm_ready.csv.gz",
+                        "dasm_ready_per_clade.done",
+                    )
+                ]
+    return targets
+
+
+def arm_targets():
+    """Every subsampling-arm target across all trees, for ``rule all`` (#151).
+
+    Empty for every config that sets no ``clade_subsamples``, which is all of
+    them today except the test config: the production arms are launched by
+    naming their paths, because a full-size arm costs ~8 CPU-hours.
+    """
+    if not SUBSAMPLE_ARMS:
+        return []
+    targets = []
+    for label in TREE_LABELS:
+        outdir = tree_outdir(label)
+        targets.append(os.path.join(outdir, "correlation_summary.csv"))
+        for arm in SUBSAMPLE_ARMS:
+            targets += [
+                os.path.join(outdir, "aamut_fitness", arm, "all_aamut_fitness.csv"),
+                os.path.join(outdir, "fitness", arm, "ntmut_fitness_aggregated.csv"),
+            ]
+            for gene in PCP_GENES:
+                targets += [
+                    os.path.join(outdir, "pcps", gene, arm, name)
                     for name in (
                         "pcp_curation_report.txt",
                         "all_pcps_dasm_ready.csv.gz",
@@ -514,7 +575,11 @@ rule all:
         # Date-cutoff PCP families (#149). Built per tree rather than as a flat
         # product because ``pcp_date_cutoffs`` is a per-tree setting; empty for
         # every config that does not set it.
-        cutoff_targets()
+        cutoff_targets(),
+        # Clade-subsampling arms (#151). Empty unless the config sets
+        # ``clade_subsamples``; production arms are launched by naming their
+        # paths, since a full-size arm costs ~8 CPU-hours.
+        arm_targets()
 
 
 # =============================================================================
@@ -1090,18 +1155,34 @@ def curated_counts_by_era_inputs(wildcards):
 
 
 def per_clade_inputs(path_template, wildcards, extra_clades=()):
-    """Expand ``path_template`` over this tree's adequate-count clades.
+    """Expand ``path_template`` over this (tree, arm)'s adequate-count clades.
 
-    ``path_template`` carries both the ``{tree}`` and ``{clade}`` wildcards
-    (e.g. ``os.path.join(OUTDIR, "pcps/{clade}_pcps.csv.gz")`` or
-    ``CLADE_FOUNDER_FASTA``). Used in ``input:`` lambdas of the aggregate
-    rules so every per-clade fan-out resolves the checkpoint the same way.
+    ``path_template`` carries the ``{tree}`` and ``{clade}`` wildcards (e.g.
+    ``os.path.join(OUTDIR, "pcps/{clade}_pcps.csv.gz")`` or
+    ``CLADE_FOUNDER_FASTA``) and, for a rule on the subsampling-arm path (#151),
+    ``{arm_dir}`` as well. Used in ``input:`` lambdas of the aggregate rules so
+    every per-clade fan-out resolves the checkpoint the same way.
     ``extra_clades`` appends non-checkpoint clades such as ``"all"``.
+
+    This is the **grid-derived** fan-out: on an arm, every clade in the roster
+    takes the arm's prefix, including ``extra_clades``. It is right for anything
+    sliced out of the arm's own re-aggregated count table
+    (``fitness/{arm}/expected_counts_by_clade.csv`` and everything below it), so
+    the arm's pooled ``all`` row is the arm's rather than the full tree's -- even
+    where a non-unit clade's numbers necessarily come out identical.
+
+    Anything derived from a clade's **subtree** instead uses
+    ``per_unit_clade_inputs``: a non-unit clade was never thinned, so it has no
+    arm subtree and requesting one would send it through the sampler.
     """
+    kwargs = {}
+    if "{arm_dir}" in path_template:
+        kwargs["arm_dir"] = arm_dir_of(wildcards)
     return expand(
         path_template,
         tree=wildcards.tree,
-        clade=clades_w_adequate_counts(wildcards) + list(extra_clades),
+        clade=arm_clades(wildcards) + list(extra_clades),
+        **kwargs,
     )
 
 
@@ -1163,6 +1244,204 @@ def _requested_clades_by_cutoff(wildcards):
     }
 
 
+# =============================================================================
+# Clade-subsampling arms (#151)
+# =============================================================================
+# An **arm** is one per-clade cap. Everything an arm rebuilds follows from
+# re-extracting each thinned clade's subtree from a subsampled sample list,
+# because ``mat/clades/{clade}_samples.txt`` is the only
+# thing determining a clade's subtree: ``translate_mat``, ``mat_sample_paths``
+# and ``extract_pcps_by_clade`` all read ``mat_clade_subset`` and nothing below
+# it re-reads the full tree. Subsampling that one list therefore moves the
+# counts arm and the PCP arm together, by construction rather than by two
+# parallel wirings.
+#
+# **The rule for what an arm rebuilds is one line: rebuild anything that counts
+# mutations, reuse anything that was fitted or defined once.** Rebuilt, in
+# pipeline order: ``mat/clades/{arm}/`` -> ``mutations/{arm}/`` ->
+# ``mutation_counts/{arm}/`` -> ``{arm}/counts_all.csv`` ->
+# ``glm/{arm}/annotated_counts.csv`` -> ``fitness/{arm}/`` ->
+# ``aamut_fitness/{arm}/`` -> ``pcps/{gene}/{arm}/``. Reused in place: the GLM
+# neutral fit (``glm/curated_counts*.csv``, ``glm/master_table*.csv``,
+# ``rates_table*.csv``), the clade founders, ``ref/``, ``mat/node_dates*``,
+# ``windows/``, and each gene's codon mask and censor table.
+#
+# ``glm/`` straddles that line and the cut has to be deliberate:
+# ``glm/{arm}/annotated_counts.csv`` is count-bearing and is rebuilt, while
+# ``glm/curated_counts.csv`` is the GLM's *training set* and is not. The
+# dependency chain ``count_mutations_clade -> ... -> annotate_counts ->
+# curate_counts -> master_table -> rates_table.csv`` makes refitting the
+# default, so ``curate_counts`` deliberately carries no ``{arm_dir}``: an arm's
+# ``expected_counts_by_clade`` reads the **full tree's** per-era curated tables
+# and only its ``counts`` input from the arm. This hands the counts arm
+# full-tree neutral information it would not have if the clade were genuinely
+# this thinly sampled, which is conservative for the hypothesis being tested --
+# it can only make the counts estimator look better.
+#
+# The per-clade ``evol_time`` normalization *does* track the subsample, which is
+# the intended effect: it is what makes an arm's expected counts fall with the
+# cap.
+
+
+def arm_dir_of(wildcards):
+    """This rule invocation's arm directory, ``""`` on the full-tree path."""
+    return getattr(wildcards, "arm_dir", "") or ""
+
+
+def arm_spec(arm):
+    """The validated ``{"seed", "cap"}`` for one arm name."""
+    try:
+        return SUBSAMPLE_ARMS[arm]
+    except KeyError:
+        raise ValueError(
+            f"Arm {arm!r} appears in a requested path but not in config "
+            f"'clade_subsamples'. Configured arms: {sorted(SUBSAMPLE_ARMS)}"
+        )
+
+
+def arm_spec_from_wildcards(wildcards):
+    """The arm spec for a rule carrying ``{arm}`` (never the full-tree path)."""
+    return arm_spec(wildcards.arm)
+
+
+def clade_sizes(wildcards):
+    """``{clade: n_samples}`` from the ``get_clades`` checkpoint."""
+    counts_csv = checkpoints.get_clades.get(tree=wildcards.tree).output.clade_counts
+    counts = pd.read_csv(counts_csv)
+    clade_col = config.get("clade_column", "Nextstrain_clade")
+    return dict(zip(counts[clade_col], counts["count"]))
+
+
+def arm_clade_sizes(wildcards):
+    """``{clade: n_samples}`` restricted to this tree's *processed* roster.
+
+    ``clade_counts.csv`` names every clade the metadata mentions, including ones
+    dropped by ``clades_to_exclude`` or beyond ``max_clades``, which have no
+    subtree to thin. An arm's unit is derived from clade sizes, so deriving it
+    from the raw counts would request ``mat/clades/{arm}/21A_samples.txt`` for a
+    clade the pipeline never extracts -- and 21A is exactly that case on every
+    production tree (no clade founder is defined for it, so it is excluded).
+
+    Kept in the roster's order, because ``resolve_unit`` preserves the order it
+    is given and the aggregate rules concatenate their inputs in it: an
+    untouched clade's byte-equality with the full tree rests on that.
+    """
+    sizes = clade_sizes(wildcards)
+    return {c: sizes[c] for c in clades_w_adequate_counts(wildcards) if c in sizes}
+
+
+def arm_units_for_tree(wildcards):
+    """``{arm: [clades it thins]}`` for this tree.
+
+    The single place an arm's membership is resolved -- it is derived from the
+    clade sizes rather than named, so it cannot be written in the config. Every
+    fan-out helper, the roster param and the sampler's defensive check read this,
+    so they cannot disagree about one clade.
+    """
+    return subsample_mod.arm_units(SUBSAMPLE_ARMS, arm_clade_sizes(wildcards))
+
+
+def arm_unit_of(wildcards, arm):
+    """This arm's unit as a ``set``, for membership tests in the fan-outs."""
+    return set(arm_units_for_tree(wildcards)[arm])
+
+
+def arm_retained_counts(wildcards):
+    """``{arm: {clade: n_retained}}`` for this tree, from the clade counts.
+
+    Arithmetic over an existing checkpoint rather than a new one: the retained
+    count is exactly ``min(n_clade, cap)``, so nothing has to be drawn to know
+    it. A clade thinned below ``min_clade_size`` is dropped from the arm and
+    recorded, because ``get_clades`` applies that threshold to the full metadata
+    and so cannot see a clade that falls below it only after thinning -- which
+    happens exactly when ``min_clade_size > cap``.
+    """
+    return subsample_mod.check_arm_sizes(
+        SUBSAMPLE_ARMS,
+        arm_clade_sizes(wildcards),
+        min_clade_size=config.get("min_clade_size", 100),
+    )
+
+
+def arm_clades(wildcards):
+    """This (tree, arm)'s clade roster, in the *full roster's* order.
+
+    Order is not cosmetic, for the same reason as #149's cutoff roster: the
+    aggregate rules concatenate their inputs in order, and an arm whose cap sits
+    above every clade's size is required to reproduce the full-tree aggregates
+    byte-for-byte. Filtering ``clades_w_adequate_counts`` rather than re-deriving
+    a list makes that hold by construction.
+
+    An arm keeps every clade the full tree processes **except** unit clades
+    thinned below ``min_clade_size``: a non-unit clade is untouched by the
+    subsample and its rows must stay in the grid, or the arm's ``counts_all.csv``
+    would no longer be comparable to the full tree's.
+    """
+    full = clades_w_adequate_counts(wildcards)
+    arm_dir = arm_dir_of(wildcards)
+    if not arm_dir:
+        return full
+    arm = arm_dir.rstrip("/")
+    unit = arm_unit_of(wildcards, arm)
+    kept = arm_retained_counts(wildcards)[arm]
+    return [c for c in full if c not in unit or c in kept]
+
+
+def per_unit_clade_inputs(path_template, wildcards):
+    """The **subtree-derived** fan-out: arm paths for unit clades, full otherwise.
+
+    An arm thins only the clades named in its unit. A non-unit clade therefore
+    has no arm subtree at all, and its per-clade counts and PCPs are read
+    **straight from the full tree's files** rather than recomputed or copied
+    into the arm directory. Three things follow, and they are the reason this is
+    a separate helper rather than a conditional inside ``per_clade_inputs``:
+
+    - the non-unit rows of an arm's aggregates are bit-identical by
+      construction rather than by recomputation, which is the correctness
+      guarantee;
+    - an arm re-*aggregates* every clade (``build_count_table`` needs the whole
+      grid) while re-*counting* only the unit, which is most of the cost saving;
+    - requesting an arm path for a non-unit clade would route it through
+      ``subsample_clade_samples`` and thin a clade the config never named.
+    """
+    arm_dir = arm_dir_of(wildcards)
+    unit = arm_unit_of(wildcards, arm_dir.rstrip("/")) if arm_dir else set()
+    return [
+        path_template.format(
+            tree=wildcards.tree,
+            arm_dir=arm_dir if clade in unit else "",
+            clade=clade,
+        )
+        for clade in arm_clades(wildcards)
+    ]
+
+
+def _arm_roster_param(wildcards):
+    """``{arm: {"unit", "seed", "cap", "included"}}`` for the correlations.
+
+    Passed as a param so ``thinned`` comes from the function that actually drove
+    the fan-out rather than from a second evaluation of the sizing arithmetic:
+    membership is derived from the tree's clade sizes, and a consumer that
+    re-derived it would be a second definition free to disagree about a clade.
+    """
+    retained = arm_retained_counts(wildcards)
+    units = arm_units_for_tree(wildcards)
+    roster = {}
+    for arm, spec in SUBSAMPLE_ARMS.items():
+        kept = retained[arm]
+        unit = units[arm]
+        roster[arm] = {
+            # The *resolved* unit. There is no configured one to fall back on --
+            # membership is derived from the clade sizes -- so recording what the
+            # fan-out actually used is the whole point of passing this as a param.
+            "unit": list(unit),
+            "seed": spec["seed"],
+            "cap": spec["cap"],
+            "included": [c for c in unit if c in kept],
+        }
+    return roster
+
+
 rule samples_by_clade:
     """Extract sample names for a specific clade."""
     input:
@@ -1194,18 +1473,35 @@ rule mat_clade_subset:
     """Extract mutation-annotated tree for a specific clade."""
     input:
         tree=get_final_tree(),
-        samples=rules.samples_by_clade.output.samples
+        # Not ``rules.samples_by_clade.output.samples``: with ``{arm_dir}``
+        # empty this *is* that path, and with it set the list comes from
+        # ``subsample_clade_samples`` instead. Naming the template rather than
+        # one producer is what lets a single rule serve both (#151).
+        samples=os.path.join(OUTDIR, "mat/clades/{arm_dir}{clade}_samples.txt")
     output:
-        tree=os.path.join(OUTDIR, "mat/clades/{clade}_tree.pb")
+        tree=os.path.join(OUTDIR, "mat/clades/{arm_dir}{clade}_tree.pb")
     threads: get_threads("mat_clade_subset")
     resources:
-        mem_mb=8000,
+        # Measured: 104 benchmarks on the v12 gisaid tree peak at 25.0 GB,
+        # median 23.3 GB, against a previous declaration of 8000. Like every
+        # other `mem_mb` here this is inert -- production uses the local
+        # executor with no `--resources` ceiling -- so it is a record of what
+        # the rule costs rather than a limit, kept accurate for the same reason
+        # as #146's chronumental correction: a number 3x under the real peak
+        # reads as measured when it is not, and would over-subscribe whoever
+        # first runs this under a scheduler that honours the request.
+        #
+        # The cost is a property of the *input tree*, not of how many samples
+        # the clade keeps: `matUtils extract -s` loads the whole MAT before
+        # pruning, and 21I at 8% of 21J's sample count measured slightly more.
+        # So it does not fall as the cap falls.
+        mem_mb=28000,
         runtime=60
     benchmark:
-        os.path.join(OUTDIR, "benchmarks/mat_clade_subset_{clade}.tsv")
+        os.path.join(OUTDIR, "benchmarks/{arm_dir}mat_clade_subset_{clade}.tsv")
     log:
-        stderr=os.path.join(OUTDIR, "log/mat_clade_subset_{clade}.stderr"),
-        stdout=os.path.join(OUTDIR, "log/mat_clade_subset_{clade}.stdout")
+        stderr=os.path.join(OUTDIR, "log/{arm_dir}mat_clade_subset_{clade}.stderr"),
+        stdout=os.path.join(OUTDIR, "log/{arm_dir}mat_clade_subset_{clade}.stdout")
     conda:
         "envs/usher.yml"
     shell:
@@ -1241,8 +1537,10 @@ rule extract_pcps_by_clade:
         clade_founder_fasta=CLADE_FOUNDER_FASTA,
         coding_sites=rules.ref_coding_sites.output.csv
     output:
-        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv.gz"),
-        filtered_branches=os.path.join(OUTDIR, "pcps/{gene}/{clade}_filtered_branches.csv")
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}{clade}_pcps.csv.gz"),
+        filtered_branches=os.path.join(
+            OUTDIR, "pcps/{gene}/{arm_dir}{clade}_filtered_branches.csv"
+        )
     params:
         max_nt_mutations=config["max_nt_mutations"],
         max_reversions_to_ref=config["max_reversions_to_ref"],
@@ -1253,9 +1551,9 @@ rule extract_pcps_by_clade:
         mem_mb=8000,
         runtime=120
     benchmark:
-        os.path.join(OUTDIR, "benchmarks/extract_pcps_{gene}_{clade}.tsv")
+        os.path.join(OUTDIR, "benchmarks/{arm_dir}extract_pcps_{gene}_{clade}.tsv")
     log:
-        os.path.join(OUTDIR, "log/extract_pcps_{gene}_{clade}.log")
+        os.path.join(OUTDIR, "log/{arm_dir}extract_pcps_{gene}_{clade}.log")
     conda:
         "envs/bte.yml"
     script:
@@ -1265,13 +1563,13 @@ rule extract_pcps_by_clade:
 rule aggregate_clade_pcps:
     """Aggregate a gene's clade-specific PCPs into a single file."""
     input:
-        pcps=lambda wc: per_clade_inputs(
-            os.path.join(OUTDIR, "pcps", wc.gene, "{clade}_pcps.csv.gz"), wc
+        pcps=lambda wc: per_unit_clade_inputs(
+            os.path.join(OUTDIR, "pcps", wc.gene, "{arm_dir}{clade}_pcps.csv.gz"), wc
         )
     output:
-        all_pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv.gz")
+        all_pcps=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}all_pcps.csv.gz")
     log:
-        os.path.join(OUTDIR, "log/aggregate_clade_pcps_{gene}.log")
+        os.path.join(OUTDIR, "log/{arm_dir}aggregate_clade_pcps_{gene}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1282,14 +1580,19 @@ rule aggregate_filtered_branches:
     """Aggregate per-clade filtered branch IDs and create curation report."""
     input:
         curated_pcps=rules.aggregate_clade_pcps.output.all_pcps,
-        filtered_branches=lambda wc: per_clade_inputs(
-            os.path.join(OUTDIR, "pcps", wc.gene, "{clade}_filtered_branches.csv"), wc
+        filtered_branches=lambda wc: per_unit_clade_inputs(
+            os.path.join(
+                OUTDIR, "pcps", wc.gene, "{arm_dir}{clade}_filtered_branches.csv"
+            ),
+            wc,
         )
     output:
-        report=os.path.join(OUTDIR, "pcps/{gene}/pcp_curation_report.txt"),
-        filtered_branches=os.path.join(OUTDIR, "pcps/{gene}/filtered_branch_ids.csv")
+        report=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}pcp_curation_report.txt"),
+        filtered_branches=os.path.join(
+            OUTDIR, "pcps/{gene}/{arm_dir}filtered_branch_ids.csv"
+        )
     log:
-        os.path.join(OUTDIR, "log/aggregate_filtered_branches_{gene}.log")
+        os.path.join(OUTDIR, "log/{arm_dir}aggregate_filtered_branches_{gene}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1320,17 +1623,30 @@ rule curate_pcps_for_dasm:
     against that protein's own codon mask (``{gene}_codon_sites_to_mask.txt``).
     """
     input:
-        pcps=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps.csv.gz"),
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}{clade}_pcps.csv.gz"),
+        # The codon mask is deliberately **not** arm-prefixed. It is invariant
+        # to sampling depth by construction: ``get_problematic_sites.py``
+        # masks a codon iff ``exclude`` holds at that site in every clade, and
+        # ``masking.compute_exclusions`` derives ``exclude`` from config, the
+        # ProblematicSites VCF, ``usher_masked_sites.yaml`` and the founder
+        # grid -- never from a count column. So reusing it is a no-op rather
+        # than a leak, unlike #149's temporal carve-out.
         mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
     output:
-        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/{clade}_pcps_dasm_ready.csv.gz"),
-        report=os.path.join(OUTDIR, "pcps/{gene}/{clade}_dasm_filter_report.txt"),
-        stats=os.path.join(OUTDIR, "pcps/{gene}/{clade}_dasm_filter_stats.json")
+        dasm_ready=os.path.join(
+            OUTDIR, "pcps/{gene}/{arm_dir}{clade}_pcps_dasm_ready.csv.gz"
+        ),
+        report=os.path.join(
+            OUTDIR, "pcps/{gene}/{arm_dir}{clade}_dasm_filter_report.txt"
+        ),
+        stats=os.path.join(
+            OUTDIR, "pcps/{gene}/{arm_dir}{clade}_dasm_filter_stats.json"
+        )
     params:
         seed=1729,
         val_fraction=0.10
     log:
-        os.path.join(OUTDIR, "log/curate_pcps_for_dasm_{gene}_{clade}.log")
+        os.path.join(OUTDIR, "log/{arm_dir}curate_pcps_for_dasm_{gene}_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1344,17 +1660,19 @@ rule curate_all_pcps_for_dasm:
     convention; this matches ``filter_viral_pcps.sh``'s guardrail.
     """
     input:
-        pcps=os.path.join(OUTDIR, "pcps/{gene}/all_pcps.csv.gz"),
+        pcps=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}all_pcps.csv.gz"),
         mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
     output:
-        dasm_ready=os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv.gz"),
-        report=os.path.join(OUTDIR, "pcps/{gene}/all_dasm_filter_report.txt"),
-        stats=os.path.join(OUTDIR, "pcps/{gene}/all_dasm_filter_stats.json")
+        dasm_ready=os.path.join(
+            OUTDIR, "pcps/{gene}/{arm_dir}all_pcps_dasm_ready.csv.gz"
+        ),
+        report=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}all_dasm_filter_report.txt"),
+        stats=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}all_dasm_filter_stats.json")
     params:
         seed=42,
         val_fraction=0.10
     log:
-        os.path.join(OUTDIR, "log/curate_all_pcps_for_dasm_{gene}.log")
+        os.path.join(OUTDIR, "log/{arm_dir}curate_all_pcps_for_dasm_{gene}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1363,10 +1681,11 @@ rule curate_all_pcps_for_dasm:
 
 def _dasm_ready_per_clade_outputs(wildcards):
     """One gene's per-clade dasm-ready outputs - fans over clades_w_adequate_counts."""
-    return expand(
-        os.path.join(OUTDIR, "pcps", wildcards.gene, "{clade}_pcps_dasm_ready.csv.gz"),
-        tree=wildcards.tree,
-        clade=clades_w_adequate_counts(wildcards),
+    return per_unit_clade_inputs(
+        os.path.join(
+            OUTDIR, "pcps", wildcards.gene, "{arm_dir}{clade}_pcps_dasm_ready.csv.gz"
+        ),
+        wildcards,
     )
 
 
@@ -1379,7 +1698,7 @@ rule dasm_ready_pcps_all_clades:
     input:
         _dasm_ready_per_clade_outputs
     output:
-        sentinel=os.path.join(OUTDIR, "pcps/{gene}/dasm_ready_per_clade.done")
+        sentinel=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}dasm_ready_per_clade.done")
     shell:
         "touch {output.sentinel}"
 
@@ -1525,7 +1844,20 @@ rule mat_clade_subset_upto:
         tree=os.path.join(OUTDIR, "mat/cutoffs/upto_{cutoff}/{clade}_tree.pb")
     threads: get_threads("mat_clade_subset")
     resources:
-        mem_mb=8000,
+        # Measured: 104 benchmarks on the v12 gisaid tree peak at 25.0 GB,
+        # median 23.3 GB, against a previous declaration of 8000. Like every
+        # other `mem_mb` here this is inert -- production uses the local
+        # executor with no `--resources` ceiling -- so it is a record of what
+        # the rule costs rather than a limit, kept accurate for the same reason
+        # as #146's chronumental correction: a number 3x under the real peak
+        # reads as measured when it is not, and would over-subscribe whoever
+        # first runs this under a scheduler that honours the request.
+        #
+        # The cost is a property of the *input tree*, not of how many samples
+        # the clade keeps: `matUtils extract -s` loads the whole MAT before
+        # pruning, and 21I at 8% of 21J's sample count measured slightly more.
+        # So it does not fall as the cap falls.
+        mem_mb=28000,
         runtime=60
     benchmark:
         os.path.join(OUTDIR, "benchmarks/mat_clade_subset_upto_{cutoff}_{clade}.tsv")
@@ -1720,6 +2052,125 @@ rule dasm_ready_pcps_all_clades_upto:
 
 
 # =============================================================================
+# Clade-subsampling arms: the draw and its roster (#151)
+# =============================================================================
+
+rule subsample_clade_samples:
+    """Draw one arm's subsample of one clade's sample list.
+
+    The **only** rule an arm adds to the front of the pipeline: everything else
+    an arm rebuilds is an existing rule reached through ``{arm_dir}``. That is
+    deliberate -- ``mat/clades/{clade}_samples.txt`` is the single input
+    determining a clade's subtree, so thinning it moves the counts arm and the
+    PCP arm together and there is no second wiring to drift.
+
+    Reads the already-written full list rather than re-deriving it from the
+    metadata's clade column: ``samples_by_clade`` matches with the awk regex
+    ``^clade( |$)`` against values like ``21L (Omicron)``, and a Python
+    re-implementation would agree on ``19A`` and disagree on exactly the values
+    that regex exists for.
+    """
+    input:
+        samples=rules.samples_by_clade.output.samples
+    output:
+        samples=os.path.join(OUTDIR, "mat/clades/{arm}/{clade}_samples.txt")
+    params:
+        # The *spec*, not a resolved unit. A cap arm's unit is derived from the
+        # clade sizes, and resolving a checkpoint inside ``params`` would tie
+        # this rule's scheduling to one -- so the script decides membership from
+        # the sample list it already reads (``len(samples) > cap``), which is the
+        # same predicate ``resolve_unit`` applies to the checkpoint's counts.
+        spec=lambda wc: dict(arm_spec_from_wildcards(wc))
+    log:
+        os.path.join(OUTDIR, "log/{arm}/subsample_clade_samples_{clade}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/subsample_clade_samples.py"
+
+
+def arm_fitness_tables(wildcards):
+    """Every arm's per-clade fitness table, plus the full-depth ones to compare.
+
+    The full-depth side is requested for the arm's *whole* grid rather than for
+    its unit, because non-unit clades are the control: an arm re-aggregates all
+    of them and their effects must come out identical, so their rows are what
+    show the arm did not reach a clade the config never named.
+    """
+    outdir = OUTDIR.format(tree=wildcards.tree)
+    full = clades_w_adequate_counts(wildcards)
+    retained = arm_retained_counts(wildcards)
+    targets = []
+    units = arm_units_for_tree(wildcards)
+    for arm in SUBSAMPLE_ARMS:
+        unit = set(units[arm])
+        kept = retained[arm]
+        # Mirrors ``arm_clades``: every clade the full tree processes except a
+        # unit clade thinned below ``min_clade_size``. Spelled out rather than
+        # calling it, since that helper reads ``wildcards.arm_dir`` and this rule
+        # has no such wildcard -- it spans every arm at once.
+        for clade in (c for c in full if c not in unit or c in kept):
+            targets.append(
+                os.path.join(outdir, "aamut_fitness", arm, f"{clade}_aamut_fitness.csv")
+            )
+            targets.append(
+                os.path.join(outdir, "aamut_fitness", f"{clade}_aamut_fitness.csv")
+            )
+    return sorted(set(targets))
+
+
+rule subsample_correlations:
+    """Correlate each arm's per-clade fitness effects against full depth (#151).
+
+    The headline result the arms exist to produce. One row per
+    ``(arm, clade, estimator, population)``, always carrying the
+    ``n_mutations`` the coefficient was computed on.
+
+    The population is a **fixed ground-truth set defined on the full-depth
+    row** -- ``max(actual_count, expected_count) >= subsample_count_threshold``
+    at full depth -- so it is the same set of mutations at every sampling depth
+    and the coefficients are comparable across arms. Two alternatives are both
+    wrong and both look reasonable. Filtering on the *arm's* row is survivorship
+    bias: it drops exactly the mutations the thinning destroyed, so the
+    denominator moves with the cut and a degrading estimator reports a flat
+    correlation. Correlating over the whole grid measures the grid: every row
+    carries a ``delta_fitness_ratio`` even where nothing was observed (121,348
+    of 121,427 rows for 20A on the test data) and those rows are invariant to
+    sampling depth by construction.
+
+    What the thinning cost is reported as ``count_fraction`` --
+    ``sum(actual_count_arm) / sum(actual_count_full)`` over the whole grid. A
+    fraction of *distinct scored mutations* is deliberately **not** also
+    reported: counting mutations rather than observations treats one falling
+    from 900 counts to 3 as fully retained, it diverges from the count fraction
+    by up to 30x in practice (21J at cap 5,000: 0.0033 against 0.103), and it
+    predicts the fitted slope worse (Spearman 0.940 against 0.985 over the 120
+    completed cap fits). Shipping both would be shipping two retention
+    fractions that differ threefold with no stated reason to prefer one.
+    ``n_scored_full`` / ``n_scored_arm`` remain as the raw deletion counts.
+
+    This is the arms' only summary file. Its inputs are the two fitness tables
+    it correlates and nothing else, so requesting it does not pull in a clade's
+    PCP extraction -- which for a cap arm would be 30 clades x 6 genes of work
+    that has no bearing on a correlation between two tables.
+    """
+    input:
+        fitness=arm_fitness_tables
+    output:
+        summary=os.path.join(OUTDIR, "correlation_summary.csv")
+    params:
+        roster=_arm_roster_param,
+        outdir=lambda wc: OUTDIR.format(tree=wc.tree),
+        count_threshold=config.get("subsample_count_threshold", 10)
+    log:
+        os.path.join(OUTDIR, "log/subsample_correlations.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/subsample_correlations.py"
+
+
+# =============================================================================
 # Stage 3a: Clade Founders
 # =============================================================================
 
@@ -1847,9 +2298,9 @@ rule translate_mat:
         ref_fasta=rules.get_ref_fasta.output.ref_fasta,
         ref_gtf=rules.edit_ref_gtf.output.gtf
     output:
-        tsv=os.path.join(OUTDIR, "mutations/{clade}_mutations.tsv")
+        tsv=os.path.join(OUTDIR, "mutations/{arm_dir}{clade}_mutations.tsv")
     log:
-        os.path.join(OUTDIR, "log/translate_mat_{clade}.log")
+        os.path.join(OUTDIR, "log/{arm_dir}translate_mat_{clade}.log")
     conda:
         "envs/usher.yml"
     shell:
@@ -1870,9 +2321,9 @@ rule mat_sample_paths:
     input:
         mat=rules.mat_clade_subset.output.tree
     output:
-        tsv=os.path.join(OUTDIR, "mutations/{clade}_sample_paths.tsv")
+        tsv=os.path.join(OUTDIR, "mutations/{arm_dir}{clade}_sample_paths.tsv")
     log:
-        os.path.join(OUTDIR, "log/mat_sample_paths_{clade}.log")
+        os.path.join(OUTDIR, "log/{arm_dir}mat_sample_paths_{clade}.log")
     conda:
         "envs/usher.yml"
     shell:
@@ -1888,9 +2339,9 @@ rule sample_path_to_nt_mutations:
     input:
         tsv=rules.mat_sample_paths.output.tsv
     output:
-        csv=os.path.join(OUTDIR, "mutations/{clade}_nt_mutations.csv")
+        csv=os.path.join(OUTDIR, "mutations/{arm_dir}{clade}_nt_mutations.csv")
     log:
-        os.path.join(OUTDIR, "log/sample_path_to_nt_mutations_{clade}.log")
+        os.path.join(OUTDIR, "log/{arm_dir}sample_path_to_nt_mutations_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1909,13 +2360,13 @@ rule count_mutations_clade:
         ref_fasta=rules.get_ref_fasta.output.ref_fasta,
         clade_founder_fasta=rules.clade_founder_fasta.output.fasta
     output:
-        csv=os.path.join(OUTDIR, "mutation_counts/{clade}.csv")
+        csv=os.path.join(OUTDIR, "mutation_counts/{arm_dir}{clade}.csv")
     params:
         max_nt_mutations=config["max_nt_mutations"],
         max_reversions_to_ref=config["max_reversions_to_ref"],
         max_reversions_to_clade_founder=config["max_reversions_to_clade_founder"]
     log:
-        os.path.join(OUTDIR, "log/count_mutations_{clade}.log")
+        os.path.join(OUTDIR, "log/{arm_dir}count_mutations_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -1925,13 +2376,13 @@ rule count_mutations_clade:
 rule aggregate_mutation_counts:
     """Aggregate mutation counts across all clades."""
     input:
-        counts=lambda wc: per_clade_inputs(
-            os.path.join(OUTDIR, "mutation_counts/{clade}.csv"), wc
+        counts=lambda wc: per_unit_clade_inputs(
+            os.path.join(OUTDIR, "mutation_counts/{arm_dir}{clade}.csv"), wc
         )
     output:
-        csv=os.path.join(OUTDIR, "mutation_counts/aggregated.csv")
+        csv=os.path.join(OUTDIR, "mutation_counts/{arm_dir}aggregated.csv")
     log:
-        os.path.join(OUTDIR, "log/aggregate_mutation_counts.log")
+        os.path.join(OUTDIR, "log/{arm_dir}aggregate_mutation_counts.log")
     conda:
         "envs/default.yml"
     script:
@@ -1946,11 +2397,19 @@ rule clade_founder_nts:
     """Get nucleotide at each coding site for all clade founders."""
     input:
         coding_sites=rules.ref_coding_sites.output.csv,
+        # ``CLADE_FOUNDER_FASTA`` carries no ``{arm_dir}`` on purpose: a
+        # founder is a property of the clade's defining mutations, not of which
+        # samples were collected, so ``clade_founder_fasta`` reads only the
+        # Neher/Roemer JSONs and the reference. An arm therefore reads the very
+        # same FASTAs and differs only in *which clades* the table spans --
+        # which it must, or a unit clade thinned below ``min_clade_size`` would
+        # reappear in the arm's grid as an all-zero row rather than being
+        # absent (#151).
         fastas=lambda wc: per_clade_inputs(CLADE_FOUNDER_FASTA, wc)
     output:
-        csv=os.path.join(OUTDIR, "clade_founder_nts.csv")
+        csv=os.path.join(OUTDIR, "{arm_dir}clade_founder_nts.csv")
     log:
-        os.path.join(OUTDIR, "log/clade_founder_nts.log")
+        os.path.join(OUTDIR, "log/{arm_dir}clade_founder_nts.log")
     conda:
         "envs/default.yml"
     script:
@@ -1977,12 +2436,12 @@ rule build_count_table:
         site_mask=rules.get_site_mask.output.csv,
         usher_masked_sites=config["usher_masked_sites"]
     output:
-        csv=os.path.join(OUTDIR, "counts_all.csv")
+        csv=os.path.join(OUTDIR, "{arm_dir}counts_all.csv")
     params:
         sites_to_exclude=config.get("sites_to_exclude", []),
         site_include_range=config.get("site_include_range", {"start": 266, "end": 29674})
     log:
-        os.path.join(OUTDIR, "log/build_count_table.log")
+        os.path.join(OUTDIR, "log/{arm_dir}build_count_table.log")
     conda:
         "envs/default.yml"
     script:
@@ -2000,15 +2459,15 @@ rule annotate_counts:
         clade_founder=rules.clade_founder_nts.output.csv,
         rna_struct=config["rna_structure_data"]
     output:
-        counts_csv=os.path.join(OUTDIR, "glm/annotated_counts.csv"),
-        founder_csv=os.path.join(OUTDIR, "glm/clade_founder_annotated.csv")
+        counts_csv=os.path.join(OUTDIR, "glm/{arm_dir}annotated_counts.csv"),
+        founder_csv=os.path.join(OUTDIR, "glm/{arm_dir}clade_founder_annotated.csv")
     params:
         reference_clade=config.get("reference_clade", "19A"),
         lightswitch_boundaries=config.get("glm_lightswitch_boundaries", {
             "CT": 13467, "AT": 21562, "CG": 21562, "GC": 21562
         })
     log:
-        os.path.join(OUTDIR, "log/annotate_counts.log")
+        os.path.join(OUTDIR, "log/{arm_dir}annotate_counts.log")
     conda:
         "envs/default.yml"
     script:
@@ -2023,8 +2482,15 @@ rule curate_counts:
     arm of the downstream per-era experiment (#137 Task 3), not legacy baggage.
     """
     input:
-        counts=rules.annotate_counts.output.counts_csv,
-        clade_founder=rules.annotate_counts.output.founder_csv
+        # Pinned to the **full tree's** annotated counts, not
+        # ``rules.annotate_counts.output`` -- that reference now carries
+        # ``{arm_dir}`` and would drag the GLM refit into every arm. The
+        # neutral model is fitted once, on all the data, and an arm reads it
+        # unchanged; this is the deliberate cut in the dependency chain
+        # ``annotate_counts -> curate_counts -> master_table -> rates_table``,
+        # which otherwise makes refitting the default (#151).
+        counts=os.path.join(OUTDIR, "glm/annotated_counts.csv"),
+        clade_founder=os.path.join(OUTDIR, "glm/clade_founder_annotated.csv")
     output:
         curated=os.path.join(OUTDIR, "glm/curated_counts.csv")
     params:
@@ -2046,8 +2512,15 @@ rule curate_counts_era:
     clades away, so there is nothing left to partition on.
     """
     input:
-        counts=rules.annotate_counts.output.counts_csv,
-        clade_founder=rules.annotate_counts.output.founder_csv
+        # Pinned to the **full tree's** annotated counts, not
+        # ``rules.annotate_counts.output`` -- that reference now carries
+        # ``{arm_dir}`` and would drag the GLM refit into every arm. The
+        # neutral model is fitted once, on all the data, and an arm reads it
+        # unchanged; this is the deliberate cut in the dependency chain
+        # ``annotate_counts -> curate_counts -> master_table -> rates_table``,
+        # which otherwise makes refitting the default (#151).
+        counts=os.path.join(OUTDIR, "glm/annotated_counts.csv"),
+        clade_founder=os.path.join(OUTDIR, "glm/clade_founder_annotated.csv")
     output:
         curated=os.path.join(OUTDIR, "glm/curated_counts_{era}.csv")
     params:
@@ -2245,7 +2718,10 @@ rule get_problematic_sites:
     DASM-ready PCPs unmasked (#133).
     """
     input:
-        expected_vs_actual=rules.build_count_table.output.csv,
+        # Full tree, not the arm's: the codon mask is invariant to sampling
+        # fraction (see ``curate_pcps_for_dasm``), so an arm-local recompute
+        # would be a no-op that nonetheless costs a full count-table pass.
+        expected_vs_actual=os.path.join(OUTDIR, "counts_all.csv"),
         gtf=rules.edit_ref_gtf.output.gtf
     output:
         sites_to_mask=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
@@ -2338,13 +2814,13 @@ rule expected_counts_by_clade:
         unpack(curated_counts_by_era_inputs),
         counts=rules.annotate_counts.output.counts_csv,
     output:
-        csv=os.path.join(OUTDIR, "fitness/expected_counts_by_clade.csv")
+        csv=os.path.join(OUTDIR, "fitness/{arm_dir}expected_counts_by_clade.csv")
     params:
         lightswitch_boundaries=config.get("glm_lightswitch_boundaries", {
             "CT": 13467, "AT": 21562, "CG": 21562, "GC": 21562
         })
     log:
-        os.path.join(OUTDIR, "log/expected_counts_by_clade.log")
+        os.path.join(OUTDIR, "log/{arm_dir}expected_counts_by_clade.log")
     conda:
         "envs/default.yml"
     script:
@@ -2356,11 +2832,13 @@ rule ntmut_counts_by_clade:
     input:
         counts=rules.expected_counts_by_clade.output.csv
     output:
-        csv=os.path.join(OUTDIR, "fitness/ntmut_counts/{clade}_ntmut_counts.csv")
+        csv=os.path.join(
+            OUTDIR, "fitness/ntmut_counts/{arm_dir}{clade}_ntmut_counts.csv"
+        )
     params:
         clade="{clade}"
     log:
-        os.path.join(OUTDIR, "log/ntmut_counts_{clade}.log")
+        os.path.join(OUTDIR, "log/{arm_dir}ntmut_counts_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -2372,7 +2850,9 @@ rule ntmut_fitness_by_clade:
     input:
         counts=rules.ntmut_counts_by_clade.output.csv
     output:
-        csv=os.path.join(OUTDIR, "fitness/ntmut_fitness/{clade}_ntmut_fitness.csv")
+        csv=os.path.join(
+            OUTDIR, "fitness/ntmut_fitness/{arm_dir}{clade}_ntmut_fitness.csv"
+        )
     params:
         N_f=config.get("fitness_N_f", 300),
         N_n_exp=config.get("fitness_N_n_exp", 300)
@@ -2381,9 +2861,9 @@ rule ntmut_fitness_by_clade:
         mem_mb=2000,
         runtime=30
     benchmark:
-        os.path.join(OUTDIR, "benchmarks/ntmut_fitness_{clade}.tsv")
+        os.path.join(OUTDIR, "benchmarks/{arm_dir}ntmut_fitness_{clade}.tsv")
     log:
-        os.path.join(OUTDIR, "log/ntmut_fitness_{clade}.log")
+        os.path.join(OUTDIR, "log/{arm_dir}ntmut_fitness_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -2394,13 +2874,15 @@ rule aggregate_ntmut_fitness:
     """Aggregate nucleotide fitness across all clades."""
     input:
         fitness_files=lambda wc: per_clade_inputs(
-            os.path.join(OUTDIR, "fitness/ntmut_fitness/{clade}_ntmut_fitness.csv"),
+            os.path.join(
+                OUTDIR, "fitness/ntmut_fitness/{arm_dir}{clade}_ntmut_fitness.csv"
+            ),
             wc, extra_clades=["all"]
         )
     output:
-        csv=os.path.join(OUTDIR, "fitness/ntmut_fitness_aggregated.csv")
+        csv=os.path.join(OUTDIR, "fitness/{arm_dir}ntmut_fitness_aggregated.csv")
     log:
-        os.path.join(OUTDIR, "log/aggregate_ntmut_fitness.log")
+        os.path.join(OUTDIR, "log/{arm_dir}aggregate_ntmut_fitness.log")
     conda:
         "envs/default.yml"
     script:
@@ -2416,7 +2898,7 @@ rule aamut_fitness_by_clade:
     input:
         ntmut_fitness=rules.ntmut_fitness_by_clade.output.csv
     output:
-        csv=os.path.join(OUTDIR, "aamut_fitness/{clade}_aamut_fitness.csv")
+        csv=os.path.join(OUTDIR, "aamut_fitness/{arm_dir}{clade}_aamut_fitness.csv")
     params:
         orf1ab_to_nsps=config.get("orf1ab_to_nsps", {}),
         gene_overlaps=config.get("gene_overlaps", {"retain": [], "exclude": []}),
@@ -2426,9 +2908,9 @@ rule aamut_fitness_by_clade:
         mem_mb=2000,
         runtime=30
     benchmark:
-        os.path.join(OUTDIR, "benchmarks/aamut_fitness_{clade}.tsv")
+        os.path.join(OUTDIR, "benchmarks/{arm_dir}aamut_fitness_{clade}.tsv")
     log:
-        os.path.join(OUTDIR, "log/aamut_fitness_{clade}.log")
+        os.path.join(OUTDIR, "log/{arm_dir}aamut_fitness_{clade}.log")
     conda:
         "envs/default.yml"
     script:
@@ -2439,12 +2921,12 @@ rule aggregate_aamut_fitness:
     """Aggregate amino acid fitness across all clades."""
     input:
         fitness_files=lambda wc: per_clade_inputs(
-            os.path.join(OUTDIR, "aamut_fitness/{clade}_aamut_fitness.csv"), wc
+            os.path.join(OUTDIR, "aamut_fitness/{arm_dir}{clade}_aamut_fitness.csv"), wc
         )
     output:
-        csv=os.path.join(OUTDIR, "aamut_fitness/all_aamut_fitness.csv")
+        csv=os.path.join(OUTDIR, "aamut_fitness/{arm_dir}all_aamut_fitness.csv")
     log:
-        os.path.join(OUTDIR, "log/aggregate_aamut_fitness.log")
+        os.path.join(OUTDIR, "log/{arm_dir}aggregate_aamut_fitness.log")
     conda:
         "envs/default.yml"
     script:
@@ -2489,7 +2971,11 @@ rule validate_pcp_vs_counts:
         aamut_fitness_files=lambda wc: per_clade_inputs(
             os.path.join(OUTDIR, "aamut_fitness/{clade}_aamut_fitness.csv"), wc
         ),
-        all_aamut_fitness=rules.aggregate_aamut_fitness.output.csv,
+        # Full tree, not ``rules.aggregate_aamut_fitness.output`` -- that
+        # reference now carries ``{arm_dir}``. Validation compares the
+        # full-depth PCPs against the full-depth fitness table; an arm has its
+        # own copies of both and is not cross-validated here (#151).
+        all_aamut_fitness=os.path.join(OUTDIR, "aamut_fitness/all_aamut_fitness.csv"),
         gtf=rules.edit_ref_gtf.output.gtf
     output:
         report=os.path.join(OUTDIR, "validation/{gene}/pcp_vs_counts_report.txt"),
