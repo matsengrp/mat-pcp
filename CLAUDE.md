@@ -1240,7 +1240,7 @@ Results are stored per tree in `{output_root}/{label}_{version}/`:
 - `subsample_summary.csv` (output root): the subsampling-arm roster and realized retention (#151)
 - `correlation_summary.csv` (output root): arm-vs-full-depth fitness correlations, keyed to `n_mutations` and `count_fraction` (#151)
 - `notebooks/subsample_correlations.py`: the marimo notebook drawing the scatters and rho-vs-fraction curves for both arm kinds (#151)
-- `notebooks/cap_arm_scatters.py`: the cap-arm marimo notebook -- sequences per clade, then per clade the count fraction, the count eCDFs and the ground-truth scatter, then the tree-level sequence and mutation totals (#151)
+- `notebooks/cap_arm_scatters.py`: the cap-arm marimo notebook -- sequences per clade coloured by emergence date and the tree-level sequence and mutation totals, then per clade the count fraction, the count eCDFs and the ground-truth scatter (#151)
 - `ref/`: Reference genome, coding sites
 - `mutation_counts/`: Per-clade and aggregated counts
 - `clade_founders/`: Founder sequences and mutations

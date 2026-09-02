@@ -334,25 +334,28 @@ depth)` scatters of arm effect against full depth, rho-vs-depth curves faceted
 by estimator, and the count-survival curves underneath. It also reads
 `subsample_summary.csv` when one is present.
 
-`notebooks/cap_arm_scatters.py` is the **cap** kind in depth, one clade at a
-time. It opens with sequences per clade — the stage-setter, since a cap
-intervenes on the tree's composition and so does nothing at all to a clade that
-already sits below it — and then per clade reports the three statistics that say
-what the cap cost:
+`notebooks/cap_arm_scatters.py` is the **cap** kind in depth. It opens
+tree-wide, because a cap intervenes on the tree's composition and so does
+nothing at all to a clade that already sits below it: sequences per clade
+against the cap lines, each dot coloured by when the clade appeared (the 1st
+percentile of its samples' reported collection dates — a proxy, and
+deliberately not the minimum, since a few records carry a submission date in
+the collection field), and then the tree-level totals. Those are total
+sequences and total mutation counts across **all** clades at each cap, the size
+of the training set a DASM would actually see. Controls count there: a cap
+leaves every clade at or below it untouched, so the tree total falls far less
+steeply than its largest clade's (at cap 5,000 the v12 gisaid tree keeps 1.5%
+of sequences and 3.5% of counts, where 21J alone keeps 0.12% and 0.33%).
+
+Everything after that is one clade at a time — the three statistics that say
+what the cap cost it:
 
 1. the **count fraction**, `sum(actual_count_arm) / sum(actual_count_full)`,
-   drawn against the nominal cut so the concavity is visible;
+   reported against the nominal cut so the concavity is visible;
 2. the **count eCDFs** at every depth over the clade's whole nucleotide grid;
 3. the **correlation with the ground-truth effects**, drawn as a hexbin scatter
    against `y = x` with its fitted line, because Pearson r is invariant to a
    linear transform and so cannot see the shrinkage the slope reports.
-
-It closes with the tree-level totals — total sequences and total mutation counts
-across **all** clades at each cap, which is the size of the training set a DASM
-would actually see. Controls count there: a cap leaves every clade at or below
-it untouched, so the tree total falls far less steeply than its largest clade's
-(at cap 5,000 the v12 gisaid tree keeps 1.5% of sequences and 3.5% of counts,
-where 21J alone keeps 0.12% and 0.33%).
 
 ```bash
 pixi run marimo edit notebooks/subsample_correlations.py

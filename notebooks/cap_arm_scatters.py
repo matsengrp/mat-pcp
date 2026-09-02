@@ -3,10 +3,17 @@
 A **cap** arm thins every clade above ``max_samples`` down to exactly that many
 samples and leaves smaller clades untouched, so one arm spans the whole depth
 curve: on the v12 gisaid tree ``max_samples: 50000`` puts 21J at an effective
-1.15% of its samples and 26 smaller clades at 100%. This notebook reports one
-clade at a time, and for each clade three things -- after one tree-wide plot
-that sets the stage, since what a cap does depends entirely on how unevenly the
-clades are sampled:
+1.15% of its samples and 26 smaller clades at 100%.
+
+The notebook opens tree-wide, since what a cap does depends entirely on how
+unevenly the clades are sampled: **sequences per clade** against the cap lines,
+coloured by when each clade appeared, and then **the total sequences and
+mutation counts across all clades** at each cap -- the size of the training set
+a DASM would actually see. Controls count in that total: a cap leaves every
+clade at or below it untouched, so the tree total falls far less steeply than
+its largest clade's does.
+
+Everything after that is one clade at a time, three things per clade:
 
 1. **The count fraction** -- ``sum(actual_count_arm) / sum(actual_count_full)``.
    How much of the clade's observed mutational evidence the arm still has.
@@ -15,13 +22,6 @@ clades are sampled:
    cannot show.
 3. **The correlation with the ground-truth effects**, drawn as a scatter with
    its fitted line, not only reported as an r.
-
-and then, for the tree as a whole rather than one clade:
-
-4. **The total sequences and mutation counts across all clades** at each cap --
-   the size of the training set a DASM would actually see. Controls count here:
-   a cap leaves every clade at or below it untouched, so the tree total falls
-   far less steeply than its largest clade's does.
 
 Run with:
 
@@ -43,7 +43,7 @@ and shared across the row, and the dashed line is y = x. A well-recovered clade
 lies along it; a thinned one lies along a *shallower* line through the origin,
 which is shrinkage rather than noise. Pearson r cannot see that -- it is
 invariant to any linear transform of the arm's estimates -- so the fitted slope
-is drawn on every panel and plotted against r below. 21J at cap 5,000 reads
+is annotated on every panel beside its r. 21J at cap 5,000 reads
 r = 0.43 with a slope of 0.12: full depth spans [-7.8, +7.3] where the arm
 spans [-2.3, +3.6].
 
@@ -84,6 +84,8 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import os
+    import re
+    from datetime import date
 
     import marimo as mo
     import matplotlib as mpl
@@ -127,6 +129,17 @@ def _():
     DENSITY_CMAP = LinearSegmentedColormap.from_list(
         "blue_seq", BLUE_SEQUENTIAL
     )
+    # Clade emergence dates are ordered, so they take the same single hue
+    # light->dark. Five steps rather than the seven of BLUE_SEQUENTIAL: as a
+    # *dot* colour the ramp's light end has to clear the surface on its own,
+    # and #cde2fb / #9ec5f4 read at 1.2:1 and 1.7:1 against it, below the 2:1
+    # floor a 34-point mark needs. This ramp starts at #86b6ef (2.06:1) and
+    # passes the ordinal checks; BLUE_SEQUENTIAL keeps its lighter end because
+    # a hexbin cell's lightest step legitimately means "near nothing here".
+    DATE_CMAP = LinearSegmentedColormap.from_list(
+        "blue_date",
+        ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#104281"],
+    )
 
     mpl.rcParams.update({
         "figure.facecolor": SURFACE,
@@ -149,6 +162,7 @@ def _():
         AA_JOIN_KEY,
         ACCENT,
         BLUE_ORDINAL,
+        DATE_CMAP,
         DENSITY_CMAP,
         ESTIMATORS,
         GRID,
@@ -160,12 +174,14 @@ def _():
         SCATTER_MAX_N,
         SMALL_N,
         SURFACE,
+        date,
         mo,
         np,
         os,
         path_effects,
         pd,
         plt,
+        re,
     )
 
 
@@ -270,35 +286,101 @@ def _(mo):
     right-hand tail, which is what the pooled-vs-per-clade question is actually
     about — and it means a single arm delivers effective sampling fractions
     spanning two orders of magnitude.
+
+    **Dot colour is when the clade appeared** — the 1st percentile of its
+    samples' reported collection dates, which is a proxy and is deliberately
+    neither the minimum (some records carry a submission date in the
+    collection field: 21J's earliest reads 2020-03-02, more than a year before
+    Delta) nor the founder node's fitted date (the clade subtrees renumber
+    their nodes, so recovering it means walking the whole tree). It is a
+    context channel, not an input to any statistic below. Read together with
+    the heights it says which cohorts a cap actually spends: the clades a cap
+    cuts hardest are the ones that were dominant when sequencing was densest,
+    not the oldest ones.
     """)
     return
 
 
 @app.cell
 def _(
-    BLUE_ORDINAL,
+    DATE_CMAP,
     GRID,
     INK,
     INK_2,
+    MUTED,
     SURFACE,
     cap_arms,
     cap_of,
-    full_depth_size,
+    date,
     mo,
     np,
     os,
     output_dir,
     path_effects,
     plt,
-    thinned_clades,
+    re,
 ):
     _clade_dir0 = os.path.join(output_dir.value, "mat", "clades")
-    _sizes0 = {
-        _n[: -len("_samples.txt")]: full_depth_size(_n[: -len("_samples.txt")])
+    _date_re0 = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+    def _clade_size_and_emergence(clade):
+        """Sample count, and a robust first-appearance date, in one pass.
+
+        The date is the **1st percentile** of the reported collection dates
+        already embedded in the sample names (``.../2021|EPI_ISL_...|
+        2021-07-20``), not the minimum and not the clade founder node's fitted
+        date.
+
+        Not the minimum, because a small number of records carry a submission
+        date in the collection field: 21J's earliest reported date here is
+        2020-03-02 and 24A's is 2020-01-10, for lineages that did not exist
+        until mid-2021 and late 2023 -- the same misdating
+        ``pcp_max_predicted_days_past_cutoff`` exists to catch (#149). At 1% of
+        4.3 million samples the quantile sits behind ~43,000 records, so a
+        handful of placeholders cannot move it, and it lands where the lineage
+        is known to have risen (21J 2021-06, 21L 2022-01, 24A 2023-11).
+
+        Not the founder node's own chronumental date, which would be the
+        principled quantity: the clade subtrees renumber their nodes
+        (``mutations/{clade}_sample_paths.tsv`` starts at ``node_2`` for every
+        clade), so recovering the founder's full-tree name means walking the
+        8-million-tip tree, which is a pipeline step rather than a notebook
+        one. This is a colour channel setting context for the cut, not an
+        input to any statistic.
+
+        Counted by value rather than sorted: dates take ~2,000 distinct values
+        against 17 million lines, so the quantile comes off a cumulative sum
+        over the keys.
+        """
+        p = os.path.join(_clade_dir0, f"{clade}_samples.txt")
+        n = 0
+        seen = {}
+        with open(p) as fh:
+            for line in fh:
+                n += 1
+                d = line.rstrip("\n")[-10:]
+                if _date_re0.fullmatch(d):
+                    seen[d] = seen.get(d, 0) + 1
+        total = sum(seen.values())
+        if not total:
+            return n, None
+        want = max(1, int(0.01 * total))
+        running = 0
+        for d in sorted(seen):
+            running += seen[d]
+            if running >= want:
+                return n, d
+        return n, None
+
+    _measured0 = {
+        _n[: -len("_samples.txt")]: _clade_size_and_emergence(
+            _n[: -len("_samples.txt")]
+        )
         for _n in os.listdir(_clade_dir0)
         if _n.endswith("_samples.txt")
     }
-    _sizes0 = {_k: _v for _k, _v in _sizes0.items() if _v}
+    _sizes0 = {_k: _v[0] for _k, _v in _measured0.items() if _v[0]}
+    _emerged0 = {_k: _v[1] for _k, _v in _measured0.items() if _v[0]}
     mo.stop(not _sizes0, mo.md("**No `mat/clades/*_samples.txt` found.**"))
 
     # Largest first, left to right.
@@ -306,15 +388,22 @@ def _(
     _x0 = np.arange(len(_order0))
     _vals0 = [_sizes0[_c] for _c in _order0]
     _caps0 = sorted(cap_of(_a) for _a in cap_arms)
-    _idx0 = (
-        np.linspace(0, len(BLUE_ORDINAL) - 1, len(_caps0)).round().astype(int)
-        if len(_caps0) > 1
-        else [len(BLUE_ORDINAL) // 2]
-    )
-    _capcol0 = {_c: BLUE_ORDINAL[_i] for _c, _i in zip(_caps0, _idx0)}
-    # How many clades each cap actually thins, read from the arm directories
-    # rather than recomputed from the sizes -- same reason as everywhere else.
-    _thinned0 = {cap_of(_a): len(thinned_clades(_a)) for _a in cap_arms}
+
+    # Colour is the emergence date -- an ordered quantity, so one hue
+    # light->dark rather than categorical hues, five steps of the blue ramp
+    # (validated: monotone lightness, every adjacent gap >= 0.06, light end
+    # 2.06:1 against the surface, hue spread 3 degrees). Encoded as day
+    # ordinals so the scale is linear in time, with the colourbar ticked at
+    # calendar years. An undated clade is drawn in muted ink rather than at
+    # either end of the ramp, which would assert a date.
+    _ords0 = [
+        date.fromisoformat(_emerged0[_c]).toordinal() if _emerged0[_c] else None
+        for _c in _order0
+    ]
+    _known0 = [_i for _i, _o in enumerate(_ords0) if _o is not None]
+    _unknown0 = [_i for _i, _o in enumerate(_ords0) if _o is None]
+    _lo0 = min(_ords0[_i] for _i in _known0)
+    _hi0 = max(_ords0[_i] for _i in _known0)
 
     # A *column* dot plot. Horizontal was the obvious orientation and it needed
     # 0.23 in per clade -- 15 inches of scroll for 56 of them, most of it the
@@ -326,27 +415,45 @@ def _(
     # shared.) Dots rather than bars because a log axis has no zero to anchor a
     # bar's length to; the hairline stem is a guide to the axis, not a
     # magnitude.
-    _fig0, _ax0 = plt.subplots(figsize=(0.17 * len(_order0) + 2.4, 4.6))
+    _fig0, _ax0 = plt.subplots(figsize=(0.17 * len(_order0) + 2.8, 4.6))
     _ax0.vlines(
         _x0, [min(_vals0) * 0.5] * len(_x0), _vals0,
         color=GRID, linewidth=1.0, zorder=1,
     )
-    _ax0.scatter(
-        _x0, _vals0,
-        s=34, color="#2a78d6", edgecolors=SURFACE, linewidths=1.1, zorder=4,
+    _sc0 = _ax0.scatter(
+        [_x0[_i] for _i in _known0],
+        [_vals0[_i] for _i in _known0],
+        c=[_ords0[_i] for _i in _known0],
+        cmap=DATE_CMAP, vmin=_lo0, vmax=_hi0,
+        s=34, edgecolors=SURFACE, linewidths=1.1, zorder=4,
     )
+    if _unknown0:
+        _ax0.scatter(
+            [_x0[_i] for _i in _unknown0],
+            [_vals0[_i] for _i in _unknown0],
+            s=34, color=MUTED, edgecolors=SURFACE, linewidths=1.1, zorder=4,
+        )
+    # The caps are reference lines, not data, so they are neutral and directly
+    # annotated -- a legend would spend a colour channel that now carries the
+    # dates, and three entries in a box are further from the line than the
+    # label on it.
     for _cap0 in _caps0:
         _ax0.axhline(
-            _cap0, linestyle="--", linewidth=1.6,
-            color=_capcol0[_cap0], zorder=2,
-            label=(
-                f"cap {_cap0:,} — thins "
-                f"{_thinned0.get(_cap0, 0)} of {len(_order0)}"
-            ),
+            _cap0, linestyle="--", linewidth=1.4, color=INK_2, zorder=2,
         )
-    # Selective labels only: the extremes, which set the range the title quotes.
-    # A number on all 56 points is unreadable at this width and the table view
-    # carries every value anyway.
+        _ax0.annotate(
+            f"cap {_cap0:,}",
+            (len(_order0) - 0.4, _cap0),
+            textcoords="offset points", xytext=(0, 3),
+            ha="right", va="bottom", fontsize=8, color=INK_2,
+            path_effects=[
+                path_effects.withStroke(linewidth=2.6, foreground=SURFACE)
+            ],
+            zorder=6,
+        )
+    # Selective labels only: the extremes, which set the range the caption
+    # quotes. A number on all 56 points is unreadable at this width and the
+    # table view carries every value anyway.
     for _i0 in (0, len(_order0) - 1):
         _ax0.annotate(
             f"{_vals0[_i0]:,}",
@@ -362,6 +469,7 @@ def _(
         _order0, fontsize=7, color=INK_2, rotation=90,
     )
     _ax0.set_xlim(-0.8, len(_order0) - 0.2)
+    _ax0.set_xlabel("clade")
     _ax0.tick_params(axis="x", length=0, pad=2)
     _ax0.set_yscale("log")
     _ax0.set_ylim(
@@ -370,23 +478,210 @@ def _(
     _ax0.set_ylabel("full-depth samples (log)")
     _ax0.grid(True, axis="y", color=GRID, linewidth=0.6, zorder=0)
     _ax0.set_axisbelow(True)
-    _ax0.set_title(
-        f"{len(_order0)} clades spanning "
-        f"{min(_sizes0.values()):,}–{max(_sizes0.values()):,} samples "
-        f"({max(_sizes0.values()) / min(_sizes0.values()):,.0f}×)\n"
-        "a clade above a line is cut back to it; one below it is an "
-        "untouched control",
-        color=INK, pad=10,
+    _ax0.set_title("Sequences per clade", color=INK, pad=10)
+
+    _cb0 = _fig0.colorbar(_sc0, ax=_ax0, pad=0.02, fraction=0.05)
+    _years0 = range(
+        date.fromordinal(_lo0).year, date.fromordinal(_hi0).year + 1
     )
-    _ax0.legend(
-        loc="upper right", fontsize=8, ncol=len(_caps0),
-        columnspacing=1.2, handlelength=1.6,
-    ).set_zorder(6)
+    _ticks0 = [
+        date(_y, 1, 1).toordinal()
+        for _y in _years0
+        if _lo0 <= date(_y, 1, 1).toordinal() <= _hi0
+    ]
+    _cb0.set_ticks(_ticks0)
+    _cb0.set_ticklabels([str(date.fromordinal(_t).year) for _t in _ticks0])
+    _cb0.set_label("clade emergence\n(1st pct of collection dates)")
+    _cb0.outline.set_visible(False)
     _fig0.tight_layout()
     _fig0
     return
 
 
+@app.cell
+def _(mo):
+    mo.md("""
+    ## The whole training set at each cap
+
+    The plot above is per clade at full depth; this is what the caps add up to.
+    What a DASM actually trains on is the tree, so this is the tree-level total
+    at each cap: how many sequences survive across **all** clades, and how many
+    mutation counts they carry.
+
+    Controls are included and matter here — a cap leaves every clade at or below
+    it untouched, so those clades contribute their *full* sequences and counts to
+    the total. That is the difference between this and the per-clade statistics
+    that follow: 21J losing 98.85% of its samples at cap 50,000 does not mean
+    the tree lost 98.85%, because 26 clades lost nothing. Both halves are broken
+    out.
+
+    The sequence totals are read from the sample lists — the arm's own
+    `mat/clades/{arm}/{clade}_samples.txt` where it thinned, the full tree's
+    otherwise — which is the same source the sampler wrote, so this cannot
+    disagree with what was actually extracted.
+    """)
+    return
+
+
+@app.cell
+def _(
+    cap_arms,
+    cap_of,
+    full_depth_size,
+    load_nt,
+    mo,
+    os,
+    output_dir,
+    pd,
+    thinned_clades,
+):
+    def _arm_sample_count(arm, clade):
+        _p = os.path.join(
+            output_dir.value, "mat", "clades", arm, f"{clade}_samples.txt"
+        )
+        with open(_p) as _fh:
+            return sum(1 for _ in _fh)
+
+    # Every clade the tree processed, from the full-depth sample lists.
+    _clade_dir = os.path.join(output_dir.value, "mat", "clades")
+    _all_clades = sorted(
+        _n[: -len("_samples.txt")]
+        for _n in os.listdir(_clade_dir)
+        if _n.endswith("_samples.txt")
+    )
+    _full_counts = {
+        _c: int(load_nt(_c)["actual_count"].sum()) for _c in _all_clades
+    }
+    _full_samples = {_c: full_depth_size(_c) or 0 for _c in _all_clades}
+
+    _rows = [{
+        "arm": "(full depth)",
+        "cap": None,
+        "clades_thinned": 0,
+        "clades_untouched": len(_all_clades),
+        "sequences": sum(_full_samples.values()),
+        "mutation_counts": sum(_full_counts.values()),
+        "sequences_from_thinned": 0,
+        "counts_from_thinned": 0,
+    }]
+    for _arm in cap_arms:
+        _thin = thinned_clades(_arm)
+        _seq = _cnt = _seq_t = _cnt_t = 0
+        for _c in _all_clades:
+            if _c in _thin:
+                _s = _arm_sample_count(_arm, _c)
+                _k = int(load_nt(_c, _arm)["actual_count"].sum())
+                _seq_t += _s
+                _cnt_t += _k
+            else:
+                # A control: the arm reads the full tree's files unchanged.
+                _s, _k = _full_samples[_c], _full_counts[_c]
+            _seq += _s
+            _cnt += _k
+        _rows.append({
+            "arm": _arm,
+            "cap": cap_of(_arm),
+            "clades_thinned": len(_thin),
+            "clades_untouched": len(_all_clades) - len(_thin),
+            "sequences": _seq,
+            "mutation_counts": _cnt,
+            "sequences_from_thinned": _seq_t,
+            "counts_from_thinned": _cnt_t,
+        })
+
+    tree_totals = pd.DataFrame(_rows)
+    _base_seq = tree_totals.sequences.iloc[0]
+    _base_cnt = tree_totals.mutation_counts.iloc[0]
+    tree_totals["sequence_fraction"] = tree_totals.sequences / _base_seq
+    tree_totals["count_fraction"] = tree_totals.mutation_counts / _base_cnt
+    # How much of what survives comes from clades the cap actually touched --
+    # the rest is controls sitting at full depth, which is why the tree total
+    # falls so much less steeply than any single large clade's.
+    tree_totals["share_of_seqs_from_thinned"] = (
+        tree_totals.sequences_from_thinned / tree_totals.sequences
+    )
+    tree_totals["share_of_counts_from_thinned"] = (
+        tree_totals.counts_from_thinned / tree_totals.mutation_counts
+    )
+    mo.ui.table(
+        tree_totals[[
+            "arm", "cap", "clades_thinned", "clades_untouched",
+            "sequences", "sequence_fraction",
+            "mutation_counts", "count_fraction",
+            "share_of_seqs_from_thinned", "share_of_counts_from_thinned",
+        ]].round(5),
+        selection=None,
+    )
+    return (tree_totals,)
+
+
+@app.cell
+def _(
+    ACCENT,
+    BLUE_ORDINAL,
+    GRID,
+    INK,
+    INK_2,
+    MUTED,
+    SURFACE,
+    mo,
+    np,
+    plt,
+    tree_totals,
+):
+    _t6 = tree_totals[tree_totals.cap.notna()].sort_values("cap")
+    mo.stop(not len(_t6), mo.md("**No cap arms.**"))
+
+    _idx6 = (
+        np.linspace(0, len(BLUE_ORDINAL) - 1, len(_t6)).round().astype(int)
+        if len(_t6) > 1
+        else [len(BLUE_ORDINAL) // 2]
+    )
+    _colors6 = [BLUE_ORDINAL[_i] for _i in _idx6]
+    _full_seq = tree_totals.sequences.iloc[0]
+    _full_cnt = tree_totals.mutation_counts.iloc[0]
+
+    _fig6, (_b1, _b2) = plt.subplots(1, 2, figsize=(10.4, 4.0))
+    for _ax6, _col6, _base6, _title6, _unit6 in (
+        (_b1, "sequences", _full_seq, "Sequences in the tree", "sequences"),
+        (_b2, "mutation_counts", _full_cnt,
+         "Mutation counts in the tree", "counts"),
+    ):
+        _x6 = np.arange(len(_t6))
+        _ax6.bar(
+            _x6, _t6[_col6], width=0.55,
+            color=_colors6, edgecolor=SURFACE, linewidth=2, zorder=2,
+        )
+        _ax6.axhline(
+            _base6, linestyle="--", linewidth=1.6, color=INK_2, zorder=3,
+            label=f"full depth ({_base6:,.0f} {_unit6})",
+        )
+        for _i6, _r6 in enumerate(_t6.itertuples()):
+            _v6 = getattr(_r6, _col6)
+            _ax6.annotate(
+                f"{_v6:,.0f}\n({_v6 / _base6:.1%})",
+                (_i6, _v6),
+                textcoords="offset points", xytext=(0, 5),
+                ha="center", fontsize=8, color=INK, linespacing=1.3,
+            )
+        _ax6.set_xticks(_x6)
+        _ax6.set_xticklabels([f"cap {int(_c):,}" for _c in _t6.cap])
+        # Linear, deliberately: a bar's length is its value, which a log axis
+        # would break. These bars *should* look small next to full depth.
+        _ax6.set_ylabel(_unit6)
+        _ax6.set_ylim(0, _base6 * 1.22)
+        _ax6.grid(True, axis="y", color=GRID, linewidth=0.6, zorder=0)
+        _ax6.set_axisbelow(True)
+        _ax6.set_title(_title6)
+        _ax6.legend(loc="upper left", fontsize=8)
+    _fig6.suptitle(
+        "Tree-level totals across all clades — controls included, so a cap "
+        "costs the tree far less than it costs its largest clade",
+        y=1.03,
+    )
+    _fig6.tight_layout()
+    _fig6
+    return
 
 
 @app.cell
@@ -874,291 +1169,22 @@ def _(SMALL_N, clade_picker, mo, this):
 
 
 @app.cell
-def _(mo):
-    mo.md("""
-    ## Statistic 4: the whole training set at each cap
-
-    Everything above is per clade. What a DASM actually trains on is the tree,
-    so this is the tree-level total at each cap: how many sequences survive
-    across **all** clades, and how many mutation counts they carry.
-
-    Controls are included and matter here — a cap leaves every clade at or below
-    it untouched, so those clades contribute their *full* sequences and counts to
-    the total. That is the difference between this statistic and the per-clade
-    ones: 21J losing 98.85% of its samples at cap 50,000 does not mean the tree
-    lost 98.85%, because 26 clades lost nothing. Both halves are broken out.
-
-    The sequence totals are read from the sample lists — the arm's own
-    `mat/clades/{arm}/{clade}_samples.txt` where it thinned, the full tree's
-    otherwise — which is the same source the sampler wrote, so this cannot
-    disagree with what was actually extracted.
-    """)
-    return
-
-
-@app.cell
-def _(
-    cap_arms,
-    cap_of,
-    full_depth_size,
-    load_nt,
-    mo,
-    os,
-    output_dir,
-    pd,
-    thinned_clades,
-):
-    def _arm_sample_count(arm, clade):
-        _p = os.path.join(
-            output_dir.value, "mat", "clades", arm, f"{clade}_samples.txt"
-        )
-        with open(_p) as _fh:
-            return sum(1 for _ in _fh)
-
-    # Every clade the tree processed, from the full-depth sample lists.
-    _clade_dir = os.path.join(output_dir.value, "mat", "clades")
-    _all_clades = sorted(
-        _n[: -len("_samples.txt")]
-        for _n in os.listdir(_clade_dir)
-        if _n.endswith("_samples.txt")
-    )
-    _full_counts = {
-        _c: int(load_nt(_c)["actual_count"].sum()) for _c in _all_clades
-    }
-    _full_samples = {_c: full_depth_size(_c) or 0 for _c in _all_clades}
-
-    _rows = [{
-        "arm": "(full depth)",
-        "cap": None,
-        "clades_thinned": 0,
-        "clades_untouched": len(_all_clades),
-        "sequences": sum(_full_samples.values()),
-        "mutation_counts": sum(_full_counts.values()),
-        "sequences_from_thinned": 0,
-        "counts_from_thinned": 0,
-    }]
-    for _arm in cap_arms:
-        _thin = thinned_clades(_arm)
-        _seq = _cnt = _seq_t = _cnt_t = 0
-        for _c in _all_clades:
-            if _c in _thin:
-                _s = _arm_sample_count(_arm, _c)
-                _k = int(load_nt(_c, _arm)["actual_count"].sum())
-                _seq_t += _s
-                _cnt_t += _k
-            else:
-                # A control: the arm reads the full tree's files unchanged.
-                _s, _k = _full_samples[_c], _full_counts[_c]
-            _seq += _s
-            _cnt += _k
-        _rows.append({
-            "arm": _arm,
-            "cap": cap_of(_arm),
-            "clades_thinned": len(_thin),
-            "clades_untouched": len(_all_clades) - len(_thin),
-            "sequences": _seq,
-            "mutation_counts": _cnt,
-            "sequences_from_thinned": _seq_t,
-            "counts_from_thinned": _cnt_t,
-        })
-
-    tree_totals = pd.DataFrame(_rows)
-    _base_seq = tree_totals.sequences.iloc[0]
-    _base_cnt = tree_totals.mutation_counts.iloc[0]
-    tree_totals["sequence_fraction"] = tree_totals.sequences / _base_seq
-    tree_totals["count_fraction"] = tree_totals.mutation_counts / _base_cnt
-    # How much of what survives comes from clades the cap actually touched --
-    # the rest is controls sitting at full depth, which is why the tree total
-    # falls so much less steeply than any single large clade's.
-    tree_totals["share_of_seqs_from_thinned"] = (
-        tree_totals.sequences_from_thinned / tree_totals.sequences
-    )
-    tree_totals["share_of_counts_from_thinned"] = (
-        tree_totals.counts_from_thinned / tree_totals.mutation_counts
-    )
-    mo.ui.table(
-        tree_totals[[
-            "arm", "cap", "clades_thinned", "clades_untouched",
-            "sequences", "sequence_fraction",
-            "mutation_counts", "count_fraction",
-            "share_of_seqs_from_thinned", "share_of_counts_from_thinned",
-        ]].round(5),
-        selection=None,
-    )
-    return (tree_totals,)
-
-
-@app.cell
-def _(
-    ACCENT,
-    BLUE_ORDINAL,
-    GRID,
-    INK,
-    INK_2,
-    MUTED,
-    SURFACE,
-    mo,
-    np,
-    plt,
-    tree_totals,
-):
-    _t6 = tree_totals[tree_totals.cap.notna()].sort_values("cap")
-    mo.stop(not len(_t6), mo.md("**No cap arms.**"))
-
-    _idx6 = (
-        np.linspace(0, len(BLUE_ORDINAL) - 1, len(_t6)).round().astype(int)
-        if len(_t6) > 1
-        else [len(BLUE_ORDINAL) // 2]
-    )
-    _colors6 = [BLUE_ORDINAL[_i] for _i in _idx6]
-    _full_seq = tree_totals.sequences.iloc[0]
-    _full_cnt = tree_totals.mutation_counts.iloc[0]
-
-    _fig6, (_b1, _b2) = plt.subplots(1, 2, figsize=(10.4, 4.0))
-    for _ax6, _col6, _base6, _title6, _unit6 in (
-        (_b1, "sequences", _full_seq, "Sequences in the tree", "sequences"),
-        (_b2, "mutation_counts", _full_cnt,
-         "Mutation counts in the tree", "counts"),
-    ):
-        _x6 = np.arange(len(_t6))
-        _ax6.bar(
-            _x6, _t6[_col6], width=0.55,
-            color=_colors6, edgecolor=SURFACE, linewidth=2, zorder=2,
-        )
-        _ax6.axhline(
-            _base6, linestyle="--", linewidth=1.6, color=INK_2, zorder=3,
-            label=f"full depth ({_base6:,.0f} {_unit6})",
-        )
-        for _i6, _r6 in enumerate(_t6.itertuples()):
-            _v6 = getattr(_r6, _col6)
-            _ax6.annotate(
-                f"{_v6:,.0f}\n({_v6 / _base6:.1%})",
-                (_i6, _v6),
-                textcoords="offset points", xytext=(0, 5),
-                ha="center", fontsize=8, color=INK, linespacing=1.3,
-            )
-        _ax6.set_xticks(_x6)
-        _ax6.set_xticklabels([f"cap {int(_c):,}" for _c in _t6.cap])
-        # Linear, deliberately: a bar's length is its value, which a log axis
-        # would break. These bars *should* look small next to full depth.
-        _ax6.set_ylabel(_unit6)
-        _ax6.set_ylim(0, _base6 * 1.22)
-        _ax6.grid(True, axis="y", color=GRID, linewidth=0.6, zorder=0)
-        _ax6.set_axisbelow(True)
-        _ax6.set_title(_title6)
-        _ax6.legend(loc="upper left", fontsize=8)
-    _fig6.suptitle(
-        "Tree-level totals across all clades — controls included, so a cap "
-        "costs the tree far less than it costs its largest clade",
-        y=1.03,
-    )
-    _fig6.tight_layout()
-    _fig6
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md("""
-    ## Across all clades: what r misses
-
-    The per-clade view above is one row of this. Each point is one
-    (cap, clade): on the left the fitted slope against the count fraction, on
-    the right slope against r. Points below the dotted diagonal on the right are
-    fits that r calls good and the slope calls shrunk — Pearson r is invariant
-    to any linear transform of the arm's estimates, so it is blind to both a
-    shift and a compression.
-    """)
-    return
-
-
-@app.cell
-def _(
-    BLUE_ORDINAL,
-    GRID,
-    INK,
-    INK_2,
-    MUTED,
-    SURFACE,
-    cap_arms,
-    cap_of,
-    clade_stats,
-    estimator_picker,
-    mo,
-    np,
-    pd,
-    plt,
-    thinned_clades,
-):
+def _(BLUE_ORDINAL, cap_arms, clade_stats, mo, np, pd, thinned_clades):
+    # Every (cap, clade) fit, for the table view below. The cross-clade
+    # slope-against-r figure this cell used to draw is gone: every scatter
+    # panel above already annotates its own slope beside its own r, which is
+    # the same comparison one clade at a time and against the data rather than
+    # against a summary of it.
     _all5 = sorted({_c for _a in cap_arms for _c in thinned_clades(_a)})
-    all_fits = pd.concat(
-        [clade_stats(_c) for _c in _all5], ignore_index=True
-    )
-    _d5 = all_fits[
-        (all_fits.estimator == estimator_picker.value)
-        & all_fits.slope.notna()
-        & all_fits.pearson_r.notna()
-    ]
-    mo.stop(not len(_d5), mo.md("**No fitted rows.**"))
-
-    _caps5 = sorted(_d5.cap.unique())
+    mo.stop(not _all5, mo.md("**No arm thinned any clade.**"))
+    all_fits = pd.concat([clade_stats(_c) for _c in _all5], ignore_index=True)
+    _caps5 = sorted(all_fits.cap.unique())
     _idx5 = (
         np.linspace(0, len(BLUE_ORDINAL) - 1, len(_caps5)).round().astype(int)
         if len(_caps5) > 1
         else [len(BLUE_ORDINAL) // 2]
     )
     cap_color = {_c: BLUE_ORDINAL[_i] for _c, _i in zip(_caps5, _idx5)}
-
-    _fig5, (_a1, _a2) = plt.subplots(1, 2, figsize=(10.4, 4.4))
-    for _cap5 in _caps5:
-        _g5 = _d5[_d5.cap == _cap5]
-        _a1.scatter(
-            _g5.count_fraction, _g5.slope,
-            s=44, color=cap_color[_cap5],
-            linewidths=0.8, edgecolors=SURFACE,
-            label=f"cap {_cap5:,}", zorder=2,
-        )
-        _a2.scatter(
-            _g5.pearson_r, _g5.slope,
-            s=44, color=cap_color[_cap5],
-            linewidths=0.8, edgecolors=SURFACE,
-            label=f"cap {_cap5:,}", zorder=2,
-        )
-    for _ax5 in (_a1, _a2):
-        _ax5.grid(True, color=GRID, linewidth=0.6, zorder=0)
-        _ax5.axhline(1.0, linestyle="--", linewidth=1.2, color=INK_2, zorder=1)
-        _ax5.set_ylim(0, 1.15)
-    _a1.set_xscale("log")
-    _a1.set_xlabel("count fraction (log)")
-    _a1.set_ylabel("fitted slope   (1.0 = no shrinkage)")
-    _a1.set_title("Shrinkage tracks the evidence that is left")
-    _a2.set_xlim(0, 1.02)
-    _a2.set_xlabel("Pearson r")
-    _a2.set_title("What r sees, and what it misses")
-    _a2.plot(
-        [0, 1.02], [0, 1.02],
-        linestyle=":", linewidth=1.2, color=MUTED, zorder=1,
-    )
-    # Direct-label the worst fit per cap rather than a number on every point.
-    for _cap5 in _caps5:
-        _g5 = _d5[_d5.cap == _cap5]
-        if not len(_g5):
-            continue
-        _w5 = _g5.loc[_g5.slope.idxmin()]
-        _a2.annotate(
-            f"{_w5.clade} @ {int(_cap5 / 1000)}k",
-            (_w5.pearson_r, _w5.slope),
-            textcoords="offset points", xytext=(7, -2),
-            fontsize=8, color=INK,
-        )
-    _a1.legend(loc="upper left")
-    _fig5.suptitle(
-        f"{estimator_picker.value} — 1 point per (cap, clade), "
-        f"{len(_d5)} fits",
-        y=1.02,
-    )
-    _fig5.tight_layout()
-    _fig5
     return all_fits, cap_color
 
 
