@@ -636,7 +636,9 @@ rule filter_mat_tree:
         filtered_pb=os.path.join(OUTDIR, "mat/filtered_tree_raw.pb")
     threads: get_threads("filter_mat_tree")
     resources:
-        mem_mb=16000,
+        # Measured: peaks at 31.5 GB on the v12 gisaid tree, so 16000 was
+        # under-declared 2x.
+        mem_mb=48000,
         runtime=120
     benchmark:
         os.path.join(OUTDIR, "benchmarks/filter_mat_tree.tsv")
@@ -985,7 +987,9 @@ rule window_subtree_counts:
         max_reversions_to_clade_founder=config["max_reversions_to_clade_founder"],
     threads: get_threads("window_subtree_counts")
     resources:
-        mem_mb=16000,
+        # Measured: peaks at 67.3 GB on the v12 gisaid tree, so 16000 was
+        # under-declared 4.2x.
+        mem_mb=80000,
         runtime=240
     benchmark:
         os.path.join(OUTDIR, "benchmarks/window_subtree_counts.tsv")
@@ -1025,7 +1029,9 @@ rule validate_windowing:
         max_reversions_to_clade_founder=config["max_reversions_to_clade_founder"],
     threads: get_threads("window_subtree_counts")
     resources:
-        mem_mb=16000,
+        # Reads the same windowed data as window_subtree_counts, whose
+        # measured peak is 67.3 GB.
+        mem_mb=80000,
         runtime=240
     log:
         os.path.join(OUTDIR, "log/validate_windowing.log")
@@ -1551,7 +1557,21 @@ rule extract_pcps_by_clade:
         pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
     threads: get_threads("extract_pcps")
     resources:
-        mem_mb=8000,
+        # Measured on the v12 gisaid tree: 422 benchmarks spanning 482 MB
+        # (median) to 77.3 GB (ORF1a/21J), a 160x spread, because peak cost
+        # tracks the clade's subtree and the gene's CDS length together --
+        # ORF1a peaks near 200x its input .pb, S near 108x. A flat 8000 was
+        # therefore under-granted for 59 of 422 jobs and 12 exceeded 32 GB,
+        # while a flat value covering the tail (80000) would cap a 995 GB box
+        # at 12 concurrent jobs whose median need is under 500 MB. Scaling on
+        # input size instead covers all 197 measured (gene, clade) pairs with
+        # zero under-grants and still lets the small jobs run wide; `attempt`
+        # is the safety net for a tree outside the measured envelope. Like
+        # every other `mem_mb` here this is inert under the local executor --
+        # it records what the rule costs rather than limiting it.
+        mem_mb=lambda wildcards, input, attempt: max(
+            4000, int(300 * input.size_mb)
+        ) * attempt,
         runtime=120
     benchmark:
         os.path.join(OUTDIR, "benchmarks/{arm_dir}extract_pcps_{gene}_{clade}.tsv")
@@ -1912,7 +1932,21 @@ rule extract_pcps_by_clade_upto:
         pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
     threads: get_threads("extract_pcps")
     resources:
-        mem_mb=8000,
+        # Measured on the v12 gisaid tree: 422 benchmarks spanning 482 MB
+        # (median) to 77.3 GB (ORF1a/21J), a 160x spread, because peak cost
+        # tracks the clade's subtree and the gene's CDS length together --
+        # ORF1a peaks near 200x its input .pb, S near 108x. A flat 8000 was
+        # therefore under-granted for 59 of 422 jobs and 12 exceeded 32 GB,
+        # while a flat value covering the tail (80000) would cap a 995 GB box
+        # at 12 concurrent jobs whose median need is under 500 MB. Scaling on
+        # input size instead covers all 197 measured (gene, clade) pairs with
+        # zero under-grants and still lets the small jobs run wide; `attempt`
+        # is the safety net for a tree outside the measured envelope. Like
+        # every other `mem_mb` here this is inert under the local executor --
+        # it records what the rule costs rather than limiting it.
+        mem_mb=lambda wildcards, input, attempt: max(
+            4000, int(300 * input.size_mb)
+        ) * attempt,
         runtime=120
     benchmark:
         os.path.join(
@@ -2564,7 +2598,8 @@ rule master_table:
         })
     threads: get_threads("master_table")
     resources:
-        mem_mb=8000,
+        # Measured: peaks at 118 MB -- the GLM fit is small.
+        mem_mb=2000,
         runtime=60
     benchmark:
         os.path.join(OUTDIR, "benchmarks/master_table.tsv")
@@ -2593,7 +2628,8 @@ rule master_table_era:
         })
     threads: get_threads("master_table")
     resources:
-        mem_mb=8000,
+        # Measured: peaks at 118 MB -- the GLM fit is small.
+        mem_mb=2000,
         runtime=60
     benchmark:
         os.path.join(OUTDIR, "benchmarks/master_table_{era}.tsv")
@@ -2697,7 +2733,8 @@ rule window_expected_counts:
         min_subtree_size=config.get("window_min_subtree_size", 0),
     threads: get_threads("window_expected_counts")
     resources:
-        mem_mb=16000,
+        # Measured: peaks at 7.8 GB.
+        mem_mb=12000,
         runtime=240
     benchmark:
         os.path.join(OUTDIR, "benchmarks/window_expected_counts.tsv")
@@ -2863,7 +2900,9 @@ rule ntmut_fitness_by_clade:
         N_n_exp=config.get("fitness_N_n_exp", 300)
     threads: get_threads("ntmut_fitness")
     resources:
-        mem_mb=2000,
+        # Measured: peaks at 311 MB over 404 benchmarks (238 MB for the
+        # nucleotide rule, 311 MB for the amino-acid one).
+        mem_mb=1000,
         runtime=30
     benchmark:
         os.path.join(OUTDIR, "benchmarks/{arm_dir}ntmut_fitness_{clade}.tsv")
@@ -2910,7 +2949,9 @@ rule aamut_fitness_by_clade:
         genes=config.get("genes", []),
         fitness_pseudocount=config.get("fitness_pseudocount", 0.5)
     resources:
-        mem_mb=2000,
+        # Measured: peaks at 311 MB over 404 benchmarks (238 MB for the
+        # nucleotide rule, 311 MB for the amino-acid one).
+        mem_mb=1000,
         runtime=30
     benchmark:
         os.path.join(OUTDIR, "benchmarks/{arm_dir}aamut_fitness_{clade}.tsv")

@@ -20,7 +20,7 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ### Unreleased (no version bump)
 
-#### Thread allocations corrected to the measured value
+#### Thread and memory allocations corrected to their measured values
 
 No output changes: `threads` and `mem_mb` are scheduler reservations, and
 neither is a Snakemake rerun trigger, so a built tree stays valid.
@@ -36,6 +36,17 @@ are now 1. `chronumental` measured 1.25 and keeps 4; `optimize_mat_tree` keeps
 12. `ntmut_fitness` accounts for essentially the whole wall clock -- 31.54 h
 across 224 jobs at 8-way is 3.9 h against an observed 4h09m -- so this is
 roughly a 3x speedup of a full run, not a trim.
+
+`mem_mb` was corrected the same way, and it was wrong in both directions.
+Three rules were *under*-declared -- `extract_pcps_by_clade` at 8000 against a
+measured 77.3 GB peak, `window_subtree_counts` at 16000 against 67.3 GB,
+`filter_mat_tree` at 16000 against 31.5 GB -- which is the dangerous direction:
+under a scheduler that honours the request, that is a killed job or an
+oversubscribed node. Four were over-declared, `master_table` by 68x (8000
+against 118 MB). `extract_pcps_by_clade` spans 160x across its 422 jobs, so no
+scalar describes it; it is now `max(4000, 300 * input.size_mb) * attempt`, which
+covers all 197 measured (gene, clade) pairs with zero under-grants while leaving
+the median job under 500 MB rather than reserving for the tail.
 
 All seven `matUtils extract` / `matUtils summary` calls now pass `-T {threads}`.
 matUtils' own default is 32, so raising concurrency without pinning it would

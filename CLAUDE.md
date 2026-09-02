@@ -1214,11 +1214,36 @@ mat-pcp/
     absolute paths outside its run directory -- which is why the standing
     evidence is a whole-tree byte comparison rather than a unit test.
 
-    Neither `mem_mb` nor `threads` is a rerun trigger, so correcting them does
-    not invalidate a built tree; but they only throttle at all when the run
-    passes `--resources mem_mb=...`, and `ntmut_fitness` declares `mem_mb=2000`
-    against a measured 235 MB peak, an 8.5x over-declaration that is the same
-    bug in the other resource dimension.
+    *`mem_mb` is the same bug in the other dimension, and there it runs both
+    ways.* Neither `mem_mb` nor `threads` is a rerun trigger, so correcting them
+    never invalidates a built tree, and under the local executor with no
+    `--resources` ceiling both are inert -- which is exactly why they drift. The
+    declaration is therefore a **record of what the rule costs**, and the
+    standard is that it match the measurement. Measured against
+    `benchmarks/*.tsv` on the v12 gisaid tree, three rules were *under*-declared
+    -- `extract_pcps_by_clade` at 8000 against a 77.3 GB peak,
+    `window_subtree_counts` at 16000 against 67.3 GB, `filter_mat_tree` at 16000
+    against 31.5 GB -- and four over-declared, `master_table` by **68x** (8000
+    against 118 MB). An under-declaration is the dangerous direction: the first
+    person to run this under a scheduler that honours the request gets a job
+    killed, or oversubscribes a node, with nothing pointing at the number.
+
+    *One rule cannot be recorded as a scalar at all.* `extract_pcps_by_clade`
+    spans **160x** -- 482 MB median to 77.3 GB for ORF1a/21J -- because peak
+    cost tracks the clade's subtree and the gene's CDS length together (ORF1a
+    peaks near 200x its input `.pb`, S near 108x). A flat 8000 under-granted 59
+    of 422 jobs; a flat value covering the tail would cap a 995 GB box at 12
+    concurrent jobs whose median need is under 500 MB. It is therefore
+    `max(4000, 300 * input.size_mb) * attempt`, which covers all 197 measured
+    (gene, clade) pairs with zero under-grants while leaving the small jobs
+    small. Note the verification trap: on the test data every input is tiny, so
+    the lambda returns its 4000 floor -- **and `input.size_mb == 0` returns the
+    floor too**, so a run proving the floor proves nothing about the scaling. It
+    was checked by temporarily lowering the floor to 1, where the three test
+    clades yield three *distinct* values (227/228/230) that track their input
+    sizes. `mat_clade_subset` is the opposite shape and stays scalar: it loads
+    the whole MAT before pruning, so its cost is a property of the input tree
+    rather than of the clade, and 101 benchmarks span 23.9-25.6 GB.
 
 
 ### Configuration Sections
