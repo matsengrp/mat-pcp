@@ -129,16 +129,24 @@ def _():
     DENSITY_CMAP = LinearSegmentedColormap.from_list(
         "blue_seq", BLUE_SEQUENTIAL
     )
-    # Clade emergence dates are ordered, so they take the same single hue
-    # light->dark. Five steps rather than the seven of BLUE_SEQUENTIAL: as a
-    # *dot* colour the ramp's light end has to clear the surface on its own,
-    # and #cde2fb / #9ec5f4 read at 1.2:1 and 1.7:1 against it, below the 2:1
-    # floor a 34-point mark needs. This ramp starts at #86b6ef (2.06:1) and
-    # passes the ordinal checks; BLUE_SEQUENTIAL keeps its lighter end because
-    # a hexbin cell's lightest step legitimately means "near nothing here".
+    # Clade emergence dates are ordered, so the ramp is monotone in lightness
+    # light->dark; but unlike the caps it is *multi-hue* (amber -> pink ->
+    # magenta -> violet -> navy, five steps of plasma read from t=0.75 down to
+    # 0). A single blue hue has only so much perceptual range to spend, and
+    # spread over six years it left 2022, 2023 and 2024 reading as the same
+    # mid-blue -- a scale that is ordered and unreadable. Hue does the
+    # separating here and lightness still does the ordering, so this is a
+    # sequential ramp rather than a rainbow: it passes the ordinal checks
+    # (monotone L, every adjacent gap >= 0.06, light end #f89540 at 2.18:1
+    # against the surface) and plasma is CVD-safe by construction. Truncated
+    # at t=0.75 rather than running to plasma's yellow, which reads 1.5:1
+    # against a near-white surface -- a 34-point dot needs 2:1 to be seen at
+    # all. Where the caps are colour-coded (the eCDFs, the tree totals) they
+    # keep the single-hue BLUE_ORDINAL, so the two scales cannot be confused;
+    # on the figure that carries the dates the caps are neutral lines.
     DATE_CMAP = LinearSegmentedColormap.from_list(
-        "blue_date",
-        ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#104281"],
+        "date_seq",
+        ["#f89540", "#da5a6a", "#aa2395", "#6600a7", "#0d0887"],
     )
 
     mpl.rcParams.update({
@@ -196,8 +204,9 @@ def _(mo):
     the sampler drew, and a clade absent from it is a **control** that the arm
     re-aggregated while reading its per-clade files from the full tree unchanged.
     Controls must reproduce full depth exactly, so they are excluded from the
-    figures below — their scatter is the identity line by construction and their
-    count fraction is 1.
+    per-clade figures — their scatter is the identity line by construction and
+    their count fraction is 1. They are *included* in the tree-level totals,
+    where they are most of what survives a cap.
     """)
     return
 
@@ -389,13 +398,12 @@ def _(
     _vals0 = [_sizes0[_c] for _c in _order0]
     _caps0 = sorted(cap_of(_a) for _a in cap_arms)
 
-    # Colour is the emergence date -- an ordered quantity, so one hue
-    # light->dark rather than categorical hues, five steps of the blue ramp
-    # (validated: monotone lightness, every adjacent gap >= 0.06, light end
-    # 2.06:1 against the surface, hue spread 3 degrees). Encoded as day
-    # ordinals so the scale is linear in time, with the colourbar ticked at
-    # calendar years. An undated clade is drawn in muted ink rather than at
-    # either end of the ramp, which would assert a date.
+    # Colour is the emergence date -- an ordered quantity, so DATE_CMAP is
+    # monotone in lightness; see its definition for why it is multi-hue where
+    # the caps are single-hue. Encoded as day ordinals so the scale is linear
+    # in time, with the colourbar ticked at calendar years. An undated clade is
+    # drawn in muted ink rather than at either end of the ramp, which would
+    # assert a date.
     _ords0 = [
         date.fromisoformat(_emerged0[_c]).toordinal() if _emerged0[_c] else None
         for _c in _order0
@@ -452,8 +460,8 @@ def _(
             zorder=6,
         )
     # Selective labels only: the extremes, which set the range the caption
-    # quotes. A number on all 56 points is unreadable at this width and the
-    # table view carries every value anyway.
+    # quotes. A number on all 56 points is unreadable at this width, and the
+    # tree-total table below carries the per-cap figures that matter.
     for _i0 in (0, len(_order0) - 1):
         _ax0.annotate(
             f"{_vals0[_i0]:,}",
@@ -1165,81 +1173,6 @@ def _(SMALL_N, clade_picker, mo, this):
         f"mutations ({int(this.n_ground_truth.min()):,} at the thinnest cap), "
         "so the coefficients have resolution."
     )
-    return
-
-
-@app.cell
-def _(BLUE_ORDINAL, cap_arms, clade_stats, mo, np, pd, thinned_clades):
-    # Every (cap, clade) fit, for the table view below. The cross-clade
-    # slope-against-r figure this cell used to draw is gone: every scatter
-    # panel above already annotates its own slope beside its own r, which is
-    # the same comparison one clade at a time and against the data rather than
-    # against a summary of it.
-    _all5 = sorted({_c for _a in cap_arms for _c in thinned_clades(_a)})
-    mo.stop(not _all5, mo.md("**No arm thinned any clade.**"))
-    all_fits = pd.concat([clade_stats(_c) for _c in _all5], ignore_index=True)
-    _caps5 = sorted(all_fits.cap.unique())
-    _idx5 = (
-        np.linspace(0, len(BLUE_ORDINAL) - 1, len(_caps5)).round().astype(int)
-        if len(_caps5) > 1
-        else [len(BLUE_ORDINAL) // 2]
-    )
-    cap_color = {_c: BLUE_ORDINAL[_i] for _c, _i in zip(_caps5, _idx5)}
-    return all_fits, cap_color
-
-
-@app.cell
-def _(all_fits, cap_color, estimator_picker, mo, np):
-    _e = estimator_picker.value
-    _t = all_fits[all_fits.estimator == _e]
-    _agg = (
-        _t.groupby("cap")
-        .agg(
-            clades_thinned=("clade", "size"),
-            median_effective_fraction=("effective_fraction", "median"),
-            median_count_fraction=("count_fraction", "median"),
-            median_r=("pearson_r", "median"),
-            median_slope=("slope", "median"),
-            min_slope=("slope", "min"),
-            median_sd_arm_over_sd_full=(
-                "clade",
-                lambda s: float(
-                    np.median(
-                        _t.loc[s.index, "sd_arm"] / _t.loc[s.index, "sd_full"]
-                    )
-                ),
-            ),
-        )
-        .round(5)
-        .reset_index()
-    )
-    mo.vstack([
-        mo.md(
-            f"### Table view — {_e}\n\n"
-            "The accessible counterpart to the figures: identity is never "
-            "carried by colour alone. `sd_arm / sd_full` is the compression "
-            "read straight off the two distributions, independent of the fit."
-        ),
-        mo.ui.table(_agg, selection=None),
-        mo.md("Per (cap, clade), most shrunk first:"),
-        mo.ui.table(
-            _t[[
-                "clade", "cap", "full_depth_samples", "effective_fraction",
-                "count_fraction", "n_ground_truth", "pearson_r", "slope",
-                "sd_full", "sd_arm", "n_scored_full", "n_scored_arm",
-            ]]
-            .sort_values("slope")
-            .round(5),
-            selection=None,
-        ),
-        mo.md(
-            "Cap colour key: "
-            + " · ".join(
-                f"<span style='color:{_c}'>■</span> cap {_k:,}"
-                for _k, _c in cap_color.items()
-            )
-        ),
-    ])
     return
 
 
