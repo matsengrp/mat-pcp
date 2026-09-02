@@ -1625,7 +1625,7 @@ rule curate_pcps_for_dasm:
     input:
         pcps=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}{clade}_pcps.csv.gz"),
         # The codon mask is deliberately **not** arm-prefixed. It is invariant
-        # to sampling fraction by construction: ``get_problematic_sites.py``
+        # to sampling depth by construction: ``get_problematic_sites.py``
         # masks a codon iff ``exclude`` holds at that site in every clade, and
         # ``masking.compute_exclusions`` derives ``exclude`` from config, the
         # ProblematicSites VCF, ``usher_masked_sites.yaml`` and the founder

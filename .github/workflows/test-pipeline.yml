@@ -253,16 +253,18 @@ jobs:
       run: |
         pixi run python tests/test_pcp_date_cutoffs.py
 
-    # The clade-subsampling arms (#151). The CI pipeline run covers the roster,
-    # the degenerate arm's byte-equality and a clade thinned below
-    # min_clade_size, but it cannot see two things. `config_test_data.yaml`'s
-    # clade sizes make `round(frac * n)` and `floor(frac * n)` agree (19B at 0.2,
-    # 20A at 0.5), so the rounding rule is unobservable end-to-end; and no config
-    # carries two spellings of one fraction, so the basis-point encoding that
-    # keeps `0.10` and `0.1` from naming two arms is never exercised. Both are
-    # checked here on fixtures built so each failure moves a sample (n=7 at 0.5,
-    # where round gives 4 and floor gives 3), against a deliberately broken
-    # `workflow/modules/subsample.py` rather than patched script text.
+    # The clade-subsampling arms (#151). The CI pipeline run covers a thinned
+    # clade, two controls and the degenerate arm's byte-equality, but three
+    # things are unreachable from any config. The membership boundary (`n > cap`
+    # against `n >= cap`) needs a clade of exactly `cap` samples; the
+    # `min_clade_size` exclusion needs `min_clade_size > cap`, which no config
+    # sets; and order preservation is invisible because the test data's clade
+    # lists are already sorted. All three are checked here on fixtures built so
+    # each failure moves a sample (seven deliberately unsorted samples at a cap
+    # of 4, so every draw is partial and the ordering is observable), against a
+    # deliberately broken `workflow/modules/subsample.py` rather than patched
+    # script text -- patching the script would report the sampler as covered
+    # while the operator implementing it sat one file away.
     - name: Verify the clade-subsample draw, naming and guards
       run: |
         pixi run python tests/test_clade_subsamples.py

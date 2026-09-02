@@ -50,17 +50,10 @@ byte-identical controls by construction. Membership is *strictly* above the cap.
 A cap at or above every clade's size thins nothing: that is the **degenerate
 arm**, and must be byte-identical to the full tree.
 
-A second kind of arm, `frac_{unit}_{seed}_{fraction}bp`, thinned an explicitly
-*named* unit of clades by a sampling fraction. It was implemented first and
-**removed** before release. It intervened on **size** — every clade in the unit
-kept the same share, so the tree's imbalance survived and one arm was one point
-on a depth curve — which answers a different question from the one the arms exist
-for; its controls had to be *chosen* rather than falling out of the definition;
-and a clade left at full depth sets an evidence floor through founder proximity,
-so naming a unit honestly needed five clades to ladder one (21L alone leaves
-2,737,183 samples within 20 nt of 21J's founder, 139% of a `{21J, 21I}` unit).
-`sampling_fractions` and `unit` are rejected **by name**, so a config written
-against them says what happened rather than failing as an unknown key.
+`sampling_fractions` and `unit` are rejected **by name** rather than as unknown
+keys: they belonged to an earlier fraction-based arm that never shipped, so a
+config written against them says what happened instead of reading as a typo. See
+`CLAUDE.md` pattern 15 for why a cap replaced them.
 
 Empty in every production config; the arms are launched by naming their paths,
 since a full-size arm costs ~8 CPU-hours.
@@ -76,19 +69,13 @@ counts from 11.5% of its sequences at `max_samples: 50000`. `count_fraction` in
 `correlation_summary.csv` is where that measured retention is reported, and it
 is the only retention fraction the arms ship.
 
-A roster file, `subsample_summary.csv`, was implemented and **removed** before
-release, along with the `mutation_counts/branch_qc/{clade}.csv` and
-`pcps/{gene}/branch_qc/{clade}.csv` sidecars that were its only inputs. Nothing
-read it: not `subsample_correlations.py`, not `notebooks/cap_arm_scatters.py`,
-and the production arms' `correlation_summary.csv` was produced without it ever
-existing. Its one irreplaceable column recorded a clade excluded for falling
-below `min_clade_size` after thinning, which is unreachable from every config
-that sets `min_clade_size: 0` — all of them — so the auditable-absence
-mechanism was inert on exactly the trees it was written for. That exclusion is
-now covered by `tests/test_clade_subsamples.py` only, and the arms deliberately
-ship no roster, unlike #137's `glm/era_fit_summary.csv` and #149's
-`pcps/cutoff_summary.csv`. The per-limit branch-QC tallies both producers
-compute survive as **log** lines.
+**No roster file.** Unlike #137's `glm/era_fit_summary.csv` and #149's
+`pcps/cutoff_summary.csv`, the arms ship no `(arm, clade)` roster. A clade
+excluded for falling below `min_clade_size` after thinning therefore contributes
+no row and no files, so it is indistinguishable from one a wiring mistake
+dropped; that exclusion needs `min_clade_size > max_samples`, which no config
+sets, and `tests/test_clade_subsamples.py` is its only coverage. Each producer's
+per-limit branch-QC tallies are **log** lines rather than sidecar files.
 
 **The analysis, not just the arms.** `correlation_summary.csv` at the output root
 is the headline deliverable: one row per `(arm, clade, estimator, population)`
