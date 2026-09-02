@@ -455,6 +455,14 @@ genes:
 # box, which is latent oversubscription that only stays harmless while the
 # workload fails to parallelize. Output is byte-identical at `-T 1`, `-T 32`
 # and the default, verified for `extract -o`, `extract -t` and `extract -S`.
+#
+# Three of those call sites are **not reachable from this block**, because
+# `export_newick`, `translate_mat` and `mat_sample_paths` declare no `threads:`
+# and so never call `get_threads` -- not even `default` below applies, and
+# `{threads}` resolves to Snakemake's own 1. None of the three carries a
+# `benchmark:` either, so unlike every value here that 1 is inferred rather
+# than measured; `export_newick` is the one to watch, since it is a single job
+# over the whole tree with no concurrency to trade against.
 threads:
   filter_metadata: 1
   filter_mat_tree: 1

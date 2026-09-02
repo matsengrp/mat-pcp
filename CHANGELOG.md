@@ -22,8 +22,16 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 #### Thread and memory allocations corrected to their measured values
 
-No output changes: `threads` and `mem_mb` are scheduler reservations, and
-neither is a Snakemake rerun trigger, so a built tree stays valid.
+No output changes. `threads` and `mem_mb` are scheduler reservations and
+neither is a Snakemake rerun trigger, but the `-T {threads}` insertions below
+change the `shell:` body of six rules, which **is** the default `code` trigger
+-- and one of them, `filter_mat_tree`, is the root of the DAG. The released
+v12 trees' stored provenance records the pre-change command (verified: their
+`filter_mat_tree` and `export_newick` metadata contain no `-T`), so extending
+either tree requires `--rerun-triggers mtime` or Snakemake rebuilds everything
+downstream, the 470 GiB of PCPs included. The outputs themselves are
+byte-identical, so a tree already built stays *correct*; it is the provenance,
+not the data, that moved.
 
 No script in the pipeline reads `snakemake.threads`, and only
 `optimize_mat_tree` interpolates `{threads}` into a shell command, so every
@@ -43,16 +51,35 @@ measured 77.3 GB peak, `window_subtree_counts` at 16000 against 67.3 GB,
 `filter_mat_tree` at 16000 against 31.5 GB -- which is the dangerous direction:
 under a scheduler that honours the request, that is a killed job or an
 oversubscribed node. Four were over-declared, `master_table` by 68x (8000
-against 118 MB). `extract_pcps_by_clade` spans 160x across its 422 jobs, so no
-scalar describes it; it is now `max(4000, 300 * input.size_mb) * attempt`, which
-covers all 197 measured (gene, clade) pairs with zero under-grants while leaving
-the median job under 500 MB rather than reserving for the tail.
+against 118 MB). Two of those figures come from a rule's *sibling* rather than
+from itself and are recorded that way rather than silently attributed: the
+77.3 GB peak is 77330 MB on `extract_pcps_by_clade` and 77347 MB on
+`extract_pcps_by_clade_upto`, and the 118 MB is from
+`benchmarks/master_table_pre_omicron.tsv`, since `master_table.tsv` itself
+records `max_rss` as `NA` on both production trees. `extract_pcps_by_clade` spans 160x across the 422 full-tree jobs it and
+`extract_pcps_by_clade_upto` share (197 + 225), so no scalar describes it; it is
+now `max(6000, 300 * input.size_mb) * attempt`, which leaves the median job
+under 500 MB rather than reserving for the tail. The floor is what most jobs
+actually get -- 307 of the 449 checkable full-tree jobs are floor-bound and
+*all 684* of the #151 arm jobs are, since thinning shrinks a clade's subtree
+without shrinking its PCP expansion proportionally -- so it is sized against
+the arms, where 4000 under-granted 2 jobs (`cap_50000_0` ORF1a/21J peaks at
+5304 MB from an 8.4 MB subtree). 6000 gives zero under-grants across all 1133
+checkable jobs.
 
 All seven `matUtils extract` / `matUtils summary` calls now pass `-T {threads}`.
 matUtils' own default is 32, so raising concurrency without pinning it would
 multiply oversubscription instead of removing it. Verified output-neutral:
 `extract -o`, `-t` and `-S` are byte-identical at `-T 1`, `-T 32` and the
 default, and a full test-data rebuild byte-matches the previous tree.
+
+Three of those call sites -- `export_newick`, `translate_mat` and
+`mat_sample_paths` -- declare no `threads:`, so they do not consult the config
+block at all (not even its `default`) and `{threads}` resolves to Snakemake's
+own 1. None carries a `benchmark:` either, so that 1 is the one value here
+inferred rather than measured. `export_newick` is the case to watch: a single
+job over the whole tree, so it trades 32 matUtils threads for 1 with no
+concurrency to gain in return.
 
 #### Counts and PCPs for clade subtrees at reduced sampling depth
 

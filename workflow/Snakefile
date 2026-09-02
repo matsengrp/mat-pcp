@@ -1557,20 +1557,36 @@ rule extract_pcps_by_clade:
         pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
     threads: get_threads("extract_pcps")
     resources:
-        # Measured on the v12 gisaid tree: 422 benchmarks spanning 482 MB
-        # (median) to 77.3 GB (ORF1a/21J), a 160x spread, because peak cost
-        # tracks the clade's subtree and the gene's CDS length together --
-        # ORF1a peaks near 200x its input .pb, S near 108x. A flat 8000 was
-        # therefore under-granted for 59 of 422 jobs and 12 exceeded 32 GB,
-        # while a flat value covering the tail (80000) would cap a 995 GB box
-        # at 12 concurrent jobs whose median need is under 500 MB. Scaling on
-        # input size instead covers all 197 measured (gene, clade) pairs with
-        # zero under-grants and still lets the small jobs run wide; `attempt`
-        # is the safety net for a tree outside the measured envelope. Like
-        # every other `mem_mb` here this is inert under the local executor --
-        # it records what the rule costs rather than limiting it.
+        # Measured on the v12 gisaid tree over the 422 full-tree benchmarks of
+        # this rule and `extract_pcps_by_clade_upto` pooled (197 + 225; both
+        # share this declaration, so both are counted): 482 MB median to
+        # 77.3 GB for ORF1a/21J, a 160x spread, because peak cost tracks the
+        # clade's subtree and the gene's CDS length together -- ORF1a peaks at
+        # 230-277x its input .pb, S near 108x. A flat 8000 under-granted 59 of
+        # those 422 and 12 exceeded 32 GB, while a flat value covering the tail
+        # (80000) would cap a 995 GB box at 12 concurrent jobs whose median
+        # need is under 500 MB. Scaling on input size instead leaves the small
+        # jobs small; `attempt` is the safety net for a tree outside the
+        # measured envelope.
+        #
+        # **The floor, not the multiplier, is what most jobs get, so it is
+        # sized against the #151 arms rather than the full tree.** 307 of the
+        # 449 checkable full-tree jobs are floor-bound, and *all 684* arm jobs
+        # are: thinning shrinks a clade's `.pb` without shrinking its PCP
+        # expansion proportionally, so an arm's peak/input runs to 737x against
+        # ORF1a's 230-277x at full depth -- `cap_50000_0` ORF1a/21J peaks at
+        # 5304 MB from an 8.4 MB subtree. A floor of 4000 therefore under-
+        # granted 2 of 684 arm jobs while under-granting none of the full-tree
+        # ones, which is exactly the population a root-only census cannot see.
+        # 6000 gives zero under-grants across all 1133 checkable jobs. The 225
+        # `_upto` pairs stay unverifiable because `mat/cutoffs/*.pb` is
+        # `temp()`; the peak among them (77347 MB) is within 17 MB of its
+        # verified full-tree twin.
+        #
+        # Like every other `mem_mb` here this is inert under the local executor
+        # -- it records what the rule costs rather than limiting it.
         mem_mb=lambda wildcards, input, attempt: max(
-            4000, int(300 * input.size_mb)
+            6000, int(300 * input.size_mb)
         ) * attempt,
         runtime=120
     benchmark:
@@ -1932,20 +1948,36 @@ rule extract_pcps_by_clade_upto:
         pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
     threads: get_threads("extract_pcps")
     resources:
-        # Measured on the v12 gisaid tree: 422 benchmarks spanning 482 MB
-        # (median) to 77.3 GB (ORF1a/21J), a 160x spread, because peak cost
-        # tracks the clade's subtree and the gene's CDS length together --
-        # ORF1a peaks near 200x its input .pb, S near 108x. A flat 8000 was
-        # therefore under-granted for 59 of 422 jobs and 12 exceeded 32 GB,
-        # while a flat value covering the tail (80000) would cap a 995 GB box
-        # at 12 concurrent jobs whose median need is under 500 MB. Scaling on
-        # input size instead covers all 197 measured (gene, clade) pairs with
-        # zero under-grants and still lets the small jobs run wide; `attempt`
-        # is the safety net for a tree outside the measured envelope. Like
-        # every other `mem_mb` here this is inert under the local executor --
-        # it records what the rule costs rather than limiting it.
+        # Measured on the v12 gisaid tree over the 422 full-tree benchmarks of
+        # this rule and `extract_pcps_by_clade_upto` pooled (197 + 225; both
+        # share this declaration, so both are counted): 482 MB median to
+        # 77.3 GB for ORF1a/21J, a 160x spread, because peak cost tracks the
+        # clade's subtree and the gene's CDS length together -- ORF1a peaks at
+        # 230-277x its input .pb, S near 108x. A flat 8000 under-granted 59 of
+        # those 422 and 12 exceeded 32 GB, while a flat value covering the tail
+        # (80000) would cap a 995 GB box at 12 concurrent jobs whose median
+        # need is under 500 MB. Scaling on input size instead leaves the small
+        # jobs small; `attempt` is the safety net for a tree outside the
+        # measured envelope.
+        #
+        # **The floor, not the multiplier, is what most jobs get, so it is
+        # sized against the #151 arms rather than the full tree.** 307 of the
+        # 449 checkable full-tree jobs are floor-bound, and *all 684* arm jobs
+        # are: thinning shrinks a clade's `.pb` without shrinking its PCP
+        # expansion proportionally, so an arm's peak/input runs to 737x against
+        # ORF1a's 230-277x at full depth -- `cap_50000_0` ORF1a/21J peaks at
+        # 5304 MB from an 8.4 MB subtree. A floor of 4000 therefore under-
+        # granted 2 of 684 arm jobs while under-granting none of the full-tree
+        # ones, which is exactly the population a root-only census cannot see.
+        # 6000 gives zero under-grants across all 1133 checkable jobs. The 225
+        # `_upto` pairs stay unverifiable because `mat/cutoffs/*.pb` is
+        # `temp()`; the peak among them (77347 MB) is within 17 MB of its
+        # verified full-tree twin.
+        #
+        # Like every other `mem_mb` here this is inert under the local executor
+        # -- it records what the rule costs rather than limiting it.
         mem_mb=lambda wildcards, input, attempt: max(
-            4000, int(300 * input.size_mb)
+            6000, int(300 * input.size_mb)
         ) * attempt,
         runtime=120
     benchmark:
