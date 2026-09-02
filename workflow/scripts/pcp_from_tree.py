@@ -51,7 +51,6 @@ gtf_path = snakemake.input.gtf
 coding_sites_csv = snakemake.input.coding_sites
 output_path = snakemake.output.pcps
 filtered_branches_path = snakemake.output.filtered_branches
-branch_qc_path = snakemake.output.branch_qc
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 # The gene to slice to comes from the ``{gene}`` wildcard. Its CDS blocks come
@@ -166,13 +165,12 @@ class PCPHelper:
         SARS2-mut-fitness behavior and exclude error-prone noncoding regions
         from quality assessment.
 
-        Returns a *reason* rather than a bool (#151) so
-        ``subsample_summary.csv`` can report which limit cost an arm its
-        branches; the limits are independent, so the early-return order below
-        decides only the attribution of a branch failing several, never which
-        branches survive. ``count_mutations.py`` attributes in this same order,
-        or the counts and PCP halves of that summary would file one branch
-        under two reasons.
+        Returns a *reason* rather than a bool so the run log can say which
+        limit cost the gene its branches. The limits are independent and all
+        of them are applied, so the early-return order below decides only the
+        attribution of a branch failing several, never which branches survive
+        -- nothing keys on the attribution, so no other script has to match
+        this order.
         """
         # Extract coding mutations only (exclude noncoding mutations)
         # Uses pre-loaded coding_sites set from coding_sites.csv
@@ -327,43 +325,27 @@ class PCPHelper:
         filtered_df.to_csv(filtered_branches_path, index=False)
         log(f"Wrote {len(filtered_df)} filtered branch IDs to {filtered_branches_path}")
 
-        self.write_branch_qc(branch_qc_path, n_identical, len(pcp_df))
+        self.log_branch_qc(n_identical, len(pcp_df))
 
-    def write_branch_qc(self, path, n_identical, n_kept):
-        """Tally why each branch was kept or dropped, in long format (#151).
+    def log_branch_qc(self, n_identical, n_kept):
+        """Log why each branch was kept or dropped.
 
-        Additive output: nothing existing reads it and no existing schema
-        moves. ``subsample_summary.csv`` needs per-limit attribution because
-        realized retention falls below the closed form for two separable
-        reasons -- QC drops and same-site collapse -- and one aggregate
-        "branches dropped" number cannot tell them apart.
-
-        ``identical_slice`` is a *gene-level* outcome and has no counterpart on
-        the counts arm: a branch whose only mutations fall outside this gene's
-        CDS blocks is dropped here and kept there. That asymmetry is why the
-        summary carries a ``gene`` column at all, empty on counts-arm rows.
+        A diagnostic, not an output. ``identical_slice`` is a *gene-level*
+        outcome with no counterpart on the counts arm: a branch whose only
+        mutations fall outside this gene's CDS blocks is dropped here and kept
+        there.
         """
-        rows = [("outcome", "kept", int(n_kept))]
-        rows += [
-            ("outcome", reason, int(self.qc_drops.get(reason, 0)))
-            for reason in (
-                "max_nt_mutations",
-                "no_mutations",
-                "max_reversions_to_ref",
-                "max_reversions_to_clade_founder",
-                "duplicate_codon_position",
-            )
-        ]
-        rows.append(("outcome", "identical_slice", int(n_identical)))
-        rows.append(
-            ("total", "branches_scored", int(sum(self.qc_hist.values())))
-        )
-        rows += [
-            ("n_nt_mutations_coding", str(int(k)), int(v))
-            for k, v in sorted(self.qc_hist.items())
-        ]
-        DF(rows, columns=["category", "key", "n_branches"]).to_csv(path, index=False)
-        log(f"Wrote branch QC tally to {path}")
+        log(f"Branch QC for this gene ({sum(self.qc_hist.values())} scored):")
+        log(f"  kept: {int(n_kept)}")
+        for reason in (
+            "max_nt_mutations",
+            "no_mutations",
+            "max_reversions_to_ref",
+            "max_reversions_to_clade_founder",
+            "duplicate_codon_position",
+        ):
+            log(f"  {reason}: {int(self.qc_drops.get(reason, 0))}")
+        log(f"  identical_slice: {int(n_identical)}")
 
 
 def main():

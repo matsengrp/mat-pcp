@@ -2,8 +2,8 @@
 """Unit tests for the clade-subsampling arms (#151).
 
 Runs the real ``workflow/scripts/subsample_clade_samples.py`` and
-``subsample_summary.py`` against a stub ``snakemake`` global, and the mutation
-tests exec *deliberately corrupted* copies -- with every corruption applied to
+``subsample_correlations.py`` against a stub ``snakemake`` global, and the
+mutation tests exec *deliberately corrupted* copies -- with every corruption applied to
 ``workflow/modules/subsample.py`` rather than to the script text. That
 distinction is the point: an operator implementing the sampler works in the
 module, so a test that patched script text would report the guard as covered
@@ -34,7 +34,10 @@ exclusion, and CI reaches neither.* ``validate_entries`` forces ``cap >= 1`` and
 empty draw -- the guard is defence in depth against the failure that would
 otherwise surface as a crash inside ``matUtils`` with nothing able to attribute
 it to clade size (#149's SIGSEGV, one axis over). The exclusion needs
-``min_clade_size > cap``, which no config sets.
+``min_clade_size > cap``, which no config sets -- and since the arms dropped
+``subsample_summary.csv``, the exclusion is no longer recorded anywhere a run
+could reconcile, so ``check_min_clade_size_excludes_rather_than_raises`` below
+is its only coverage of any kind.
 
 *The removed fraction keys cannot be rejected by any shipped config, because
 none carries them.* ``sampling_fractions`` and ``unit`` belonged to the fraction
@@ -59,7 +62,6 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DRAW_SCRIPT = REPO_ROOT / "workflow" / "scripts" / "subsample_clade_samples.py"
-SUMMARY_SCRIPT = REPO_ROOT / "workflow" / "scripts" / "subsample_summary.py"
 CORR_SCRIPT = REPO_ROOT / "workflow" / "scripts" / "subsample_correlations.py"
 MODULE_REL = "modules/subsample.py"
 
@@ -425,131 +427,17 @@ def check_an_empty_full_list_raises_about_emptiness():
     return failures
 
 
-def check_retention_exceeds_the_realized_sample_fraction():
-    """Realized retention runs above the sample fraction, concavely.
-
-    A branch survives whenever *any* sample below it is retained, which is why
-    a nominal cut is not an evidence cut and why every downstream number has to
-    be keyed to measured retention instead. Hand-checkable at the fixture's
-    sizes so the closed form is pinned to arithmetic rather than to itself.
-    """
-    failures = []
-    # Three nodes, two samples and one mutation each, at p = 0.5:
-    #   per node 1 - 0.5^2 = 0.75, so E = 2.25 of 3 -- 75% of the mutations
-    #   from 50% of the samples.
-    expected, sd = subsample.expected_mutation_retention([2, 2, 2], [1, 1, 1], 0.5)
-    if abs(expected - 2.25) > 1e-12:
-        failures.append(f"closed form gave {expected}, expected 2.25")
-    if abs(sd - 0.75) > 1e-12:
-        failures.append(f"closed-form sd gave {sd}, expected 0.75")
-
-    # Zero-mutation branches contribute nothing, so passing them in is free.
-    with_zeros, _ = subsample.expected_mutation_retention(
-        [2, 2, 2, 9, 9], [1, 1, 1, 0, 0], 0.5
-    )
-    if abs(with_zeros - expected) > 1e-12:
-        failures.append(
-            f"zero-mutation branches moved the closed form: {with_zeros} vs "
-            f"{expected}"
-        )
-
-    # Concavity: retained/fraction must fall as the fraction rises.
-    node_samples = [2] * 500
-    node_muts = [1] * 500
-    ratios = []
-    for p in (0.01, 0.05, 0.10, 0.20):
-        e, _ = subsample.expected_mutation_retention(node_samples, node_muts, p)
-        ratios.append((e / len(node_muts)) / p)
-    if ratios != sorted(ratios, reverse=True):
-        failures.append(f"retention/fraction is not decreasing: {ratios}")
-    if ratios[-1] <= 1.0:
-        failures.append(
-            f"retention did not exceed the sampling fraction at p=0.20: "
-            f"{ratios[-1]}"
-        )
-    return failures
-
-
 # ---------------------------------------------------------------------------
-# subsample_summary.py
+# The roster param
 # ---------------------------------------------------------------------------
 
-QC_ROWS = pd.DataFrame(
-    [
-        ("outcome", "kept", 6),
-        ("outcome", "max_nt_mutations", 2),
-        ("outcome", "max_reversions_to_ref", 1),
-        ("outcome", "max_reversions_to_clade_founder", 0),
-        ("outcome", "no_mutations", 3),
-        ("outcome", "duplicate_codon_position", 0),
-        ("outcome", "identical_slice", 1),
-        ("total", "branches_scored", 13),
-    ],
-    columns=["category", "key", "n_branches"],
-)
-
-
-def _write_summary_fixture(root, arm, n_full=7, n_arm=4, drop_arm_samples=False):
-    """A minimal output tree for one arm over one clade and one gene."""
-    root = Path(root)
-    clades = root / "mat" / "clades"
-    _write_samples(clades / f"{CLADE}_samples.txt", FULL_SAMPLES[:n_full])
-    if not drop_arm_samples:
-        _write_samples(clades / arm / f"{CLADE}_samples.txt", FULL_SAMPLES[:n_arm])
-    for arm_dir in ("", arm):
-        muts = root / "mutations" / arm_dir / f"{CLADE}_nt_mutations.csv"
-        muts.parent.mkdir(parents=True, exist_ok=True)
-        # Two branches, three mutations at full depth; one branch, one at the arm.
-        rows = (
-            [("n1", "A1T;C2G"), ("n2", "G3A")]
-            if arm_dir == ""
-            else [("n1", "A1T")]
-        )
-        pd.DataFrame(rows, columns=["node_id", "nt_mutations"]).to_csv(
-            muts, index=False
-        )
-        # ``leaves_sharing_mutations`` is the ``n_node`` the closed form needs.
-        # Two samples under each branch, so at the realized p = 4/7 it predicts
-        # 3 * (1 - (3/7)^2) = 2.4490 of the 3 mutations -- deliberately well
-        # above the sample fraction, which is the whole point of the statistic.
-        tsv = root / "mutations" / arm_dir / f"{CLADE}_mutations.tsv"
-        pd.DataFrame(
-            [(node, 2) for node, _ in rows],
-            columns=["node_id", "leaves_sharing_mutations"],
-        ).to_csv(tsv, sep="\t", index=False)
-        qc = root / "mutation_counts" / arm_dir / "branch_qc" / f"{CLADE}.csv"
-        qc.parent.mkdir(parents=True, exist_ok=True)
-        QC_ROWS.to_csv(qc, index=False)
-        gqc = root / "pcps" / "S" / arm_dir / "branch_qc" / f"{CLADE}.csv"
-        gqc.parent.mkdir(parents=True, exist_ok=True)
-        QC_ROWS.to_csv(gqc, index=False)
-
-
-def run_summary(root, roster, min_clade_size=2, genes=("S",)):
-    out = Path(root) / "subsample_summary.csv"
-    snake = _Namespace(
-        input=_Namespace(samples=[], branch_qc=[]),
-        output=_Namespace(summary=str(out)),
-        params=_Namespace(
-            roster=roster,
-            genes=list(genes),
-            min_clade_size=min_clade_size,
-            outdir=str(root),
-        ),
-        log=[],
-    )
-    _exec_script(SUMMARY_SCRIPT, {"snakemake": snake})
-    return pd.read_csv(out)
-
-
-def _roster(arm, cap, included, excluded, n_retained, unit=None):
+def _roster(arm, cap, included, unit=None):
     """The param the Snakefile passes, for one arm over one clade.
 
-    ``unit`` is the *resolved* list the fan-out used, which is what the summary
-    reconciles against the file tree. There is no configured unit to fall back
-    on -- membership is derived from the tree's clade sizes -- so a roster whose
-    unit disagrees with the arm directory is exactly the failure the file exists
-    to expose, and the tests below construct that disagreement deliberately.
+    ``unit`` is the *resolved* list the fan-out used. There is no configured
+    unit to fall back on -- membership is derived from the tree's clade sizes --
+    so ``thinned`` has to come from the function that drove the fan-out rather
+    than from a second evaluation of the sizing arithmetic.
     """
     return {
         arm: {
@@ -557,166 +445,8 @@ def _roster(arm, cap, included, excluded, n_retained, unit=None):
             "seed": SEED,
             "cap": cap,
             "included": included,
-            "excluded": excluded,
-            "n_retained": n_retained,
         }
     }
-
-
-def check_summary_reports_realized_retention():
-    """The happy path: one counts row and one per-gene row, ratios measured."""
-    failures = []
-    arm = subsample.arm_name(CAP, SEED)
-    with tempfile.TemporaryDirectory() as tmp:
-        _write_summary_fixture(tmp, arm)
-        df = run_summary(tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}))
-    counts = df[df["gene"].isna() | (df["gene"] == "")]
-    genes = df[df["gene"] == "S"]
-    if len(counts) != 1 or len(genes) != 1:
-        failures.append(
-            f"expected one counts row and one gene row, got {len(counts)} and "
-            f"{len(genes)}"
-        )
-        return failures
-    row = counts.iloc[0]
-    if int(row["n_samples_arm"]) != 4 or int(row["n_samples_full"]) != 7:
-        failures.append(f"sample counts wrong: {row['n_samples_arm']}/{row['n_samples_full']}")
-    # 1 of 3 nucleotide mutations retained from 4 of 7 samples.
-    if abs(float(row["nt_mutation_retention"]) - 1 / 3) > 1e-6:
-        failures.append(f"nt_mutation_retention wrong: {row['nt_mutation_retention']}")
-    if abs(float(row["sample_fraction_realized"]) - 4 / 7) > 1e-6:
-        failures.append(
-            f"sample_fraction_realized wrong: {row['sample_fraction_realized']}"
-        )
-    if int(row["branches_dropped_max_nt_mutations"]) != 2:
-        failures.append(
-            f"branch QC attribution wrong: {row['branches_dropped_max_nt_mutations']}"
-        )
-    # The closed form must predict retention *above* the sample fraction: two
-    # samples under each of the two full-depth branches at p = 4/7 gives
-    # 3 * (1 - (3/7)^2) = 2.4490 of 3 mutations = 0.8163, against 0.5714 of the
-    # samples. A prediction at or below the sample fraction means the survival
-    # term was dropped.
-    predicted = float(row["predicted_nt_mutations_arm"])
-    if abs(predicted - 2.45) > 0.01:
-        failures.append(
-            f"closed-form prediction wrong: {predicted}, expected 2.45"
-        )
-    if float(row["predicted_nt_mutation_retention"]) <= float(
-        row["sample_fraction_realized"]
-    ):
-        failures.append(
-            "predicted retention did not exceed the sample fraction, so the "
-            "any-sample-survives term is missing"
-        )
-    if pd.isna(row["nt_mutation_deviation_sd"]):
-        failures.append("nt_mutation_deviation_sd was not reported")
-    # The gene-level drop reasons exist only on the PCP side, since
-    # count_mutations.py scores the whole genome.
-    grow = genes.iloc[0]
-    if int(grow["branches_dropped_identical_slice"]) != 1:
-        failures.append(
-            f"identical_slice missing from the gene row: "
-            f"{grow['branches_dropped_identical_slice']}"
-        )
-    if not pd.isna(row.get("branches_dropped_identical_slice")):
-        failures.append(
-            "identical_slice was reported on the counts row, where the limits "
-            "are applied genome-wide and there is no gene slice"
-        )
-    return failures
-
-
-def check_summary_records_an_excluded_clade():
-    """A clade thinned below ``min_clade_size`` is named with ``included=False``."""
-    failures = []
-    # cap 1 against min_clade_size 2: min(7, 1) = 1 is below the threshold, so
-    # the clade is declined. cap 2 would be *kept* at that threshold, which is
-    # the boundary the summary raises on -- so the fixture has to sit below it.
-    arm = subsample.arm_name(1, SEED)
-    with tempfile.TemporaryDirectory() as tmp:
-        _write_summary_fixture(tmp, arm, drop_arm_samples=True)
-        df = run_summary(tmp, _roster(arm, 1, [], [CLADE], {}), min_clade_size=2)
-    if len(df) != 1:
-        failures.append(f"expected exactly one row for an excluded clade, got {len(df)}")
-        return failures
-    row = df.iloc[0]
-    if bool(row["included"]):
-        failures.append("an excluded clade was recorded as included")
-    if int(row["n_samples_arm"]) != 1:
-        failures.append(
-            f"expected min(7, 1) = 1 recorded for the excluded clade, got "
-            f"{row['n_samples_arm']}"
-        )
-    return failures
-
-
-def check_summary_reconciles_in_both_directions():
-    """Requested-but-absent and present-but-declined both raise."""
-    failures = []
-    arm = subsample.arm_name(CAP, SEED)
-
-    with tempfile.TemporaryDirectory() as tmp:
-        _write_summary_fixture(tmp, arm, drop_arm_samples=True)
-        try:
-            run_summary(tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}))
-            failures.append(
-                "a clade the roster says is included, with no sample list on "
-                "disk, did not raise"
-            )
-        except ValueError:
-            pass
-
-    with tempfile.TemporaryDirectory() as tmp:
-        _write_summary_fixture(tmp, arm)
-        try:
-            run_summary(tmp, _roster(arm, CAP, [], [CLADE], {}))
-            failures.append(
-                "a clade the roster declined, whose subtree nonetheless exists "
-                "on disk, did not raise -- a stale intermediate would be read "
-                "as a legitimate exclusion"
-            )
-        except ValueError:
-            pass
-
-    # A clade the arithmetic approves must not be silently declined: that is the
-    # broken-fan-out case the roster exists to expose (#137's shape).
-    with tempfile.TemporaryDirectory() as tmp:
-        _write_summary_fixture(tmp, arm, drop_arm_samples=True)
-        try:
-            run_summary(
-                tmp, _roster(arm, CAP, [], [CLADE], {}), min_clade_size=2
-            )
-            failures.append(
-                "min(7, 4) = 4 >= min_clade_size 2 was recorded as an "
-                "exclusion without raising"
-            )
-        except ValueError:
-            pass
-    return failures
-
-
-def check_summary_catches_a_draw_of_the_wrong_size():
-    """The recorded count is asserted against the *file*, not the checkpoint.
-
-    The clade-counts checkpoint keys on the metadata column's first
-    whitespace-delimited token while ``samples_by_clade`` matches
-    ``^clade( |$)``, so the two can disagree -- and a disagreement would
-    otherwise produce an arm at a different depth than the one recorded.
-    """
-    failures = []
-    arm = subsample.arm_name(CAP, SEED)
-    with tempfile.TemporaryDirectory() as tmp:
-        _write_summary_fixture(tmp, arm, n_arm=3)  # should be min(7, 4) = 4
-        try:
-            run_summary(tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}))
-            failures.append(
-                "an arm holding 3 samples where min(7, 4) = 4 did not raise"
-            )
-        except ValueError:
-            pass
-    return failures
-
 
 
 # ---------------------------------------------------------------------------
@@ -810,7 +540,7 @@ def check_correlation_uses_the_ground_truth_set_not_the_grid():
     arm = subsample.arm_name(CAP, SEED)
     with tempfile.TemporaryDirectory() as tmp:
         _corr_fixture(tmp, arm)
-        got = run_correlations(tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}))
+        got = run_correlations(tmp, _roster(arm, CAP, [CLADE]))
         row = got[
             (got["estimator"] == "delta_fitness_ratio")
             & (got["population"] == GT_POPULATION)
@@ -870,7 +600,7 @@ def check_correlating_the_whole_grid_is_caught():
             input=_Namespace(fitness=[]),
             output=_Namespace(summary=str(out)),
             params=_Namespace(
-                roster=_roster(arm, CAP, [CLADE], [], {CLADE: 4}),
+                roster=_roster(arm, CAP, [CLADE]),
                 outdir=str(root),
                 count_threshold=10,
             ),
@@ -923,7 +653,7 @@ def check_count_fraction_counts_observations_not_mutations():
     with tempfile.TemporaryDirectory() as tmp:
         # Still scored on both sides, but at a quarter of the counts.
         _corr_fixture(tmp, arm, arm_actual=3)
-        got = run_correlations(tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}))
+        got = run_correlations(tmp, _roster(arm, CAP, [CLADE]))
         row = got[
             (got["estimator"] == "delta_fitness_ratio")
             & (got["population"] == GT_POPULATION)
@@ -976,7 +706,7 @@ def check_ground_truth_set_is_fixed_across_sampling_depths():
     with tempfile.TemporaryDirectory() as tmp:
         # arm_actual=1: still scored, but far below the threshold of 10.
         _corr_fixture(tmp, arm, arm_actual=1)
-        got = run_correlations(tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}))
+        got = run_correlations(tmp, _roster(arm, CAP, [CLADE]))
         row = got[
             (got["estimator"] == "delta_fitness_ratio")
             & (got["population"] == GT_POPULATION)
@@ -1009,7 +739,7 @@ def check_ground_truth_set_is_fixed_across_sampling_depths():
             input=_Namespace(fitness=[]),
             output=_Namespace(summary=str(out)),
             params=_Namespace(
-                roster=_roster(arm, CAP, [CLADE], [], {CLADE: 4}),
+                roster=_roster(arm, CAP, [CLADE]),
                 outdir=str(root),
                 count_threshold=10,
             ),
@@ -1050,7 +780,7 @@ def check_correlation_keeps_empty_populations_as_rows():
         # Threshold far above any count in the fixture, so the filtered
         # population is empty for both estimators.
         got = run_correlations(
-            tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}), count_threshold=1000
+            tmp, _roster(arm, CAP, [CLADE]), count_threshold=1000
         )
         filtered = got[got["population"].str.contains(">=1000")]
         if len(filtered) != 2:
@@ -1086,7 +816,7 @@ def check_a_control_clade_that_disagrees_raises():
         _corr_fixture(tmp, arm)
         # Same tree, but the roster says this clade is NOT in the arm's unit --
         # so its (deliberately disagreeing) effects must be reported as a leak.
-        roster = _roster(arm, CAP, ["21J"], [], {"21J": 4}, unit=["21J"])
+        roster = _roster(arm, CAP, ["21J"], unit=["21J"])
         try:
             run_correlations(tmp, roster)
             failures.append(
@@ -1345,12 +1075,7 @@ CHECKS = [
     ("an empty draw is a hard failure, not an exclusion", check_an_empty_draw_is_a_hard_failure_not_an_exclusion),
     ("demoting the zero-draw failure is caught", check_treating_a_zero_draw_as_an_exclusion_is_caught),
     ("an empty full list raises about emptiness", check_an_empty_full_list_raises_about_emptiness),
-    ("retention exceeds the realized sample fraction", check_retention_exceeds_the_realized_sample_fraction),
     ("the removed fraction keys are rejected by name", check_the_removed_fraction_keys_are_rejected_by_name),
-    ("summary reports realized retention", check_summary_reports_realized_retention),
-    ("summary records an excluded clade", check_summary_records_an_excluded_clade),
-    ("summary reconciles in both directions", check_summary_reconciles_in_both_directions),
-    ("summary catches a wrong-size draw", check_summary_catches_a_draw_of_the_wrong_size),
     ("cap thins only clades above it", check_cap_thins_only_clades_above_it),
     ("including a clade at the cap is caught", check_including_a_clade_at_the_cap_is_caught),
     ("the sampler refuses a clade at or below the cap", check_the_sampler_refuses_a_clade_at_or_below_the_cap),
@@ -1399,10 +1124,10 @@ def main():
     print(
         "\nPASSED: membership is strictly above the cap, the draw is a pure "
         "function of (cap, seed, clade) in file order, an empty draw is a hard "
-        "failure while a below-min_clade_size draw is a recorded exclusion, the "
-        "correlations use a ground-truth set fixed at full depth, the summary "
-        "reconciles its roster against the file tree in both directions, and "
-        "every guard fires on a deliberately broken module."
+        "failure while a below-min_clade_size draw is an exclusion, the "
+        "correlations use a ground-truth set fixed at full depth over a "
+        "population that does not move with the cut, and every guard fires on "
+        "a deliberately broken module."
     )
 
 

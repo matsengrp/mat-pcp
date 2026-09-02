@@ -234,53 +234,6 @@ def depth_label(spec):
     return f"cap={cap_token(spec['cap'])}"
 
 
-def expected_mutation_retention(node_samples, node_muts, p):
-    """``(expected, sd)`` nucleotide mutations retained at retention probability ``p``.
-
-    A branch survives whenever **any** sample below it is retained, so retention
-    of mutations runs well *above* the fraction of samples drawn:
-
-        E[retained](p) = sum over nodes of  k_node * (1 - (1 - p) ** n_node)
-
-    with ``n_node`` the clade samples below the node and ``k_node`` the
-    nucleotide mutations on its own branch. Both come from
-    ``mutations/{clade}_mutations.tsv``, whose ``leaves_sharing_mutations``
-    column *is* ``n_node`` -- one row per node, so the sum is cheap.
-    ``{clade}_sample_paths.tsv`` carries the same information one row per *tip*
-    (multi-GB on 21J) and is deliberately not read.
-
-    ``p`` is the arm's **realized** per-sample retention, ``n_arm / n_full``, not
-    a configured number: an arm's draw is fixed-size, so a clade capped from
-    4,344,573 to 50,000 has ``p = 0.0115`` however the cap was spelled. On the
-    v11 gisaid tree this makes a 1% draw on 21J a 24x evidence cut rather than a
-    100x one (4.10% of its mutations retained), and the curve is concave --
-    retained/p runs 1.79x at p=0.20, 2.22x at 0.10, 2.72x at 0.05 and 4.10x at
-    0.01. Every downstream number must therefore key to measured retention and
-    never to the nominal cut.
-
-    ``sd`` is returned as a **scale for judging a deviation, not a p-value**.
-    Sibling survival is negatively correlated under fixed-size sampling, so the
-    Bernoulli variance below is an approximation; and the draw being fixed-size
-    rather than Bernoulli makes the mean itself a slight over-prediction. What
-    the pair supports is "a same-signed deviation of many sd at two independent
-    seeds indicates a bug", which is the question actually being asked.
-
-    Zero-mutation branches contribute exactly zero to both sums, which is why
-    they may be passed in freely -- unlike the aggregate-rate statistic of
-    CLAUDE.md pattern 13, where dropping them is the whole bug.
-    """
-    q = 1.0 - float(p)
-    expected = 0.0
-    variance = 0.0
-    for n, k in zip(node_samples, node_muts):
-        if not k:
-            continue
-        survive = 1.0 - q ** int(n)
-        expected += k * survive
-        variance += (k ** 2) * (q ** int(n)) * survive
-    return expected, variance ** 0.5
-
-
 # Keys a ``clade_subsamples`` entry may set. ``unit`` and ``sampling_fractions``
 # are absent deliberately and are rejected *by name* below rather than as
 # unknown keys, so a config written against the removed frac kind gets told what

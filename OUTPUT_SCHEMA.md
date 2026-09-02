@@ -174,58 +174,15 @@ A `frac_{unit}_{seed}_{fraction}bp` kind, which thinned an explicitly *named* un
 
 **Only the unit is thinned; only the unit has arm-local per-clade files.** A non-unit clade was never subsampled, so its per-clade counts and PCPs are read **straight from the full tree's files** rather than recomputed or copied into the arm directory. An arm therefore re-*aggregates* every clade — `build_count_table` needs the whole grid — while re-*counting* only its unit, which is both the correctness guarantee (non-unit rows are bit-identical by construction) and most of the cost saving. A non-unit clade's sample list appearing under `mat/clades/{arm}/` means a fan-out thinned a clade the config never named.
 
-**A nominal fraction is not an evidence cut.** A branch survives whenever *any* sample below it is retained, so retention of mutations runs well above the fraction of samples drawn, concavely: on the v11 gisaid tree, 21J's retained/fraction ratio runs 1.79x at p=0.20, 2.22x at 0.10, 2.72x at 0.05 and 4.10x at 0.01, so 1% of the samples is a ~24x evidence cut rather than a 100x one. Read `subsample_summary.csv` for the measured value; do not key an analysis to the configured percent.
+**A nominal cap is not an evidence cut.** A branch survives whenever *any* sample below it is retained, so retention of mutations runs well above the fraction of samples drawn, concavely: on the v11 gisaid tree, 21J's retained/fraction ratio runs 1.79x at p=0.20, 2.22x at 0.10, 2.72x at 0.05 and 4.10x at 0.01, so 1% of the samples is a ~24x evidence cut rather than a 100x one. Read `correlation_summary.csv`'s `count_fraction` for the measured value; do not key an analysis to the configured cap.
+
+**Two thresholds, different in kind, and neither is recorded in an output file.** A unit clade thinned below `min_clade_size` is *excluded* from the arm — reachable exactly when `min_clade_size > max_samples`, which no shipped config sets. A draw of **zero** samples is a **hard failure** at DAG construction, because `matUtils extract -s` on an empty sample list is undefined; no accepted config can produce one (`max_samples >= 1` is validated and membership requires `n > cap`), so that check is defence in depth against a crash inside `matUtils` which nothing above it could attribute to clade size. An excluded clade contributes no row to `correlation_summary.csv` and no files, so in the output tree it is indistinguishable from a clade a wiring mistake dropped; the distinction is covered by `tests/test_clade_subsamples.py` only. This is the one auditable-absence guarantee the arms deliberately do **not** provide, unlike `glm/era_fit_summary.csv` for empty eras and `pcps/cutoff_summary.csv` for absent cutoff clades.
 
 **A cap at or above every clade's size is byte-identical to the full tree.** Its unit is empty, so every clade is a control and every output equals the full tree's byte-for-byte (`pcpio.PCP_CSV_COMPRESSION` pins `mtime=0`, and gzip's FNAME field carries only the basename, so byte-equality survives the change of directory). That **degenerate arm** is what makes "the subsampling machinery did not perturb the ordinary path" a measurement rather than an inspection; `config_test_data.yaml` carries it as `cap_1000_0` against clades of 2/5/46, and `validate_test.py::validate_subsample_arms` checks it. Note where the identity does *not* come from: an untouched clade is never drawn at all — the arm reads the full tree's file, and the sampler raises if a fan-out routes an untouched clade to it.
 
 **The neutral model is not refit — deliberately.** An arm reads the full tree's `glm/curated_counts*.csv`, `glm/master_table*.csv` and `rates_table*.csv` unchanged; only `glm/{arm}/annotated_counts.csv` is rebuilt, because it is count-bearing. This hands the counts arm full-tree neutral information it would not have if the clade were genuinely this thinly sampled, which is conservative for the hypothesis the arms exist to test — it can only make the counts estimator look better. The **per-clade `evol_time` normalization does** track the subsample, which is the intended effect: it is what makes an arm's expected counts fall with the cap.
 
 **Also not recomputed, and here it is a no-op rather than a leak.** Clade founders, `{gene}_codon_sites_to_mask.txt` and `pcps/{gene}/censored_mutations.csv` are shared with the full tree. Unlike the temporal carve-out for `upto_{cutoff}/` above, these are *invariant to sampling depth by construction*: a founder is a property of the clade's defining mutations, and `masking.compute_exclusions` derives `exclude` from config, the ProblematicSites VCF, `usher_masked_sites.yaml` and the founder grid — never from a count column.
-
-### `subsample_summary.csv` (v12+)
-
-The roster for the above: one row per (arm, clade) with `gene` empty for the counts arm, plus one row per (arm, clade, gene) for the PCP arm — including the pairs that were **not** built.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `arm` | string | `cap_{max_samples}_{seed}`. |
-| `seed` | int | The configured seed. |
-| `max_samples` | int | The configured cap. |
-| `clade` | string | A clade of the unit. **Empty** on the single row recording an arm that thins nothing (a cap at or above every clade's size) — that arm is legitimate, must be byte-identical to the full tree, and would otherwise contribute no rows and be indistinguishable from one never wired. |
-| `gene` | string | Empty on the counts-arm row; a `pcp_genes` entry on the PCP-arm rows. |
-| `included` | bool | Whether the pipeline actually built this pair. |
-| `n_samples_full` | int | Samples in the clade on the whole filtered tree. |
-| `n_samples_arm` | int | `min(n_samples_full, max_samples)`. Asserted against the emitted list. |
-| `sample_fraction_realized` | float | `n_samples_arm / n_samples_full`. |
-| `n_nt_mutations_full`, `n_nt_mutations_arm` | int | Nucleotide mutations over all branches, pre-QC. Counts-arm rows only (genome-wide). |
-| `nt_mutation_retention` | float | The measured evidence cut. Always ≥ `sample_fraction_realized`. |
-| `n_branches_scored_{full,arm}` | int | Branches entering QC. |
-| `n_branches_kept_{full,arm}` | int | Branches surviving it. |
-| `branches_dropped_max_nt_mutations` | int | Branches the limit dropped, from the arm's `branch_qc` sidecar. |
-| `branches_dropped_max_reversions_to_{ref,clade_founder}` | int | Likewise. |
-| `branches_dropped_{no_mutations,duplicate_codon_position,identical_slice}` | int | PCP-arm rows only — these three outcomes exist only on the gene-sliced path. |
-
-**Why the `gene` column.** `count_mutations.py` applies the branch-QC limits once over the whole genome while `pcp_from_tree.py` applies them to the *gene-sliced* mutation count, so one branch can be dropped for S and kept for ORF1a. No single drop count describes both.
-
-**Why this file exists.** A unit clade thinned below `min_clade_size` is skipped at DAG-construction time and contributes no files, so in the output tree alone it is indistinguishable from a wiring mistake — the same problem `glm/era_fit_summary.csv` solves for empty eras and `pcps/cutoff_summary.csv` for absent cutoff clades. `included` comes from the Snakefile function that drove the fan-out, not from a second evaluation of the sizing arithmetic, and the two are reconciled **in both directions**, raising on either kind of disagreement.
-
-**Two thresholds, different in kind.** A clade thinned below `min_clade_size` is *excluded and recorded* — reachable exactly when `min_clade_size > max_samples`. A draw of **zero** samples is a **hard failure** at DAG construction, because `matUtils extract -s` on an empty sample list is undefined; no accepted config can produce one (`max_samples >= 1` is validated and membership requires `n > cap`), so the check is defence in depth against a crash inside `matUtils` that nothing above it could attribute to clade size.
-
-**Do not key an analysis to the configured cap.** `sample_fraction_realized` and `nt_mutation_retention` are the measured quantities, and the cap is not a fraction at all — the effective fraction differs per clade by construction, which is the point of a cap.
-
-### `mutation_counts/branch_qc/{clade}.csv` and `pcps/{gene}/branch_qc/{clade}.csv` (v12+)
-
-Per-limit branch-QC tallies, in long format. Written on the full-tree path and under every `upto_{cutoff}/` and `{arm}/` prefix. Additive: nothing in the pipeline reads them; they exist so `subsample_summary.csv` can attribute an arm's lost evidence.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `category` | string | `outcome`, `total`, or `n_nt_mutations` / `n_nt_mutations_coding`. |
-| `key` | string | For `outcome`: `kept` or the limit that dropped the branch. For `total`: `branches_scored`. For the histogram categories: the mutation count, as a string. |
-| `n_branches` | int | Branches in that bucket. |
-
-A branch failing several limits is attributed to **one**, in the early-return order of `pcp_from_tree.failure_reason`: `max_nt_mutations`, `no_mutations`, `max_reversions_to_ref`, `max_reversions_to_clade_founder`, `duplicate_codon_position`, then `identical_slice`. `count_mutations.py` attributes in the same order over the three limits it applies, so the counts and PCP halves of `subsample_summary.csv` file one branch under one reason.
-
-The histogram is in the same file as the outcome tally on purpose: the `max_nt_mutations` drop count is only checkable against the histogram's over-the-limit tail, and splitting them invites reading one without the other.
 
 ### `correlation_summary.csv` (output root, #151)
 

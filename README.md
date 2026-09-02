@@ -142,8 +142,6 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `pcps/{gene}/censored_mutations.csv` | Per-clade, per-nucleotide censor table for DASM training (v11+, #144), with a `censored_mutations.clades.txt` clade roster alongside. Carries the clade-specific UShER masks the codon mask drops; a training run applies **both** |
 | `pcps/{gene}/upto_{cutoff}/…` | The whole per-gene PCP family rebuilt from the subtree of samples collected at or before `{cutoff}` (v12+, [#149](https://github.com/matsengrp/mat-pcp/issues/149)). Filenames match the full-tree ones, so a consumer just points at a different root. Re-extracted, **not** a row filter — `matUtils` collapses unifurcations and merges their mutations, so a cutoff table is not a subset of the full one |
 | `{arm}/…`, `pcps/{gene}/{arm}/…`, `aamut_fitness/{arm}/…` | The per-clade counts **and** PCP families rebuilt from subtrees re-extracted at reduced sampling depth (v12+, [#151](https://github.com/matsengrp/mat-pcp/issues/151)). An arm is named `cap_{max_samples}_{seed}` and thins every clade above `max_samples` down to it. `{arm}` is an *optional* path segment inserted before the basename, so filenames match the full-tree ones. Only the thinned clades get arm files; every other clade's per-clade files are the full tree's, read in place |
-| `subsample_summary.csv` | The arm roster: one row per (arm, clade) — `gene` empty — plus one per (arm, clade, gene), **including the pairs that were not built** and any arm that thinned nothing (recorded with an empty `clade`). Carries the *realized* retention, because a nominal depth is not an evidence cut: 1% of 21J's samples keeps 4.5% of its nucleotide mutations, measured (v12+) |
-| `mutation_counts/branch_qc/{clade}.csv`, `pcps/{gene}/branch_qc/{clade}.csv` | Per-limit branch-QC tallies plus the pre-QC mutation-count histogram, in long format. Written on the full-tree path and under every `upto_{cutoff}/` and `{arm}/` prefix (v12+) |
 | `pcps/cutoff_summary.csv` | The cutoff roster: one row per (cutoff, clade) **including the pairs that were not built**, so a clade skipped for being below `min_clade_size` at that date is distinguishable from a wiring mistake (v12+) |
 | `fitness/expected_counts_by_clade.csv` | GLM-expected counts per clade (`expected_count`) |
 | `fitness/ntmut_fitness_aggregated.csv` | Nucleotide-level fitness estimates |
@@ -381,16 +379,15 @@ both `--configfile` and `--rerun-triggers` take *multiple* values, so the target
 path must come **before** them or argparse swallows it.
 
 Targeting `aamut_fitness/{arm}/all_aamut_fitness.csv` builds the counts arm
-only. `subsample_summary.csv` additionally pulls in the PCP arm, since it
-reconciles the per-gene branch-QC sidecars; `correlation_summary.csv`
-deliberately does **not** depend on it, so a correlation between two fitness
-tables never waits on PCP extraction.
+only, and `correlation_summary.csv` needs just the two fitness tables it
+correlates — so neither waits on PCP extraction. The PCP arm is built by naming
+a `pcps/{gene}/{arm}/` path.
 
 ### Clade Subtrees at Reduced Sampling Depth
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `clade_subsamples` | List of `{max_samples: [int, ...], seed: int}` entries ([#151](https://github.com/matsengrp/mat-pcp/issues/151)), each expanding to one **arm** per cap, named `cap_{max_samples}_{seed}`. An arm thins **every clade above the cap** down to exactly it and leaves smaller ones untouched, so one arm spans a wide range of effective depths and the untouched clades are byte-identical controls by construction. Its unit is *derived* from the tree's clade sizes rather than named — membership is **strictly** above the cap, since a clade of exactly `cap` samples is already at the target — which is why it cannot be written in the config at all. A cap at or above every clade's size thins nothing: that is the **degenerate arm**, whose every output must byte-equal the full tree's, and it is recorded in `subsample_summary.csv` with an empty `clade` so it stays distinguishable from an arm that was never wired. A thinned clade falling below `min_clade_size` is excluded from the arm and recorded; a cap below 1 is a hard failure, since `matUtils extract -s` on an empty list is undefined. `sampling_fractions` and `unit` belonged to the fraction arms removed in #151 and are rejected by name. Empty in every production config — arms are launched by naming their paths, since a full-size arm costs ~8 CPU-hours | `[]` |
+| `clade_subsamples` | List of `{max_samples: [int, ...], seed: int}` entries ([#151](https://github.com/matsengrp/mat-pcp/issues/151)), each expanding to one **arm** per cap, named `cap_{max_samples}_{seed}`. An arm thins **every clade above the cap** down to exactly it and leaves smaller ones untouched, so one arm spans a wide range of effective depths and the untouched clades are byte-identical controls by construction. Its unit is *derived* from the tree's clade sizes rather than named — membership is **strictly** above the cap, since a clade of exactly `cap` samples is already at the target — which is why it cannot be written in the config at all. A cap at or above every clade's size thins nothing: that is the **degenerate arm**, whose every output must byte-equal the full tree's. A thinned clade falling below `min_clade_size` is excluded from the arm, and since the arms ship no roster file that exclusion is not recorded in any output — `tests/test_clade_subsamples.py` is its only coverage; a cap below 1 is a hard failure, since `matUtils extract -s` on an empty list is undefined. `sampling_fractions` and `unit` belonged to the fraction arms removed in #151 and are rejected by name. Empty in every production config — arms are launched by naming their paths, since a full-size arm costs ~8 CPU-hours | `[]` |
 
 The GLM neutral fit, the clade founders and each gene's codon mask and censor table are **not** recomputed per arm. The shared fit is deliberate and conservative (it can only make the counts estimator look better than genuinely thin sampling would); the shared mask is a no-op rather than a leak, since it is derived from config, the ProblematicSites VCF, `usher_masked_sites.yaml` and the founder grid, never from a count column.
 
@@ -617,11 +614,9 @@ results/
 │       ├── all_pcps_dasm_ready.csv.gz # DASM-training-ready aggregate (v2+)
 │       ├── pcp_curation_report.txt    # PCP curation statistics
 │       ├── filtered_branch_ids.csv    # All filtered branch IDs (for mutation counting)
-│       ├── branch_qc/{clade}.csv      # Per-limit branch QC tally + pre-QC histogram (v12+, #151)
 │       ├── upto_{cutoff}/             # The same family, samples collected <= {cutoff} (v12+, #149)
 │       └── {arm}/                     # The same family at reduced sampling depth (v12+, #151)
 │   └── cutoff_summary.csv         # Cutoff roster, including the (cutoff, clade) pairs skipped
-├── subsample_summary.csv          # Arm roster + realized retention, including the pairs skipped (v12+, #151)
 ├── ref/
 │   ├── ref.fa                     # Reference genome (FASTA)
 │   ├── original_ref.gtf           # Original GTF annotations

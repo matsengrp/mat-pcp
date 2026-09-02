@@ -15,7 +15,6 @@ ref_fasta = snakemake.input.ref_fasta
 clade_founder_fasta = snakemake.input.clade_founder_fasta
 clade = snakemake.wildcards.clade
 output_csv = snakemake.output.csv
-branch_qc_csv = snakemake.output.branch_qc
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -95,7 +94,6 @@ log(f"Translated MAT: {len(translated_mat)} rows")
 log(f"NT mutations: {len(nt_muts)} rows")
 
 n_pre_qc = 0
-qc_hist = {}
 qc_drops = {
     "max_nt_mutations": 0,
     "max_reversions_to_ref": 0,
@@ -137,15 +135,11 @@ else:
     )
 
     # Attribute each dropped branch to *one* limit, in the precedence order
-    # below. The three limits are ANDed, so the order changes only the
-    # attribution and never which branches survive -- but it must match
-    # ``pcp_from_tree.failure_reason``' early-return order, or the same branch
-    # is filed under different reasons on the counts and PCP arms and the two
-    # halves of ``subsample_summary.csv`` stop being comparable (#151).
+    # below, so the log can say which limit cost this clade its branches. The
+    # three limits are ANDed and all of them are applied, so the order changes
+    # only the attribution and never which branches survive. Nothing keys on
+    # the attribution.
     n_pre_qc = len(filtered_nodes)
-    qc_hist = (
-        filtered_nodes["n_nt_mutations"].value_counts().sort_index().to_dict()
-    )
     qc_drops = {}
     over_muts = filtered_nodes["n_nt_mutations"] > max_nt_mutations
     qc_drops["max_nt_mutations"] = int(over_muts.sum())
@@ -275,29 +269,11 @@ else:
 mutation_counts.to_csv(output_csv, index=False)
 log(f"Counted {len(mutation_counts)} unique mutations for clade {clade}")
 
-# Branch QC sidecar (#151). Additive: nothing existing reads it, and no existing
-# schema moves. It exists because ``subsample_summary.csv`` has to report *which*
-# limit cost an arm its branches -- realized retention falls below the closed
-# form for two separable reasons, QC drops and same-site collapse, and a single
-# "branches dropped" number cannot tell them apart.
-#
-# Long format with a ``category`` column rather than two files: the outcome
-# tally and the pre-QC mutation-count histogram are read together (the
-# ``max_nt_mutations`` drop count is only checkable against the histogram's
-# ``> max_nt_mutations`` tail) and splitting them invites reading one without
-# the other.
-qc_rows = [("outcome", "kept", n_kept_branches)]
-qc_rows += [("outcome", reason, n) for reason, n in qc_drops.items()]
-qc_rows += [
-    # Branches entering QC, i.e. after the parse-level drop of nodes whose
-    # mutation list did not split cleanly. Not a QC limit, so not an outcome.
-    ("total", "branches_scored", n_pre_qc)
-]
-qc_rows += [
-    ("n_nt_mutations", str(int(k)), int(v)) for k, v in sorted(qc_hist.items())
-]
-pd.DataFrame(qc_rows, columns=["category", "key", "n_branches"]).to_csv(
-    branch_qc_csv, index=False
-)
-log(f"Wrote branch QC tally to {branch_qc_csv}")
+# Branch QC diagnostic. ``n_pre_qc`` is the number of branches entering QC,
+# i.e. after the parse-level drop of nodes whose mutation list did not split
+# cleanly -- not a QC limit, so not one of the outcomes below.
+log(f"Branch QC for this clade ({n_pre_qc} scored):")
+log(f"  kept: {n_kept_branches}")
+for _reason, _n in qc_drops.items():
+    log(f"  {_reason}: {_n}")
 log("Done!")

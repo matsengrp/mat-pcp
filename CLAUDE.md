@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `export_newick`, `chronumental`, `chronumental_qc` (tips **and** internal nodes, #139), `chronumental_rtt_plot` (#146), `window_subtree_counts`, `get_ref_fasta`, `ref_coding_sites` |
 | 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade`, `censor_table` (per-clade DASM censor table, #144) |
 | 3b | Date-Cutoff PCPs (#149) | `get_clades_by_cutoff` (checkpoint), `cutoff_pcp_summary`, `samples_upto_cutoff`, `mat_clade_subset_upto`, `extract_pcps_by_clade_upto`, `aggregate_clade_pcps_upto`, `aggregate_filtered_branches_upto`, `curate_pcps_for_dasm_upto`, `curate_all_pcps_for_dasm_upto`, `dasm_ready_pcps_all_clades_upto` |
-| 3c | Subsampling Arms (#151) | `subsample_clade_samples`, `subsample_summary`, `subsample_correlations`; everything else an arm rebuilds is an existing rule reached through the optional `{arm_dir}` prefix |
+| 3c | Subsampling Arms (#151) | `subsample_clade_samples`, `subsample_correlations`; everything else an arm rebuilds is an existing rule reached through the optional `{arm_dir}` prefix |
 | 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
 | 5 | Unified Count Table | `build_count_table` (full mutation grid + actual counts + masking flags, via `modules/masking.py`) |
 | 6 | GLM Rate Estimation | `annotate_counts`, `curate_counts`, `master_table`, `get_rates_table`, plus their per-era counterparts `curate_counts_era`, `master_table_era`, `get_rates_table_era` and `era_fit_summary` (#137), `window_expected_counts` (windowed expected counts + `delta_fitness_ratio`; stays on the **pooled** table) |
@@ -1009,12 +1009,12 @@ mat-pcp/
     2.72x at 0.05 and 4.10x at 0.01, making a 1% draw a ~24x evidence cut
     rather than a 100x one. Measured on the production caps, the tree keeps
     23.2% of its mutation counts from 11.5% of its sequences at X=50000. Every
-    downstream number must key to `subsample_summary.csv`'s measured retention,
-    never to the configured cap — which is not even a fraction. Separately: a
-    unit clade thinned below `min_clade_size` is **excluded and recorded**
-    (`get_clades` applies that threshold to the full metadata and so cannot see
-    a clade that falls below it only after thinning; reachable exactly when
-    `min_clade_size > cap`), while a draw of **zero** is a **hard failure** —
+    downstream number must key to `correlation_summary.csv`'s measured
+    `count_fraction`, never to the configured cap — which is not even a
+    fraction. Separately: a unit clade thinned below `min_clade_size` is
+    **excluded** (`get_clades` applies that threshold to the full metadata and
+    so cannot see a clade that falls below it only after thinning; reachable
+    exactly when `min_clade_size > cap`), while a draw of **zero** is a **hard failure** —
     `matUtils extract -s` on an empty sample list is undefined. No accepted
     config can produce one, since `max_samples >= 1` is validated and
     membership requires `n > cap`, so that guard is defence in depth against a
@@ -1024,26 +1024,32 @@ mat-pcp/
     made the skip-and-record mechanism inert on exactly the configs it was
     written for.
 
-    *Per-limit branch attribution needs its own file, and one precedence order.*
-    `subsample_summary.csv` reports which limit cost an arm its branches,
-    because realized retention falls below the closed form for two *separable*
-    reasons — QC drops and same-site collapse — that one aggregate "branches
-    dropped" number cannot tell apart. Neither producer could say: `fails_filters`
-    returned a bool with early returns and `count_mutations.py` chained three
-    `.query()` calls. Both now attribute to one reason in `failure_reason`'s
-    order, which matters because the limits are ANDed — the order changes only
-    the attribution, never which branches survive — and a different order on the
-    two sides would file one branch under two reasons and make the counts and
-    PCP halves of the summary incomparable. The tally is a **new sidecar file**
-    (`branch_qc/{clade}.csv`) rather than a column on
-    `{clade}_filtered_branches.csv`, because a new file is covered by the
-    additive-output carve-out and a new column is a schema change; and it lives
-    in its own directory because `mutation_counts/{clade}_branch_qc.csv` is
-    itself a valid `{arm_dir}{clade}.csv` match with `clade="19A_branch_qc"`, so
-    two outputs of one rule would claim the same path. It is declared on the
-    `_upto` rule too even though nothing reads it there: a sidecar present under
-    `cap_*/` and absent under `upto_*/` is precisely the absence-vs-wiring-
-    mistake ambiguity `cutoff_summary.csv` exists to prevent.
+    *The arms ship no roster file, and that is a deliberate exception to
+    #137/#149.* A `subsample_summary.csv` recording every `(arm, clade)` pair
+    with `included` true/false, plus `branch_qc/{clade}.csv` sidecars on
+    `count_mutations_clade` and `extract_pcps_by_clade` as its only inputs, was
+    built and then **removed**. Three facts decided it. Nothing read it —
+    `subsample_correlations` declared it not an input by design,
+    `notebooks/cap_arm_scatters.py` discovers arms by listing directories, and
+    the production `correlation_summary.csv` was produced on the v12 gisaid tree
+    without the file ever existing. Its one irreplaceable column, the excluded
+    clade, is **unreachable from every production config**: all eight set
+    `min_clade_size: 0`, and exclusion needs `min_clade_size > cap`, so the
+    auditable-absence mechanism was inert on exactly the trees it was written
+    for — `MIN_SAMPLES_AT_CUTOFF`'s failure mode (#149) recurring in the
+    machinery built to answer it. And requesting it on a released tree
+    cascaded: its retention denominators are the **full tree's** `branch_qc/`
+    sidecars, co-declared outputs of two rules that are absent on the v12 trees
+    (0 of 56 clades), so building it meant a GLM refit and a 470 GiB PCP
+    rewrite for a file with no reader.
+    What that costs, stated rather than absorbed: an excluded clade now
+    contributes no row and no files, so it is indistinguishable from a clade a
+    wiring mistake dropped, and `tests/test_clade_subsamples.py` is its only
+    coverage of any kind. What it does not cost: `failure_reason` still
+    attributes each dropped branch to one limit in one order, since the
+    per-limit tally survives as a **log** line in both producers — but nothing
+    keys on the attribution now, so the two orders no longer have to agree and
+    neither script constrains the other.
 
     **No shipped production config sets `clade_subsamples`, so no production run
     can check any of this**, and `config_test_data.yaml`'s clade sizes (19A at 2
@@ -1058,17 +1064,20 @@ mat-pcp/
     `cap` samples, and the `min_clade_size` exclusion needs
     `min_clade_size > cap`.
     `tests/test_clade_subsamples.py` therefore drives the real
-    `subsample_clade_samples.py`, `subsample_summary.py` and
+    `subsample_clade_samples.py` and
     `subsample_correlations.py` against fixtures built so each failure moves a
     sample (seven deliberately unsorted samples at a cap of 4, so every draw is
     partial and the ordering is observable), and mutation-tests every guard by
     editing **`workflow/modules/subsample.py`**, not the script text — patching
     the script would report the sampler as covered while the operator
     implementing it sat one file away. `validate_test.py::validate_subsample_arms`
-    is the end-to-end counterpart: it reconciles the roster against the file tree
-    in both directions, asserts the arm directory holds *only* clades strictly
-    above the cap, byte-compares the degenerate arm, and reports **VACUOUS**
-    rather than success when no arm thinned a surviving clade.
+    is the end-to-end counterpart. It reconciles `correlation_summary.csv`
+    against the file tree in both directions — that file's `thinned` column
+    comes from `_arm_roster_param`, the function that drove the fan-out, so it
+    is not a second evaluation of the sizing arithmetic — asserts the arm
+    directory holds *only* clades strictly above the cap, byte-compares the
+    degenerate arm, and reports **VACUOUS** rather than success when no arm
+    thinned a surviving clade.
 
     *Two invariants make an arm comparable to full depth at all, and both must be
     asserted rather than assumed.* `build_count_table` enumerates the grid from
@@ -1156,14 +1165,14 @@ mat-pcp/
     `rmse`, `bias`, `regression_slope`, `sd_full` and `sd_arm` sit beside every
     coefficient for that reason.
 
-    *An arm that thins **nothing** is legitimate and must stay visible.* A cap at
-    or above every clade's size is the degenerate arm: its unit is empty, every
-    clade is a control, and every output must byte-equal the full tree's. With no
-    unit clades it would contribute **no rows at all** to
-    `subsample_summary.csv` and so be indistinguishable from an arm that was
-    never wired — #137's empty era and #149's empty cutoff roster restated a
-    third time — so it is recorded with an **empty `clade`**, which is what
-    distinguishes it from a declined clade (a clade name with `included=False`).
+    *An arm that thins **nothing** is legitimate.* A cap at or above every
+    clade's size is the degenerate arm: its unit is empty, every clade is a
+    control, and every output must byte-equal the full tree's. It still appears
+    in `correlation_summary.csv`, since that file has a row per clade of the
+    arm's whole grid and a degenerate arm's grid is all controls — so it is the
+    one arm shape whose rows must *all* read `thinned=False`, and
+    `validate_subsample_arms` treats the absence of a `mat/clades/{arm}/`
+    directory as its defining property.
 
     See [#151](https://github.com/matsengrp/mat-pcp/issues/151).
 
@@ -1255,8 +1264,7 @@ The configuration (`config/config.yaml`) is organized into:
 Results are stored per tree in `{output_root}/{label}_{version}/`:
 - `mat/`: Filtered trees, clade subtrees
 - `windows/`: Sliding-window subtree counts + founders (Phase 2) + per-window expected counts / `delta_fitness_ratio` trajectory (Phase 3)
-- `pcps/`: Curated parent-child pairs, plus each gene's `censored_mutations.csv` DASM training censor table and its `.clades.txt` roster (#144), each gene's `upto_{cutoff}/` date-truncated PCP families and the `cutoff_summary.csv` roster (#149), each gene's `{arm}/` reduced-depth PCP families and `branch_qc/{clade}.csv` tallies (#151)
-- `subsample_summary.csv` (output root): the subsampling-arm roster and realized retention (#151)
+- `pcps/`: Curated parent-child pairs, plus each gene's `censored_mutations.csv` DASM training censor table and its `.clades.txt` roster (#144), each gene's `upto_{cutoff}/` date-truncated PCP families and the `cutoff_summary.csv` roster (#149), each gene's `{arm}/` reduced-depth PCP families (#151)
 - `correlation_summary.csv` (output root): arm-vs-full-depth fitness correlations, keyed to `n_mutations` and `count_fraction` (#151)
 - `notebooks/cap_arm_scatters.py`: the arm marimo notebook -- sequences per clade coloured by emergence date and the tree-level sequence and mutation totals, then per clade the count fraction, the count eCDFs and the ground-truth scatter (#151)
 - `ref/`: Reference genome, coding sites

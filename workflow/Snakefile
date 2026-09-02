@@ -469,7 +469,6 @@ def arm_targets():
     targets = []
     for label in TREE_LABELS:
         outdir = tree_outdir(label)
-        targets.append(os.path.join(outdir, "subsample_summary.csv"))
         targets.append(os.path.join(outdir, "correlation_summary.csv"))
         for arm in SUBSAMPLE_ARMS:
             targets += [
@@ -1417,75 +1416,13 @@ def per_unit_clade_inputs(path_template, wildcards):
     ]
 
 
-def arm_sample_lists(wildcards):
-    """Every (arm, clade) sample list this tree's summary reconciles.
-
-    Both sides: the arm's own list and the full one it was drawn from, so the
-    summary can assert ``|arm| == min(|full|, cap)`` against the files rather
-    than against the checkpoint arithmetic that drove the DAG.
-    """
-    full = clades_w_adequate_counts(wildcards)
-    paths = [
-        os.path.join(OUTDIR, "mat/clades/{clade}_samples.txt").format(
-            tree=wildcards.tree, clade=clade
-        )
-        for clade in full
-    ]
-    retained = arm_retained_counts(wildcards)
-    for arm, unit in arm_units_for_tree(wildcards).items():
-        for clade in unit:
-            if clade in retained[arm]:
-                paths.append(
-                    os.path.join(
-                        OUTDIR, "mat/clades/{arm}/{clade}_samples.txt"
-                    ).format(tree=wildcards.tree, arm=arm, clade=clade)
-                )
-    return paths
-
-
-def arm_branch_qc_inputs(wildcards):
-    """Every retention input the summary reads, at both depths.
-
-    Unit clades only: a non-unit clade's branches are the full tree's, so its
-    QC drops are not a property of the arm. Both the arm's files **and** the
-    full tree's are declared, because the summary reports retention as a ratio
-    and a denominator read from an undeclared file is a file the DAG will
-    happily not build.
-    """
-    templates = ["mutation_counts/{arm_dir}branch_qc/{clade}.csv",
-                 "mutations/{arm_dir}{clade}_nt_mutations.csv",
-                 # ``leaves_sharing_mutations`` here is the ``n_node`` the
-                 # closed form for expected retention needs. Only the full
-                 # tree's copy is read (the prediction is *of* the arm, from
-                 # full depth), but declaring both keeps the two templates in
-                 # step and costs nothing -- the arm's is built anyway.
-                 "mutations/{arm_dir}{clade}_mutations.tsv"]
-    templates += [f"pcps/{gene}/{{arm_dir}}branch_qc/{{clade}}.csv"
-                  for gene in PCP_GENES]
-    paths = []
-    retained = arm_retained_counts(wildcards)
-    for arm, unit in arm_units_for_tree(wildcards).items():
-        for clade in unit:
-            if clade not in retained[arm]:
-                continue
-            for arm_dir in (arm + "/", ""):
-                paths += [
-                    os.path.join(OUTDIR, tmpl).format(
-                        tree=wildcards.tree, arm_dir=arm_dir, clade=clade
-                    )
-                    for tmpl in templates
-                ]
-    return paths
-
-
 def _arm_roster_param(wildcards):
-    """``{arm: {"unit", "seed", "cap", "included", "excluded"}}`` for the summary.
+    """``{arm: {"unit", "seed", "cap", "included"}}`` for the correlations.
 
-    Passed as a param so the recorded ``included`` column comes from the
-    function that actually drove the fan-out, not from a second evaluation of
-    the sizing arithmetic. A summary that merely re-derived the verdict could
-    not detect a fan-out which declined a clade the arithmetic approved -- the
-    failure the file exists to expose (#137's shape, #149's restatement).
+    Passed as a param so ``thinned`` comes from the function that actually drove
+    the fan-out rather than from a second evaluation of the sizing arithmetic:
+    membership is derived from the tree's clade sizes, and a consumer that
+    re-derived it would be a second definition free to disagree about a clade.
     """
     retained = arm_retained_counts(wildcards)
     units = arm_units_for_tree(wildcards)
@@ -1501,8 +1438,6 @@ def _arm_roster_param(wildcards):
             "seed": spec["seed"],
             "cap": spec["cap"],
             "included": [c for c in unit if c in kept],
-            "excluded": [c for c in unit if c not in kept],
-            "n_retained": {c: int(n) for c, n in kept.items()},
         }
     return roster
 
@@ -1605,13 +1540,7 @@ rule extract_pcps_by_clade:
         pcps=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}{clade}_pcps.csv.gz"),
         filtered_branches=os.path.join(
             OUTDIR, "pcps/{gene}/{arm_dir}{clade}_filtered_branches.csv"
-        ),
-        # Per-limit branch QC tally (#151). Additive: no existing schema moves
-        # and nothing existing reads it. ``subsample_summary.csv`` needs it
-        # because realized retention falls below the closed form for two
-        # separable reasons -- QC drops and same-site collapse -- which one
-        # aggregate "branches dropped" number cannot tell apart.
-        branch_qc=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}branch_qc/{clade}.csv")
+        )
     params:
         max_nt_mutations=config["max_nt_mutations"],
         max_reversions_to_ref=config["max_reversions_to_ref"],
@@ -1971,14 +1900,6 @@ rule extract_pcps_by_clade_upto:
         pcps=os.path.join(OUTDIR, "pcps/{gene}/upto_{cutoff}/{clade}_pcps.csv.gz"),
         filtered_branches=os.path.join(
             OUTDIR, "pcps/{gene}/upto_{cutoff}/{clade}_filtered_branches.csv"
-        ),
-        # The same per-limit branch QC tally the full-tree and arm paths write
-        # (#151). Declared here even though nothing reads it on the cutoff path:
-        # a sidecar that exists under ``frac_*/`` and not under ``upto_*/`` is
-        # an absence indistinguishable from a wiring mistake, which is the shape
-        # ``cutoff_summary.csv`` itself was written to avoid.
-        branch_qc=os.path.join(
-            OUTDIR, "pcps/{gene}/upto_{cutoff}/branch_qc/{clade}.csv"
         )
     params:
         max_nt_mutations=config["max_nt_mutations"],
@@ -2168,41 +2089,6 @@ rule subsample_clade_samples:
         "scripts/subsample_clade_samples.py"
 
 
-rule subsample_summary:
-    """Record what each arm actually retained, and which clades it declined.
-
-    A nominal fraction is not an evidence cut -- a branch survives whenever
-    *any* sample below it is retained, so 1% of 21J's samples keeps ~4% of its
-    nucleotide mutations -- which is why every downstream correlation has to be
-    keyed to measured evidence rather than to a configured percent.
-
-    It is also the auditable-absence half of the deliverable. A unit clade
-    thinned below ``min_clade_size`` contributes zero files, and an empty
-    directory is indistinguishable from a wiring mistake, so the skip is
-    written down with ``included=false`` (#137's shape, #149's restatement).
-    ``included`` comes from the roster param -- the function that drove the
-    fan-out -- and is reconciled against the file tree in both directions, so a
-    fan-out that declined a clade the arithmetic approved raises rather than
-    being recorded as a legitimate exclusion.
-    """
-    input:
-        samples=arm_sample_lists,
-        branch_qc=arm_branch_qc_inputs
-    output:
-        summary=os.path.join(OUTDIR, "subsample_summary.csv")
-    params:
-        roster=_arm_roster_param,
-        genes=PCP_GENES,
-        min_clade_size=config.get("min_clade_size", 100),
-        outdir=lambda wc: OUTDIR.format(tree=wc.tree)
-    log:
-        os.path.join(OUTDIR, "log/subsample_summary.log")
-    conda:
-        "envs/default.yml"
-    script:
-        "scripts/subsample_summary.py"
-
-
 def arm_fitness_tables(wildcards):
     """Every arm's per-clade fitness table, plus the full-depth ones to compare.
 
@@ -2263,11 +2149,10 @@ rule subsample_correlations:
     fractions that differ threefold with no stated reason to prefer one.
     ``n_scored_full`` / ``n_scored_arm`` remain as the raw deletion counts.
 
-    ``subsample_summary.csv`` is deliberately **not** an input. The script never
-    reads it, and declaring it would make this rule wait on every arm's PCP
-    extraction -- the summary reconciles per-gene branch QC -- which for a cap
-    arm is 30 clades x 6 genes of work that has nothing to do with a correlation
-    between two fitness tables. Both files are requested by ``arm_targets``.
+    This is the arms' only summary file. Its inputs are the two fitness tables
+    it correlates and nothing else, so requesting it does not pull in a clade's
+    PCP extraction -- which for a cap arm would be 30 clades x 6 genes of work
+    that has no bearing on a correlation between two tables.
     """
     input:
         fitness=arm_fitness_tables
@@ -2475,14 +2360,7 @@ rule count_mutations_clade:
         ref_fasta=rules.get_ref_fasta.output.ref_fasta,
         clade_founder_fasta=rules.clade_founder_fasta.output.fasta
     output:
-        csv=os.path.join(OUTDIR, "mutation_counts/{arm_dir}{clade}.csv"),
-        # Per-limit branch QC tally (#151); see ``extract_pcps_by_clade``.
-        # Own directory, not ``{clade}_branch_qc.csv``: that name is itself a
-        # valid ``{arm_dir}{clade}.csv`` match with ``clade="19A_branch_qc"``,
-        # so two outputs of this one rule would claim the same path.
-        branch_qc=os.path.join(
-            OUTDIR, "mutation_counts/{arm_dir}branch_qc/{clade}.csv"
-        )
+        csv=os.path.join(OUTDIR, "mutation_counts/{arm_dir}{clade}.csv")
     params:
         max_nt_mutations=config["max_nt_mutations"],
         max_reversions_to_ref=config["max_reversions_to_ref"],

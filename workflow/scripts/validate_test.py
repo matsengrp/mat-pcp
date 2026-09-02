@@ -1689,13 +1689,16 @@ def validate_subsample_arms(output_dir):
 
     Five properties, each of which fails silently without a check (#151).
 
-    **The skip is real, not just recorded.** ``subsample_summary.csv`` names
-    every (arm, clade) pair with ``included`` true/false, and a false row must
-    have no arm subtree, no arm counts and no arm PCPs, while a true row must
-    have all of them. Checking only the true rows would pass a run that also
-    published a clade the sizing arithmetic said to thin away; checking only the
-    file tree would pass a run whose roster omitted a clade it built -- the
-    ambiguity ("thinned away" vs "wiring mistake") the roster exists to resolve.
+    ``correlation_summary.csv`` is the roster. Its ``thinned`` column comes from
+    ``Snakefile: _arm_roster_param`` -- the function that actually drove the
+    fan-out -- so checking against it is not a second evaluation of the sizing
+    arithmetic, which is what makes a fan-out that thinned the wrong clade
+    visible here at all. **One case is no longer covered**: a unit clade thinned
+    below ``min_clade_size`` is excluded from the arm and contributes no row, so
+    it is indistinguishable from a clade a wiring mistake dropped. That branch
+    is covered by ``tests/test_clade_subsamples.py`` alone. It is unreachable
+    from every production config, which sets ``min_clade_size: 0``, and from the
+    test config, whose caps all exceed it.
 
     **An arm's samples are a subset of the clade's, of exactly the right size.**
     Set containment over the emitted lists, no duplicates, and the retained
@@ -1707,9 +1710,9 @@ def validate_subsample_arms(output_dir):
     below the cap is untouched, so an arm directory holding it would claim a
     thinning that did not happen and would turn one of the arm's own controls
     into an arm row. An arm that thins *nothing* (a cap at or above every
-    clade's size) is legitimate and is recorded with an empty ``clade``: it must
-    have no ``mat/clades/{arm}/`` directory at all, and being byte-identical to
-    the full tree everywhere is the whole of its content.
+    clade's size) is legitimate: it must have no ``mat/clades/{arm}/`` directory
+    at all, and being byte-identical to the full tree everywhere is the whole of
+    its content.
 
     **A non-unit clade's per-clade files are the full tree's, byte-for-byte.**
     An arm re-aggregates every clade but re-counts only its unit, so the
@@ -1719,14 +1722,12 @@ def validate_subsample_arms(output_dir):
     and it is what would catch a fan-out that routed an untouched clade through
     the sampler.
 
-    **A degenerate arm is byte-identical to the full tree.** An arm whose every
-    included clade retained all of its samples selected everything, so its
-    aggregates must reproduce the full-tree ones exactly. Detected from the
-    summary rather than read from the config, so this function needs no
-    knowledge of ``clade_subsamples``. Byte-equality rather than row-equality
-    because ``pcpio.PCP_CSV_COMPRESSION`` pins ``mtime=0`` (pattern 9), and
-    because order is exactly what the draw's sort and ``arm_clades``' ordering
-    are written to preserve -- equal row counts would miss a reordering.
+    **A degenerate arm is byte-identical to the full tree.** An arm that thinned
+    no clade selected everything, so its aggregates must reproduce the full-tree
+    ones exactly. Byte-equality rather than row-equality because
+    ``pcpio.PCP_CSV_COMPRESSION`` pins ``mtime=0`` (pattern 9), and because
+    order is exactly what the draw's sort and ``arm_clades``' ordering are
+    written to preserve -- equal row counts would miss a reordering.
 
     **The GLM was not refit.** No arm may have its own ``curated_counts*.csv``,
     ``master_table*.csv`` or ``rates_table*.csv``. The dependency chain
@@ -1742,102 +1743,71 @@ def validate_subsample_arms(output_dir):
     """
     import pandas as pd
 
-    summary_path = os.path.join(output_dir, "subsample_summary.csv")
-    if not os.path.isfile(summary_path):
+    corr_path = os.path.join(output_dir, "correlation_summary.csv")
+    if not os.path.isfile(corr_path):
         return [], (
-            f"SKIPPED: no {summary_path}; this config sets no clade_subsamples"
+            f"SKIPPED: no {corr_path}; this config sets no clade_subsamples"
         )
 
     diffs = []
-    summary = pd.read_csv(summary_path)
+    corr = pd.read_csv(corr_path)
     expected_cols = {
-        "arm", "seed", "max_samples",
-        "clade", "gene", "included",
-        "n_samples_full", "n_samples_arm", "sample_fraction_realized",
-        "n_nt_mutations_full", "n_nt_mutations_arm", "nt_mutation_retention",
+        "arm", "seed", "max_samples", "clade", "thinned",
+        "estimator", "population", "n_mutations", "count_fraction",
+        "pearson_r", "rmse", "max_actual_count_full",
     }
-    missing_cols = expected_cols - set(summary.columns)
+    missing_cols = expected_cols - set(corr.columns)
     if missing_cols:
         return [
-            f"subsample_summary.csv is missing column(s) {sorted(missing_cols)}"
+            f"correlation_summary.csv is missing column(s) {sorted(missing_cols)}"
         ], None
-    if summary.empty:
-        return [f"{summary_path} has no rows, but the file was requested"], None
+    if corr.empty:
+        return [f"{corr_path} has no rows, but the file was requested"], None
 
-    # The counts-arm rows are the per-(arm, clade) roster; the gene rows repeat
-    # each pair once per gene.
-    roster = summary[summary["gene"].isna() | (summary["gene"] == "")]
+    # One row per (arm, clade, estimator, population) collapses to the roster.
+    roster = corr.drop_duplicates(subset=["arm", "clade"])
     clades_root = os.path.join(output_dir, "mat", "clades")
-    n_included = 0
-    n_excluded = 0
-    # Three kinds of arm, kept distinct because they support different claims:
-    # a *degenerate* arm retained every sample of every clade it kept and so
-    # must be byte-identical to the full tree; a *truncating* arm actually
-    # thinned something and is the only kind that says the machinery does the
-    # thing it exists for; an *excluding* arm dropped a clade below
-    # ``min_clade_size`` and so differs from the full tree without having
-    # thinned any surviving clade. Collapsing the last two into "not
-    # degenerate" would let a run where nothing was ever thinned report success.
+    n_thinned = 0
+    n_controls = 0
+    # Two kinds of arm, kept distinct because they support different claims: a
+    # *degenerate* arm thinned nothing and so must be byte-identical to the full
+    # tree, while a *truncating* arm actually thinned something and is the only
+    # kind that says the machinery does the thing it exists for. Collapsing them
+    # would let a run where nothing was ever thinned report success.
     degenerate_arms = []
     truncating_arms = set()
-    excluding_arms = set()
+    arms = sorted(roster["arm"].unique())
 
-    for arm, arm_rows in roster.groupby("arm"):
-        # The unit is the set of clades the summary named for this arm. There is
-        # no configured unit to cross-check it against: membership is derived
-        # from the tree's clade sizes, which is why the summary records the
-        # resolved list the fan-out actually used.
+    for arm in arms:
+        arm_rows = roster[roster["arm"] == arm]
         unit = sorted(
-            {str(c) for c in arm_rows["clade"] if str(c) and str(c) != "nan"}
+            {str(c) for c in arm_rows.loc[arm_rows["thinned"], "clade"]}
         )
         arm_samples_dir = os.path.join(clades_root, arm)
-        included_clades = []
+        n_controls += int((~arm_rows["thinned"]).sum())
 
         if not unit:
             # An arm that thins nothing: legitimate, and its whole content is
             # that it must not have drawn anything.
             if os.path.isdir(arm_samples_dir):
                 diffs.append(
-                    f"{arm}: summary records no thinned clade, but "
+                    f"{arm}: no clade is marked thinned, but "
                     f"{arm_samples_dir} exists"
                 )
             degenerate_arms.append(arm)
             continue
 
-        for _, row in arm_rows.iterrows():
+        for _, row in arm_rows[arm_rows["thinned"]].iterrows():
             clade = str(row["clade"])
-            included = bool(row["included"])
             samples_path = os.path.join(arm_samples_dir, f"{clade}_samples.txt")
-            exists = os.path.isfile(samples_path)
-
-            if included and not exists:
+            if not os.path.isfile(samples_path):
                 diffs.append(
-                    f"{arm}/{clade}: summary says included but {samples_path} "
+                    f"{arm}/{clade}: marked thinned but {samples_path} "
                     f"is missing"
                 )
                 continue
-            if not included:
-                n_excluded += 1
-                excluding_arms.add(arm)
-                if exists:
-                    diffs.append(
-                        f"{arm}/{clade}: summary says included=False but "
-                        f"{samples_path} exists -- a stale intermediate would be "
-                        f"read as a legitimate exclusion"
-                    )
-                # An excluded clade must also have no arm counts or PCPs.
-                stale = os.path.join(
-                    output_dir, "mutation_counts", arm, f"{clade}.csv"
-                )
-                if os.path.isfile(stale):
-                    diffs.append(
-                        f"{arm}/{clade}: summary says included=False but "
-                        f"{stale} exists"
-                    )
-                continue
 
-            n_included += 1
-            included_clades.append(clade)
+            n_thinned += 1
             full_path = os.path.join(clades_root, f"{clade}_samples.txt")
             with open(full_path) as f:
                 full = [line.strip() for line in f if line.strip()]
@@ -1870,24 +1840,6 @@ def validate_subsample_arms(output_dir):
                     f"{arm}/{clade}: drew {len(drawn)} samples, expected "
                     f"{how} = {expected_n}"
                 )
-            if int(row["n_samples_arm"]) != len(drawn):
-                diffs.append(
-                    f"{arm}/{clade}: summary records n_samples_arm="
-                    f"{row['n_samples_arm']} but the file holds {len(drawn)}"
-                )
-            # Retention must run at or above the sample fraction: a branch
-            # survives whenever any sample below it does. Strictly below would
-            # mean mutations were lost that no collapse can explain.
-            if row["n_nt_mutations_full"] and float(row["n_nt_mutations_full"]) > 0:
-                retention = float(row["nt_mutation_retention"])
-                realized = float(row["sample_fraction_realized"])
-                if retention < realized - 1e-9:
-                    diffs.append(
-                        f"{arm}/{clade}: retained {retention:.4f} of the "
-                        f"nucleotide mutations from {realized:.4f} of the "
-                        f"samples; retention cannot fall below the sample "
-                        f"fraction"
-                    )
             if len(drawn) != len(full):
                 truncating_arms.add(arm)
 
@@ -1907,18 +1859,8 @@ def validate_subsample_arms(output_dir):
                     f"clade(s) {off_unit}; only {unit} should be thinned"
                 )
 
-        # Degenerate only if it kept at least one clade, thinned none of them
-        # and excluded none: an arm missing a clade from its grid cannot
-        # reproduce the full tree's aggregates and must not be byte-compared.
-        if (
-            included_clades
-            and arm not in truncating_arms
-            and arm not in excluding_arms
-        ):
-            degenerate_arms.append(arm)
-
     # The GLM must not be refit per arm.
-    for arm in sorted(roster["arm"].unique()):
+    for arm in arms:
         glm_arm_dir = os.path.join(output_dir, "glm", arm)
         if os.path.isdir(glm_arm_dir):
             refit = sorted(
@@ -1940,10 +1882,9 @@ def validate_subsample_arms(output_dir):
     # `exclude` and `masked_in_usher` are among the compared columns, it is also
     # the check that shows the shared codon mask is a no-op rather than a leak.
     #
-    # Restricted to the clades the arm kept: an *excluding* arm legitimately has
-    # fewer clades, and comparing the whole file would report that intended
-    # difference as a grid corruption. The clade set itself is already checked
-    # above, so nothing is lost by keying on it here.
+    # Restricted to the clades the arm kept: an arm that excluded a clade
+    # thinned below `min_clade_size` legitimately has fewer, and comparing the
+    # whole file would report that intended difference as a grid corruption.
     COUNT_COLUMNS = [
         "actual_count",
         "count_terminal",
@@ -1953,7 +1894,7 @@ def validate_subsample_arms(output_dir):
     GRID_KEY = ["clade", "subset", "nt_site", "nt_mutation", "gene"]
     n_grids = 0
     full_grid_path = os.path.join(output_dir, "counts_all.csv")
-    for arm in sorted(roster["arm"].unique()):
+    for arm in arms:
         arm_grid_path = os.path.join(output_dir, arm, "counts_all.csv")
         if not (os.path.isfile(full_grid_path) and os.path.isfile(arm_grid_path)):
             continue
@@ -2024,7 +1965,7 @@ def validate_subsample_arms(output_dir):
 
     if os.path.isfile(full_exp_path):
         full_K = _clade_K(full_exp_path)
-        for arm in sorted(roster["arm"].unique()):
+        for arm in arms:
             arm_exp_path = os.path.join(
                 output_dir, "fitness", arm, "expected_counts_by_clade.csv"
             )
@@ -2090,92 +2031,75 @@ def validate_subsample_arms(output_dir):
                 )
 
     # correlation_summary.csv is the headline deliverable, and the two things a
-    # run can check about it are that it exists for every arm and that its
+    # run can check about it are that every arm appears and that its
     # coefficients rest on a population the reader can see. A coefficient
     # reported over an unstated n is the failure this table was designed against.
-    corr_path = os.path.join(output_dir, "correlation_summary.csv")
-    n_corr_thinned = 0
-    corr_note = "absent"
-    if not os.path.isfile(corr_path):
+    #
+    # Every row must carry its n, including the empty ones: a row with a
+    # coefficient and no n is unreadable, and a row silently dropped for having
+    # an empty population is indistinguishable from one never asked.
+    if corr["n_mutations"].isna().any():
         diffs.append(
-            f"correlation_summary.csv is missing from {output_dir}, so the arms "
-            f"were built and never compared against full depth"
+            "correlation_summary.csv has row(s) with no n_mutations; a "
+            "coefficient is not interpretable without the population it "
+            "was computed on"
+        )
+    has_coef = corr["pearson_r"].notna()
+    if (has_coef & (corr["n_mutations"].fillna(0) < 3)).any():
+        bad = corr[has_coef & (corr["n_mutations"].fillna(0) < 3)]
+        diffs.append(
+            f"correlation_summary.csv reports {len(bad)} coefficient(s) "
+            f"over fewer than 3 mutations, where Pearson r is undefined"
+        )
+    # A control clade reproducing full depth is the end-to-end evidence that
+    # an arm did not reach a clade its config never named.
+    control_moved = corr[(~corr["thinned"]) & (corr["rmse"].fillna(0) > 0)]
+    if len(control_moved):
+        diffs.append(
+            f"correlation_summary.csv shows {len(control_moved)} control "
+            f"row(s) (clades outside an arm's unit) whose fitness effects "
+            f"differ from full depth: the arm reached a clade the config "
+            f"never named"
+        )
+    thinned_rows = corr[corr["thinned"] & (corr["n_mutations"] > 0)]
+    n_corr_thinned = len(thinned_rows)
+    maxcount = int(corr["max_actual_count_full"].max()) if len(corr) else 0
+    if not n_corr_thinned:
+        corr_note = (
+            f"{len(corr)} row(s) but VACUOUS -- no thinned (arm, clade) "
+            f"pair retained a scored mutation to compare"
         )
     else:
-        corr = pd.read_csv(corr_path)
-        missing_arms = set(roster["arm"].unique()) - set(corr["arm"].unique())
-        if missing_arms:
-            diffs.append(
-                f"correlation_summary.csv omits arm(s) {sorted(missing_arms)}, "
-                f"which subsample_summary.csv lists"
+        corr_note = (
+            f"{len(corr)} row(s), {n_corr_thinned} populated thinned "
+            f"row(s), {n_controls} control (arm, clade) pair(s) all matching "
+            f"full depth"
+        )
+        if maxcount <= 1:
+            corr_note += (
+                f"; NOT A NOISE MEASUREMENT -- max full-depth actual_count "
+                f"is {maxcount}, so the coefficients are arithmetic"
             )
-        # Every row must carry its n, including the empty ones: a row with a
-        # coefficient and no n is unreadable, and a row silently dropped for
-        # having an empty population is indistinguishable from one never asked.
-        if corr["n_mutations"].isna().any():
-            diffs.append(
-                "correlation_summary.csv has row(s) with no n_mutations; a "
-                "coefficient is not interpretable without the population it "
-                "was computed on"
-            )
-        has_coef = corr["pearson_r"].notna()
-        if (has_coef & (corr["n_mutations"].fillna(0) < 3)).any():
-            bad = corr[has_coef & (corr["n_mutations"].fillna(0) < 3)]
-            diffs.append(
-                f"correlation_summary.csv reports {len(bad)} coefficient(s) "
-                f"over fewer than 3 mutations, where Pearson r is undefined"
-            )
-        # A control clade reproducing full depth is the end-to-end evidence that
-        # an arm did not reach a clade its config never named.
-        control_moved = corr[(~corr["thinned"]) & (corr["rmse"].fillna(0) > 0)]
-        if len(control_moved):
-            diffs.append(
-                f"correlation_summary.csv shows {len(control_moved)} control "
-                f"row(s) (clades outside an arm's unit) whose fitness effects "
-                f"differ from full depth: the arm reached a clade the config "
-                f"never named"
-            )
-        thinned_rows = corr[corr["thinned"] & (corr["n_mutations"] > 0)]
-        n_corr_thinned = len(thinned_rows)
-        n_control = int((~corr["thinned"]).sum())
-        maxcount = int(corr["max_actual_count_full"].max()) if len(corr) else 0
-        if not n_corr_thinned:
-            corr_note = (
-                f"{len(corr)} row(s) but VACUOUS -- no thinned (arm, clade) "
-                f"pair retained a scored mutation to compare"
-            )
-        else:
-            corr_note = (
-                f"{len(corr)} row(s), {n_corr_thinned} populated thinned "
-                f"row(s), {n_control} control row(s) all matching full depth"
-            )
-            if maxcount <= 1:
-                corr_note += (
-                    f"; NOT A NOISE MEASUREMENT -- max full-depth actual_count "
-                    f"is {maxcount}, so the coefficients are arithmetic"
-                )
 
-    n_arms = int(roster["arm"].nunique())
+    n_arms = len(arms)
     if not truncating_arms:
         note = (
-            f"VACUOUS: none of the {n_arms} arm(s) thinned a surviving clade, so "
+            f"VACUOUS: none of the {n_arms} arm(s) thinned a clade, so "
             f"nothing here compares a subsampled arm against full depth "
-            f"({len(degenerate_arms)} degenerate, {len(excluding_arms)} "
-            f"excluding a clade)"
+            f"({len(degenerate_arms)} degenerate)"
         )
     elif not degenerate_arms:
         note = (
             f"{n_arms} arm(s): {len(truncating_arms)} truncating, but none "
             f"degenerate -- no arm pins the byte-identity of the ordinary path "
-            f"({n_included} included and {n_excluded} excluded pair(s))"
+            f"({n_thinned} thinned (arm, clade) pair(s))"
         )
     else:
         note = (
             f"{n_arms} arm(s): {len(truncating_arms)} truncating, "
             f"{len(degenerate_arms)} degenerate "
-            f"({n_compared} file(s) byte-compared), {len(excluding_arms)} "
-            f"excluding a clade; {n_included} included and {n_excluded} "
-            f"excluded (arm, clade) pair(s); {n_grids} grid(s) invariant "
+            f"({n_compared} file(s) byte-compared); {n_thinned} thinned "
+            f"(arm, clade) pair(s); {n_grids} grid(s) invariant "
             f"outside the count columns; {n_identities} per-clade "
             f"normalization constant(s) unmoved; correlations: {corr_note}"
         )

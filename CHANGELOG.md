@@ -48,9 +48,7 @@ at `max_samples: 50000` on the v12 gisaid tree, 30 of 56 clades are capped with
 effective fractions from 1.15% (21J) to 100% — and makes the untouched clades
 byte-identical controls by construction. Membership is *strictly* above the cap.
 A cap at or above every clade's size thins nothing: that is the **degenerate
-arm**, must be byte-identical to the full tree, and is recorded in
-`subsample_summary.csv` with an **empty `clade`** so it cannot be mistaken for an
-arm that was never wired.
+arm**, and must be byte-identical to the full tree.
 
 A second kind of arm, `frac_{unit}_{seed}_{fraction}bp`, thinned an explicitly
 *named* unit of clades by a sampling fraction. It was implemented first and
@@ -70,12 +68,27 @@ since a full-size arm costs ~8 CPU-hours.
 **New outputs.** Per arm, under an inserted `{arm}/` path segment:
 `mat/clades/{arm}/`, `mutations/{arm}/`, `mutation_counts/{arm}/`,
 `{arm}/counts_all.csv`, `glm/{arm}/annotated_counts.csv`, `fitness/{arm}/`,
-`aamut_fitness/{arm}/` and `pcps/{gene}/{arm}/`. Plus `subsample_summary.csv` at
-the output root, naming every `(arm, clade)` pair with `included` true/false and
-the *realized* retention — samples, branches and nucleotide mutations — because a
-nominal cut is not an evidence cut: a branch survives whenever any sample below
-it does, so the measured production caps keep 23.2% of the tree's mutation counts
-from 11.5% of its sequences at `max_samples: 50000`.
+`aamut_fitness/{arm}/` and `pcps/{gene}/{arm}/`.
+
+A nominal cut is not an evidence cut — a branch survives whenever any sample
+below it does, so the measured production caps keep 23.2% of the tree's mutation
+counts from 11.5% of its sequences at `max_samples: 50000`. `count_fraction` in
+`correlation_summary.csv` is where that measured retention is reported, and it
+is the only retention fraction the arms ship.
+
+A roster file, `subsample_summary.csv`, was implemented and **removed** before
+release, along with the `mutation_counts/branch_qc/{clade}.csv` and
+`pcps/{gene}/branch_qc/{clade}.csv` sidecars that were its only inputs. Nothing
+read it: not `subsample_correlations.py`, not `notebooks/cap_arm_scatters.py`,
+and the production arms' `correlation_summary.csv` was produced without it ever
+existing. Its one irreplaceable column recorded a clade excluded for falling
+below `min_clade_size` after thinning, which is unreachable from every config
+that sets `min_clade_size: 0` — all of them — so the auditable-absence
+mechanism was inert on exactly the trees it was written for. That exclusion is
+now covered by `tests/test_clade_subsamples.py` only, and the arms deliberately
+ship no roster, unlike #137's `glm/era_fit_summary.csv` and #149's
+`pcps/cutoff_summary.csv`. The per-limit branch-QC tallies both producers
+compute survive as **log** lines.
 
 **The analysis, not just the arms.** `correlation_summary.csv` at the output root
 is the headline deliverable: one row per `(arm, clade, estimator, population)`
@@ -119,14 +132,6 @@ against the cap lines, coloured by when each clade appeared, then the tree-level
 sequence and mutation totals — and then reports each clade's count fraction,
 count eCDFs and ground-truth scatter.
 
-**New sidecar on the existing paths.** `mutation_counts/branch_qc/{clade}.csv`
-and `pcps/{gene}/branch_qc/{clade}.csv` (and the `upto_{cutoff}/` and `{arm}/`
-counterparts) tally, per branch-QC limit, how many branches it dropped, plus the
-pre-QC mutation-count histogram. Additive: nothing existing reads them. They
-exist because realized retention falls below the closed form for two separable
-reasons — QC drops and same-site collapse — which one aggregate "branches
-dropped" number cannot tell apart.
-
 **What an arm does not rebuild.** The GLM neutral fit
 (`glm/curated_counts*.csv`, `glm/master_table*.csv`, `rates_table*.csv`), the
 clade founders, `ref/`, `mat/node_dates*`, `windows/`, and each gene's codon mask
@@ -138,11 +143,10 @@ ProblematicSites VCF, `usher_masked_sites.yaml` and the founder grid, never from
 a count column — unlike #149's temporal carve-out.
 
 **Operational note.** `pcp_from_tree.py` and `count_mutations.py` changed, so
-snakemake's `code` trigger marks the released v12 trees out of date. The new
-`branch_qc` sidecars are genuinely missing there and will rebuild even under
-`--rerun-triggers mtime`; that affects `extract_pcps_by_clade`,
-`extract_pcps_by_clade_upto` and `count_mutations_clade`. The count and PCP
-payloads themselves are unchanged.
+snakemake's `code` trigger marks the released v12 trees out of date. No output
+is missing there, though — both scripts only gained log lines — so
+`--rerun-triggers mtime` leaves the released trees alone. The count and PCP
+payloads are unchanged.
 
 The three test-data arms also add **13.7 min** of benchmarked job time to a
 **6.0 min** baseline (`ntmut_fitness_by_clade` at ~72 s per (arm, clade) is ~11

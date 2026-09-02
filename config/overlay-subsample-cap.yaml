@@ -41,8 +41,8 @@
 # Mutation retention is *not* the sample fraction: a branch survives whenever any
 # sample below it is retained, so retention is concave and every arm keeps a
 # larger share of counts than of sequences (23.2% against 11.5% at X=50000).
-# Nothing downstream may key to the configured cap; `subsample_summary.csv` and
-# `correlation_summary.csv` both report measured retention instead.
+# Nothing downstream may key to the configured cap; `correlation_summary.csv`
+# reports the measured `count_fraction` instead.
 #
 # The draw is a pure function of (cap, seed, clade), so adding or removing a cap
 # here cannot move an arm that has already been built.
