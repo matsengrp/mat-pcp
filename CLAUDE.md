@@ -31,7 +31,7 @@ The pipeline uses simple integer versioning (v1, v2, v3, etc.) for reproducibili
 ### Version Management
 
 - **Version File**: `VERSION` in the repository root contains the current pipeline version
-- **Automatic Versioning**: The Snakefile derives each tree's output directory as `{output_root}/{label}_{version}` (e.g., `results/public_2022-06-01_v11`)
+- **Automatic Versioning**: The Snakefile derives each tree's output directory as `{output_root}/{label}_{version}` (e.g., `results/public_2026-08-06_v12`)
 - **Git Tags**: Each version should be tagged in git (e.g., `git tag v1`) when the branch is ready to merge
 - **Changelog**: All output schema changes must be documented in `CHANGELOG.md`
 
@@ -73,25 +73,44 @@ When making changes that will affect outputs:
 Every run requires exactly one explicit `--configfile` (there is no default
 `configfile:` directive; see the Snakefile header for why).
 
-`config/config.yaml` lists **all four production trees**, one of which
-(`gisaid-and-public_2023-01-01`) needs restricted GISAID-derived inputs. A
-bare `rule all` run builds every tree; to build a single tree, target its
-per-tree output path (see "Run specific target" below).
+**The production config is `config/config-2026-08-06-six-genes.yaml`**, which
+carries **two** trees -- `gisaid-and-public_2026-08-06` and
+`public_2026-08-06` -- over the six non-accessory genes. The
+GISAID-and-public one needs restricted GISAID-derived inputs; the public one
+does not. These are the trees the released v12 outputs come from, and the
+only ones any current work should target. A bare `rule all` run builds both;
+to build one, target its per-tree output path.
+
+`config/config.yaml` is **not** the production config despite the name. Its
+four trees are 2022/2023-vintage (`public_2022-04-02`, `public_2022-06-01`,
+`public_2023-01-01`, `gisaid-and-public_2023-01-01`) with `pcp_genes: [S]`
+only, and none has been built since v4 -- no `results/*_v12` directory exists
+for any of them. It is kept for reproducing those older trees, so do not read
+its tree list as "the production trees" (an earlier version of this file
+said exactly that, and the four *directories* of the two production trees at
+two versions make the mistake easy to repeat).
 
 ```bash
-# Run with pixi (recommended)
-pixi run snakemake -j 4 --use-conda --configfile config/config.yaml
+# Run with pixi (recommended) -- both production trees
+pixi run snakemake -j 32 --use-conda \
+  --configfile config/config-2026-08-06-six-genes.yaml
 
 # Dry run
-pixi run snakemake -n --configfile config/config.yaml
+pixi run snakemake -n --configfile config/config-2026-08-06-six-genes.yaml
 
-# Run specific target (per-tree output path)
-pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
-  results/public_2022-06-01_v11/aamut_fitness/all_aamut_fitness.csv
+# Run specific target (per-tree output path; VERSION is currently v12)
+pixi run snakemake -j 32 --use-conda \
+  --configfile config/config-2026-08-06-six-genes.yaml \
+  results/public_2026-08-06_v12/aamut_fitness/all_aamut_fitness.csv
 
 # Clean all outputs
-pixi run snakemake --delete-all-output --configfile config/config.yaml
+pixi run snakemake --delete-all-output \
+  --configfile config/config-2026-08-06-six-genes.yaml
 ```
+
+`-j 32` rather than `-j 4`: every rule that measured single-threaded now
+declares `threads: 1` (pattern 16), so concurrency is what the run is bounded
+by.
 
 ### Testing
 ```bash
