@@ -31,7 +31,7 @@ The pipeline uses simple integer versioning (v1, v2, v3, etc.) for reproducibili
 ### Version Management
 
 - **Version File**: `VERSION` in the repository root contains the current pipeline version
-- **Automatic Versioning**: The Snakefile derives each tree's output directory as `{output_root}/{label}_{version}` (e.g., `results/public_2022-06-01_v11`)
+- **Automatic Versioning**: The Snakefile derives each tree's output directory as `{output_root}/{label}_{version}` (e.g., `results/public_2026-08-06_v12`)
 - **Git Tags**: Each version should be tagged in git (e.g., `git tag v1`) when the branch is ready to merge
 - **Changelog**: All output schema changes must be documented in `CHANGELOG.md`
 
@@ -73,25 +73,44 @@ When making changes that will affect outputs:
 Every run requires exactly one explicit `--configfile` (there is no default
 `configfile:` directive; see the Snakefile header for why).
 
-`config/config.yaml` lists **all four production trees**, one of which
-(`gisaid-and-public_2023-01-01`) needs restricted GISAID-derived inputs. A
-bare `rule all` run builds every tree; to build a single tree, target its
-per-tree output path (see "Run specific target" below).
+**The production config is `config/config-2026-08-06-six-genes.yaml`**, which
+carries **two** trees -- `gisaid-and-public_2026-08-06` and
+`public_2026-08-06` -- over the six non-accessory genes. The
+GISAID-and-public one needs restricted GISAID-derived inputs; the public one
+does not. These are the trees the released v12 outputs come from, and the
+only ones any current work should target. A bare `rule all` run builds both;
+to build one, target its per-tree output path.
+
+`config/config.yaml` is **not** the production config despite the name. Its
+four trees are 2022/2023-vintage (`public_2022-04-02`, `public_2022-06-01`,
+`public_2023-01-01`, `gisaid-and-public_2023-01-01`) with `pcp_genes: [S]`
+only, and none has been built since v4 -- no `results/*_v12` directory exists
+for any of them. It is kept for reproducing those older trees, so do not read
+its tree list as "the production trees" (an earlier version of this file
+said exactly that, and the four *directories* of the two production trees at
+two versions make the mistake easy to repeat).
 
 ```bash
-# Run with pixi (recommended)
-pixi run snakemake -j 4 --use-conda --configfile config/config.yaml
+# Run with pixi (recommended) -- both production trees
+pixi run snakemake -j 32 --use-conda \
+  --configfile config/config-2026-08-06-six-genes.yaml
 
 # Dry run
-pixi run snakemake -n --configfile config/config.yaml
+pixi run snakemake -n --configfile config/config-2026-08-06-six-genes.yaml
 
-# Run specific target (per-tree output path)
-pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
-  results/public_2022-06-01_v11/aamut_fitness/all_aamut_fitness.csv
+# Run specific target (per-tree output path; VERSION is currently v12)
+pixi run snakemake -j 32 --use-conda \
+  --configfile config/config-2026-08-06-six-genes.yaml \
+  results/public_2026-08-06_v12/aamut_fitness/all_aamut_fitness.csv
 
 # Clean all outputs
-pixi run snakemake --delete-all-output --configfile config/config.yaml
+pixi run snakemake --delete-all-output \
+  --configfile config/config-2026-08-06-six-genes.yaml
 ```
+
+`-j 32` rather than `-j 4`: every rule that measured single-threaded now
+declares `threads: 1` (pattern 16), so concurrency is what the run is bounded
+by.
 
 ### Testing
 ```bash
@@ -1177,6 +1196,123 @@ mat-pcp/
     See [#151](https://github.com/matsengrp/mat-pcp/issues/151).
 
 
+16. **A rule's `threads` is a scheduler reservation, not a speedup, and this
+    pipeline has no script that reads it.** No script under `workflow/scripts/`
+    or `workflow/modules/` references `snakemake.threads`, and only
+    `optimize_mat_tree` interpolates `{threads}` into a shell command. So for
+    every other rule the number was a pure reservation: at `threads: 4` a
+    `-j 32` run schedules **8** concurrent jobs instead of 32, and the other
+    three quarters of each reservation idle. Nothing fails, no output moves and
+    no log complains -- the run is simply 4x longer, which is why this survived
+    through v12.
+
+    *The measurement, not the intuition, decides.* `cpu_time/wall` from the v12
+    gisaid tree's `benchmarks/*.tsv` is the discriminator: `ntmut_fitness` 0.97
+    across 224 jobs and 31.5 h, `mat_clade_subset` 0.86 over 7.1 h,
+    `window_expected_counts` 1.00, `window_subtree_counts` 0.98, `master_table`
+    0.48 -- all single-threaded despite holding 4 each. Two rules earn their
+    allocation and keep it: `optimize_mat_tree` (passes `{threads}` through) and
+    `chronumental`, which measured **1.25** because JAX threads internally with
+    no flag to pass. `ntmut_fitness` alone explains the whole wall clock:
+    31.54 h / 8 concurrent = 3.9 h against an observed 4h09m, so dropping it to
+    1 is a ~3x speedup of the entire pipeline rather than a micro-optimization.
+
+    *`matUtils` defaults to 32 threads, so the reservation and the reality have
+    to be pinned together.* All seven `matUtils extract` / `matUtils summary`
+    calls now pass `-T {threads}`. Without it, lowering a rule's reservation
+    makes things *worse*: N concurrent jobs each spawn up to 32 threads, so the
+    fix that raises concurrency also multiplies oversubscription, and only the
+    workload's failure to parallelize keeps that harmless today. Two of the
+    call sites (`translate_mat`, `mat_sample_paths`) declare no `threads:` at
+    all, where `{threads}` resolves to Snakemake's 1 -- so they were the worst
+    offenders, reserving one core and inviting 32. `export_newick` is a **third**
+    such site and the one that could cost something rather than save it: it
+    declares no `threads:` either, so it now runs `-T 1` over the whole
+    8.4 M-tip tree (~3 min at the 32-thread default) as a single job, giving up
+    matUtils' parallelism with no concurrency to gain in exchange -- unlike the
+    per-clade rules, where that trade is the whole point. All three also lie
+    outside the config's reach: declaring no `threads:` means never calling
+    `get_threads`, so not even its `default` branch applies, and none of the
+    three carries a `benchmark:` -- making that 1 the only value in this pattern
+    that is inferred rather than measured, with no future run able to measure
+    it. Passing `-T` is
+    output-neutral: `extract -o`, `extract -t` and `extract -S` are all
+    byte-identical at `-T 1`, `-T 32` and the default, verified before the
+    values were changed. Note `matUtils` prepends the working directory to
+    *every* path argument including `-t` and `-f`, so it cannot be probed with
+    absolute paths outside its run directory -- which is why the standing
+    evidence is a whole-tree byte comparison rather than a unit test.
+
+    *Passing `-T` is output-neutral but **not** provenance-neutral, and those
+    are different questions.* `threads` and `mem_mb` are not rerun triggers, so
+    those numbers can be corrected on a released tree freely -- but a
+    `-T {threads}` insertion edits the rule's `shell:` body, and that is the
+    default `code` trigger. Six rules were edited, one of them `filter_mat_tree`
+    at the root of the DAG, and the released v12 trees' stored metadata records
+    the pre-change command (checked directly: neither their `filter_mat_tree`
+    nor their `export_newick` entry contains `-T`). Extending either tree
+    therefore needs `--rerun-triggers mtime`, or Snakemake rebuilds everything
+    downstream including the 470 GiB of PCPs. Reading "no output changes" as
+    "no rerun" is the trap -- the data is byte-identical and every job is still
+    stale.
+
+    *`mem_mb` is the same bug in the other dimension, and there it runs both
+    ways.* Under the local executor with no `--resources` ceiling it is inert,
+    which is exactly why it drifts. The declaration is therefore a **record of
+    what the rule costs**, and the standard is that it match the measurement.
+    Measured against `benchmarks/*.tsv` on the v12 gisaid tree, three rules were
+    *under*-declared -- `extract_pcps_by_clade` at 8000 against a 77.3 GB peak,
+    `window_subtree_counts` at 16000 against 67.3 GB, `filter_mat_tree` at 16000
+    against 31.5 GB -- and four over-declared, `master_table` by **68x** (8000
+    against 118 MB). An under-declaration is the dangerous direction: the first
+    person to run this under a scheduler that honours the request gets a job
+    killed, or oversubscribes a node, with nothing pointing at the number.
+
+    Two of those numbers are a rule's *sibling's* measurement, which is worth
+    recording rather than absorbing: `master_table.tsv` reports `max_rss` as
+    **`NA`** on both production trees, so the 118 MB is
+    `master_table_pre_omicron.tsv`, i.e. `master_table_era`; and the 77.3 GB is
+    77330 MB on `extract_pcps_by_clade` against 77347 MB on
+    `extract_pcps_by_clade_upto`. Both siblings run the same computation, so the
+    substitution is sound -- but "no production benchmark" and "this is the
+    measured peak" cannot both be said of the same rule, and an earlier draft of
+    this pattern said both.
+
+    *One rule cannot be recorded as a scalar at all.* `extract_pcps_by_clade`
+    spans **160x** -- 482 MB median to 77.3 GB for ORF1a/21J -- because peak
+    cost tracks the clade's subtree and the gene's CDS length together (ORF1a
+    peaks at 230-277x its input `.pb`, S near 108x). A flat 8000 under-granted
+    59 of the 422 full-tree jobs this rule and `extract_pcps_by_clade_upto`
+    share -- they carry one declaration, so the census pools both, 197 + 225 --
+    while a flat value covering the tail would cap a 995 GB box at 12 concurrent
+    jobs whose median need is under 500 MB. It is therefore
+    `max(6000, 300 * input.size_mb) * attempt`.
+
+    *The floor is the number most jobs actually get, and sizing it needs the
+    arms rather than the tree.* 307 of the 449 checkable full-tree jobs never
+    reach the scaling term, and **all 684** of the #151 arm jobs do not:
+    thinning shrinks a clade's `.pb` without shrinking its PCP expansion
+    proportionally, so an arm's peak/input runs to 737x where full-depth ORF1a
+    runs 230-277x -- `cap_50000_0` ORF1a/21J peaks at 5304 MB from an 8.4 MB
+    subtree. A floor of 4000 therefore under-granted **2 of 684 arm jobs and 0
+    of 449 full-tree ones**, so a root-only census reported "zero under-grants"
+    over precisely the population that cannot fail. 6000 gives zero across all
+    1133 checkable jobs. Note which way the dependency runs: the multiplier is a
+    property of the gene, the floor is a property of the *shallowest* tree
+    anyone will run this on, and #151 made that much shallower than the census
+    had seen.
+
+    Note also the verification trap: on the test data every input is tiny, so
+    the lambda returns its floor -- **and `input.size_mb == 0` returns the floor
+    too**, so a run proving the floor proves nothing about the scaling. It was
+    checked by temporarily lowering the floor to 1, where the three test clades
+    yield three *distinct* values (227/228/230) that track their input sizes.
+    The 225 `_upto` pairs stay unverifiable in either direction because
+    `mat/cutoffs/*.pb` is `temp()`. `mat_clade_subset` is the opposite shape and stays scalar: it loads
+    the whole MAT before pruning, so its cost is a property of the input tree
+    rather than of the clade, and 101 benchmarks span 23.9-25.6 GB.
+
+
 ### Configuration Sections
 
 The configuration (`config/config.yaml`) is organized into:
@@ -1257,7 +1393,8 @@ The configuration (`config/config.yaml`) is organized into:
 11. **Fitness**: `fitness_pseudocount`, `fitness_N_f`, `fitness_N_n_exp`
 12. **Gene Configuration**: `orf1ab_to_nsps`, `gene_overlaps`, `genes`
 13. **Site Masking**: `sites_to_exclude`, `site_include_range`
-14. **Threads**: Per-rule thread allocation
+14. **Threads**: Per-rule thread allocation. A reservation only -- see
+    pattern 16; the values are measured from `cpu_time/wall`, not chosen.
 
 ### Output Organization
 
