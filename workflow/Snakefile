@@ -267,12 +267,12 @@ wildcard_constraints:
     # A subsampling arm (#151), as an **optional path prefix including its
     # trailing slash**. Snakemake has no optional path components, so this is
     # what lets one rule serve both the full-tree path (``arm_dir=""``) and an
-    # arm's (``arm_dir="frac_21J-21I_0_100bp/"``) -- which is in turn what makes
-    # the degenerate ``sampling_fractions: [1.0]`` arm byte-identical to the
-    # full tree *by construction* rather than by two rule bodies staying in
-    # sync. ``clade`` and ``gene`` are already slash-free, so the empty
-    # alternative cannot swallow an arm directory and the non-empty one cannot
-    # span two segments.
+    # arm's (``arm_dir="cap_50000_0/"``) -- which is in turn what makes an arm
+    # whose cap sits above every clade's size byte-identical to the full tree
+    # *by construction* rather than by two rule bodies staying in sync.
+    # ``clade`` and ``gene`` are already slash-free, so the empty alternative
+    # cannot swallow an arm directory and the non-empty one cannot span two
+    # segments.
     arm_dir=subsample_mod.ARM_DIR_PATTERN,
     # The same thing without the slash, for the one rule whose output *is* an
     # arm path (``subsample_clade_samples``) and so has no empty case.
@@ -353,22 +353,17 @@ def get_final_tree():
 # is a config value rather than a constant because it is a property of the date
 # prior, which #146 has already moved once. See the comment block above
 # ``cutoffs.select_for_cutoff`` for the measured distributions.
-# Clade-subsampling arms (#151). Two kinds, and an entry sets exactly one:
+# Clade-subsampling arms (#151). ``max_samples`` thins every clade above the
+# cap down to it and leaves smaller clades untouched, so an arm intervenes on
+# the tree's **composition** -- which is what the pooled-vs-per-clade question
+# actually asks about -- and one arm spans two orders of magnitude of effective
+# depth, with the untouched clades as byte-identical controls by construction.
 #
-#   - ``sampling_fractions`` thins a named *unit* of clades by a fraction. It
-#     intervenes on **size**, so each arm is one point on the depth curve and the
-#     tree's sampling imbalance survives intact.
-#   - ``max_samples`` thins every clade above the cap down to it, leaving smaller
-#     clades untouched. It intervenes on **composition**, which is what the
-#     pooled-vs-per-clade question actually asks about, and one arm spans two
-#     orders of magnitude of effective depth -- with the untouched clades as
-#     byte-identical controls by construction rather than by being deliberately
-#     left unthinned.
-#
-# Validated at parse time -- a fraction outside ``0 < frac <= 1.0``, a cap below
-# 1, an entry setting both depth keys or neither, and a duplicate arm name are
-# all hard failures, never silent clamps, because a clamped depth produces a
-# well-formed arm at the wrong depth.
+# Validated at parse time -- a cap below 1, a missing or non-integer
+# ``max_samples`` and a duplicate arm name are all hard failures, never silent
+# clamps, because a clamped depth produces a well-formed arm at the wrong depth.
+# The removed fraction arms' ``sampling_fractions`` / ``unit`` keys are rejected
+# by name, so a config written against them says what happened.
 SUBSAMPLE_ARMS = subsample_mod.validate_entries(config.get("clade_subsamples"))
 
 PCP_MAX_PREDICTED_DAYS_PAST_CUTOFF = config.get("pcp_max_predicted_days_past_cutoff")
@@ -467,7 +462,7 @@ def arm_targets():
 
     Empty for every config that sets no ``clade_subsamples``, which is all of
     them today except the test config: the production arms are launched by
-    naming their paths, because four full-size arms cost ~44 wall-hours.
+    naming their paths, because a full-size arm costs ~8 CPU-hours.
     """
     if not SUBSAMPLE_ARMS:
         return []
@@ -584,7 +579,7 @@ rule all:
         cutoff_targets(),
         # Clade-subsampling arms (#151). Empty unless the config sets
         # ``clade_subsamples``; production arms are launched by naming their
-        # paths, since four full-size arms cost ~44 wall-hours.
+        # paths, since a full-size arm costs ~8 CPU-hours.
         arm_targets()
 
 
@@ -1253,9 +1248,9 @@ def _requested_clades_by_cutoff(wildcards):
 # =============================================================================
 # Clade-subsampling arms (#151)
 # =============================================================================
-# An **arm** is one sampling fraction applied to one unit of clades. Everything
-# an arm rebuilds follows from re-extracting each unit clade's subtree from a
-# subsampled sample list, because ``mat/clades/{clade}_samples.txt`` is the only
+# An **arm** is one per-clade cap. Everything an arm rebuilds follows from
+# re-extracting each thinned clade's subtree from a subsampled sample list,
+# because ``mat/clades/{clade}_samples.txt`` is the only
 # thing determining a clade's subtree: ``translate_mat``, ``mat_sample_paths``
 # and ``extract_pcps_by_clade`` all read ``mat_clade_subset`` and nothing below
 # it re-reads the full tree. Subsampling that one list therefore moves the
@@ -1285,8 +1280,8 @@ def _requested_clades_by_cutoff(wildcards):
 # it can only make the counts estimator look better.
 #
 # The per-clade ``evol_time`` normalization *does* track the subsample, which is
-# the intended effect: it is what makes an arm's expected counts fall with
-# sampling fraction.
+# the intended effect: it is what makes an arm's expected counts fall with the
+# cap.
 
 
 def arm_dir_of(wildcards):
@@ -1295,7 +1290,7 @@ def arm_dir_of(wildcards):
 
 
 def arm_spec(arm):
-    """The validated ``{"unit", "seed", "frac"}`` for one arm name."""
+    """The validated ``{"seed", "cap"}`` for one arm name."""
     try:
         return SUBSAMPLE_ARMS[arm]
     except KeyError:
@@ -1323,14 +1318,14 @@ def arm_clade_sizes(wildcards):
 
     ``clade_counts.csv`` names every clade the metadata mentions, including ones
     dropped by ``clades_to_exclude`` or beyond ``max_clades``, which have no
-    subtree to thin. A cap arm's unit is derived from clade sizes, so deriving it
+    subtree to thin. An arm's unit is derived from clade sizes, so deriving it
     from the raw counts would request ``mat/clades/{arm}/21A_samples.txt`` for a
     clade the pipeline never extracts -- and 21A is exactly that case on every
     production tree (no clade founder is defined for it, so it is excluded).
 
     Kept in the roster's order, because ``resolve_unit`` preserves the order it
-    is given and the aggregate rules concatenate their inputs in it: the
-    degenerate arm's byte-equality with the full tree rests on that.
+    is given and the aggregate rules concatenate their inputs in it: an
+    untouched clade's byte-equality with the full tree rests on that.
     """
     sizes = clade_sizes(wildcards)
     return {c: sizes[c] for c in clades_w_adequate_counts(wildcards) if c in sizes}
@@ -1339,10 +1334,10 @@ def arm_clade_sizes(wildcards):
 def arm_units_for_tree(wildcards):
     """``{arm: [clades it thins]}`` for this tree.
 
-    The single place either kind of arm's membership is resolved -- named for a
-    ``frac`` arm, derived from the clade sizes for a ``cap`` arm. Every fan-out
-    helper, the roster param and the sampler's defensive check read this, so they
-    cannot disagree about one clade.
+    The single place an arm's membership is resolved -- it is derived from the
+    clade sizes rather than named, so it cannot be written in the config. Every
+    fan-out helper, the roster param and the sampler's defensive check read this,
+    so they cannot disagree about one clade.
     """
     return subsample_mod.arm_units(SUBSAMPLE_ARMS, arm_clade_sizes(wildcards))
 
@@ -1356,12 +1351,11 @@ def arm_retained_counts(wildcards):
     """``{arm: {clade: n_retained}}`` for this tree, from the clade counts.
 
     Arithmetic over an existing checkpoint rather than a new one: the retained
-    count is exactly ``round(frac * n_clade)``, so nothing has to be drawn to
-    know it. A clade thinned to zero raises here (``matUtils extract -s`` on an
-    empty list is undefined); a clade thinned below ``min_clade_size`` is
-    dropped from the arm and recorded, because ``get_clades`` applies that
-    threshold to the full metadata and so cannot see a clade that falls below it
-    only after thinning.
+    count is exactly ``min(n_clade, cap)``, so nothing has to be drawn to know
+    it. A clade thinned below ``min_clade_size`` is dropped from the arm and
+    recorded, because ``get_clades`` applies that threshold to the full metadata
+    and so cannot see a clade that falls below it only after thinning -- which
+    happens exactly when ``min_clade_size > cap``.
     """
     return subsample_mod.check_arm_sizes(
         SUBSAMPLE_ARMS,
@@ -1374,10 +1368,10 @@ def arm_clades(wildcards):
     """This (tree, arm)'s clade roster, in the *full roster's* order.
 
     Order is not cosmetic, for the same reason as #149's cutoff roster: the
-    aggregate rules concatenate their inputs in order, and the degenerate arm
-    (``sampling_fractions: [1.0]``) is required to reproduce the full-tree
-    aggregates byte-for-byte. Filtering ``clades_w_adequate_counts`` rather than
-    re-deriving a list makes that hold by construction.
+    aggregate rules concatenate their inputs in order, and an arm whose cap sits
+    above every clade's size is required to reproduce the full-tree aggregates
+    byte-for-byte. Filtering ``clades_w_adequate_counts`` rather than re-deriving
+    a list makes that hold by construction.
 
     An arm keeps every clade the full tree processes **except** unit clades
     thinned below ``min_clade_size``: a non-unit clade is untouched by the
@@ -1427,8 +1421,8 @@ def arm_sample_lists(wildcards):
     """Every (arm, clade) sample list this tree's summary reconciles.
 
     Both sides: the arm's own list and the full one it was drawn from, so the
-    summary can assert ``|arm| == round(frac * |full|)`` against the files
-    rather than against the checkpoint arithmetic that drove the DAG.
+    summary can assert ``|arm| == min(|full|, cap)`` against the files rather
+    than against the checkpoint arithmetic that drove the DAG.
     """
     full = clades_w_adequate_counts(wildcards)
     paths = [
@@ -1485,7 +1479,7 @@ def arm_branch_qc_inputs(wildcards):
 
 
 def _arm_roster_param(wildcards):
-    """``{arm: {"unit", "seed", "frac", "included", "excluded"}}`` for the summary.
+    """``{arm: {"unit", "seed", "cap", "included", "excluded"}}`` for the summary.
 
     Passed as a param so the recorded ``included`` column comes from the
     function that actually drove the fan-out, not from a second evaluation of
@@ -1500,14 +1494,11 @@ def _arm_roster_param(wildcards):
         kept = retained[arm]
         unit = units[arm]
         roster[arm] = {
-            "kind": subsample_mod.spec_kind(spec),
-            # The *resolved* unit, not ``spec["unit"]``: a cap arm's is derived
-            # and ``spec["unit"]`` is ``None``. Recording what the fan-out
-            # actually used is the whole point of passing this as a param.
+            # The *resolved* unit. There is no configured one to fall back on --
+            # membership is derived from the clade sizes -- so recording what the
+            # fan-out actually used is the whole point of passing this as a param.
             "unit": list(unit),
-            "unit_label": subsample_mod.unit_label(spec),
             "seed": spec["seed"],
-            "frac": spec["frac"],
             "cap": spec["cap"],
             "included": [c for c in unit if c in kept],
             "excluded": [c for c in unit if c not in kept],
@@ -1568,7 +1559,7 @@ rule mat_clade_subset:
         # The cost is a property of the *input tree*, not of how many samples
         # the clade keeps: `matUtils extract -s` loads the whole MAT before
         # pruning, and 21I at 8% of 21J's sample count measured slightly more.
-        # So it does not fall as a subsampling fraction falls.
+        # So it does not fall as the cap falls.
         mem_mb=28000,
         runtime=60
     benchmark:
@@ -1936,7 +1927,7 @@ rule mat_clade_subset_upto:
         # The cost is a property of the *input tree*, not of how many samples
         # the clade keeps: `matUtils extract -s` loads the whole MAT before
         # pruning, and 21I at 8% of 21J's sample count measured slightly more.
-        # So it does not fall as a subsampling fraction falls.
+        # So it does not fall as the cap falls.
         mem_mb=28000,
         runtime=60
     benchmark:

@@ -152,14 +152,11 @@ Two consequences for a consumer. The cutoff sets depend on the **node dating**, 
 
 ### `{arm}/…` — clade subtrees at reduced sampling depth (v12+)
 
-For each entry in the config key `clade_subsamples`, each of its sampling depths defines one **arm**: the per-clade counts *and* PCP families, rebuilt from subtrees re-extracted at reduced depth ([#151](https://github.com/matsengrp/mat-pcp/issues/151)). Additive: `{arm}` is an *optional* path segment, so every existing output path is unchanged.
+For each cap in the config key `clade_subsamples`, one **arm** is defined: the per-clade counts *and* PCP families, rebuilt from subtrees re-extracted at reduced depth ([#151](https://github.com/matsengrp/mat-pcp/issues/151)). Additive: `{arm}` is an *optional* path segment, so every existing output path is unchanged.
 
-Two kinds of arm, and an entry sets exactly one depth key:
+**`cap_{max_samples}_{seed}`** — `max_samples` thins **every clade above the cap** down to exactly that many samples and leaves smaller clades untouched, so an arm intervenes on the tree's **composition** rather than only its size. Its unit is *derived* from the tree's clade sizes rather than named, so one arm spans a wide range of effective depths at once — at `max_samples: 50000` on the v12 gisaid tree, 30 of 56 clades are capped, with effective fractions from 1.15% (21J) to 100% — and the untouched clades are byte-identical controls by construction. Membership is **strictly** above the cap: a clade of exactly `max_samples` samples is already at the target and is not thinned.
 
-- **`frac_{unit}_{seed}_{fraction}bp`** — `sampling_fractions` thins a *named unit* of clades to that fraction of each clade's samples. It intervenes on **size**: every clade keeps the same share, so the tree's sampling imbalance is preserved and one arm is one point on the depth curve.
-- **`cap_{max_samples}_{seed}`** — `max_samples` thins **every clade above the cap** down to exactly that many samples and leaves smaller clades untouched. It intervenes on **composition**. Its unit is *derived* from the tree's clade sizes rather than named, so one arm spans a wide range of effective depths at once — at `max_samples: 50000` on the v12 gisaid tree, 30 of 56 clades are capped, with effective fractions from 1.15% (21J) to 100% — and the untouched clades are byte-identical controls by construction. Membership is **strictly** above the cap: a clade of exactly `max_samples` samples is already at the target and is not thinned.
-
-**Arm naming** is `frac_{unit joined by -}_{seed}_{fraction in basis points}bp` — `frac_21J-21I_0_1000bp` for `unit: [21J, 21I], seed: 0, frac: 0.10`. Basis points rather than `str(frac)` because YAML parses `0.10` as `0.1` and float arithmetic does not preserve the spelling, so two configs meaning the same depth would otherwise name two arms.
+A `frac_{unit}_{seed}_{fraction}bp` kind, which thinned an explicitly *named* unit of clades by a fraction, was removed in #151. It intervened on **size** — every clade in the unit kept the same share, so the tree's imbalance survived and one arm was one point on a depth curve — which answers a different question, and its controls had to be *chosen* where a cap's fall out of the definition. `sampling_fractions` and `unit` are now rejected by name.
 
 **The `{arm}/` segment is inserted immediately before the basename**, so filenames are identical to the full-tree ones and a consumer points at a different root:
 
@@ -179,11 +176,11 @@ Two kinds of arm, and an entry sets exactly one depth key:
 
 **A nominal fraction is not an evidence cut.** A branch survives whenever *any* sample below it is retained, so retention of mutations runs well above the fraction of samples drawn, concavely: on the v11 gisaid tree, 21J's retained/fraction ratio runs 1.79x at p=0.20, 2.22x at 0.10, 2.72x at 0.05 and 4.10x at 0.01, so 1% of the samples is a ~24x evidence cut rather than a 100x one. Read `subsample_summary.csv` for the measured value; do not key an analysis to the configured percent.
 
-**`sampling_fractions: [1.0]` is byte-identical to the full tree.** Every sample is retained and the draw preserves the input file's order, so the arm's aggregates equal the full-tree ones byte-for-byte (`pcpio.PCP_CSV_COMPRESSION` pins `mtime=0`, and gzip's FNAME field carries only the basename, so byte-equality survives the change of directory). That degenerate arm is what makes "the subsampling machinery did not perturb the ordinary path" a measurement rather than an inspection; `config_test_data.yaml` carries it and `validate_test.py::validate_subsample_arms` checks it.
+**A cap at or above every clade's size is byte-identical to the full tree.** Its unit is empty, so every clade is a control and every output equals the full tree's byte-for-byte (`pcpio.PCP_CSV_COMPRESSION` pins `mtime=0`, and gzip's FNAME field carries only the basename, so byte-equality survives the change of directory). That **degenerate arm** is what makes "the subsampling machinery did not perturb the ordinary path" a measurement rather than an inspection; `config_test_data.yaml` carries it as `cap_1000_0` against clades of 2/5/46, and `validate_test.py::validate_subsample_arms` checks it. Note where the identity does *not* come from: an untouched clade is never drawn at all — the arm reads the full tree's file, and the sampler raises if a fan-out routes an untouched clade to it.
 
-**The neutral model is not refit — deliberately.** An arm reads the full tree's `glm/curated_counts*.csv`, `glm/master_table*.csv` and `rates_table*.csv` unchanged; only `glm/{arm}/annotated_counts.csv` is rebuilt, because it is count-bearing. This hands the counts arm full-tree neutral information it would not have if the clade were genuinely this thinly sampled, which is conservative for the hypothesis the arms exist to test — it can only make the counts estimator look better. The **per-clade `evol_time` normalization does** track the subsample, which is the intended effect: it is what makes an arm's expected counts fall with sampling fraction.
+**The neutral model is not refit — deliberately.** An arm reads the full tree's `glm/curated_counts*.csv`, `glm/master_table*.csv` and `rates_table*.csv` unchanged; only `glm/{arm}/annotated_counts.csv` is rebuilt, because it is count-bearing. This hands the counts arm full-tree neutral information it would not have if the clade were genuinely this thinly sampled, which is conservative for the hypothesis the arms exist to test — it can only make the counts estimator look better. The **per-clade `evol_time` normalization does** track the subsample, which is the intended effect: it is what makes an arm's expected counts fall with the cap.
 
-**Also not recomputed, and here it is a no-op rather than a leak.** Clade founders, `{gene}_codon_sites_to_mask.txt` and `pcps/{gene}/censored_mutations.csv` are shared with the full tree. Unlike the temporal carve-out for `upto_{cutoff}/` above, these are *invariant to sampling fraction by construction*: a founder is a property of the clade's defining mutations, and `masking.compute_exclusions` derives `exclude` from config, the ProblematicSites VCF, `usher_masked_sites.yaml` and the founder grid — never from a count column.
+**Also not recomputed, and here it is a no-op rather than a leak.** Clade founders, `{gene}_codon_sites_to_mask.txt` and `pcps/{gene}/censored_mutations.csv` are shared with the full tree. Unlike the temporal carve-out for `upto_{cutoff}/` above, these are *invariant to sampling depth by construction*: a founder is a property of the clade's defining mutations, and `masking.compute_exclusions` derives `exclude` from config, the ProblematicSites VCF, `usher_masked_sites.yaml` and the founder grid — never from a count column.
 
 ### `subsample_summary.csv` (v12+)
 
@@ -191,17 +188,14 @@ The roster for the above: one row per (arm, clade) with `gene` empty for the cou
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `arm` | string | `frac_{unit}_{seed}_{fraction}bp` or `cap_{max_samples}_{seed}`. |
-| `kind` | string | `frac` or `cap`. |
-| `unit` | string | A `frac` arm's unit clades joined by `-`; `all` for a `cap` arm, whose unit is derived and would otherwise be a cell that changes with the tree. |
+| `arm` | string | `cap_{max_samples}_{seed}`. |
 | `seed` | int | The configured seed. |
-| `sampling_fraction` | float | The configured fraction; empty for a `cap` arm. |
-| `max_samples` | int | The configured cap; empty for a `frac` arm. |
+| `max_samples` | int | The configured cap. |
 | `clade` | string | A clade of the unit. **Empty** on the single row recording an arm that thins nothing (a cap at or above every clade's size) — that arm is legitimate, must be byte-identical to the full tree, and would otherwise contribute no rows and be indistinguishable from one never wired. |
 | `gene` | string | Empty on the counts-arm row; a `pcp_genes` entry on the PCP-arm rows. |
 | `included` | bool | Whether the pipeline actually built this pair. |
 | `n_samples_full` | int | Samples in the clade on the whole filtered tree. |
-| `n_samples_arm` | int | `round(sampling_fraction * n_samples_full)` for a `frac` arm, `min(n_samples_full, max_samples)` for a `cap` arm. Asserted against the emitted list. |
+| `n_samples_arm` | int | `min(n_samples_full, max_samples)`. Asserted against the emitted list. |
 | `sample_fraction_realized` | float | `n_samples_arm / n_samples_full`. |
 | `n_nt_mutations_full`, `n_nt_mutations_arm` | int | Nucleotide mutations over all branches, pre-QC. Counts-arm rows only (genome-wide). |
 | `nt_mutation_retention` | float | The measured evidence cut. Always ≥ `sample_fraction_realized`. |
@@ -215,9 +209,9 @@ The roster for the above: one row per (arm, clade) with `gene` empty for the cou
 
 **Why this file exists.** A unit clade thinned below `min_clade_size` is skipped at DAG-construction time and contributes no files, so in the output tree alone it is indistinguishable from a wiring mistake — the same problem `glm/era_fit_summary.csv` solves for empty eras and `pcps/cutoff_summary.csv` for absent cutoff clades. `included` comes from the Snakefile function that drove the fan-out, not from a second evaluation of the sizing arithmetic, and the two are reconciled **in both directions**, raising on either kind of disagreement.
 
-**Two thresholds, different in kind.** A clade thinned below `min_clade_size` is *excluded and recorded*. A clade thinned to **zero** samples is a **hard failure** at DAG construction, because `matUtils extract -s` on an empty sample list is undefined.
+**Two thresholds, different in kind.** A clade thinned below `min_clade_size` is *excluded and recorded* — reachable exactly when `min_clade_size > max_samples`. A draw of **zero** samples is a **hard failure** at DAG construction, because `matUtils extract -s` on an empty sample list is undefined; no accepted config can produce one (`max_samples >= 1` is validated and membership requires `n > cap`), so the check is defence in depth against a crash inside `matUtils` that nothing above it could attribute to clade size.
 
-**Do not key an analysis to the configured depth.** `sample_fraction_realized` and `nt_mutation_retention` are the measured quantities, and for a `cap` arm the configured depth is not even a fraction — the effective fraction differs per clade by construction, which is the point of a cap.
+**Do not key an analysis to the configured cap.** `sample_fraction_realized` and `nt_mutation_retention` are the measured quantities, and the cap is not a fraction at all — the effective fraction differs per clade by construction, which is the point of a cap.
 
 ### `mutation_counts/branch_qc/{clade}.csv` and `pcps/{gene}/branch_qc/{clade}.csv` (v12+)
 
@@ -240,7 +234,7 @@ per `(arm, clade, estimator, population)`.
 
 | Column | Description |
 |---|---|
-| `arm`, `kind`, `unit`, `seed`, `sampling_fraction`, `max_samples` | The arm and the entry that produced it |
+| `arm`, `seed`, `max_samples` | The arm and the entry that produced it |
 | `clade` | The clade being compared |
 | `thinned` | `True` if this arm thinned this clade; `False` rows are **controls** and must reproduce full depth exactly |
 | `estimator` | `delta_fitness_ratio` or `delta_fitness_bayesian`, never pooled |
@@ -280,9 +274,9 @@ observed, and those rows do not depend on sampling depth.
 
 **`pearson_r` is never sufficient on its own.** It is invariant to any linear
 transform of the arm's estimates, so it can see neither the bias nor the
-compression. On the completed fraction arms 21J's `regression_slope` falls to
-0.477 at `p = 0.01` while `pearson_r` still reads 0.765, and 21I's to 0.217 at
-0.601.
+compression. At `cap_5000_0` on the v12 gisaid tree 21J's `regression_slope` is
+**0.117** while `pearson_r` still reads 0.431, and `sd_arm` falls from 1.77 to
+0.48 — an 8.5x compression that r prices at a halving.
 
 ## Fitness Estimates
 

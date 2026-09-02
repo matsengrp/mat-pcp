@@ -239,9 +239,9 @@ def _(mo, os, output_dir):
     mo.stop(
         not cap_arms,
         mo.md(
-            f"**No `cap_*` arm directories under `{aa_dir}`.** This notebook "
-            "covers the cap kind only; `notebooks/subsample_correlations.py` "
-            "covers both kinds."
+            f"**No `cap_*` arm directories under `{aa_dir}`.** Arms are "
+            "launched by naming their paths; see "
+            "`config/overlay-subsample-cap.yaml`."
         ),
     )
 

@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 """Record what each subsampling arm actually retained (#151).
 
-An arm is either a ``frac`` arm (one sampling fraction over a named unit of
-clades) or a ``cap`` arm (every clade above ``max_samples`` thinned down to it,
-smaller clades untouched). Both are reported here in one table: ``kind`` says
-which, and ``sampling_fraction`` / ``max_samples`` carry the configured depth
-with the inapplicable one blank. **Neither is the number to key an analysis
-to** -- ``sample_fraction_realized`` and ``nt_mutation_retention`` are, for the
-reason immediately below, and for a cap arm the configured depth is not even a
-fraction.
+An arm thins every clade above ``max_samples`` down to it and leaves smaller
+clades untouched, so one arm delivers a different effective depth per clade.
+``max_samples`` carries the configured cap, and **it is not the number to key an
+analysis to** -- ``sample_fraction_realized`` and ``nt_mutation_retention`` are,
+for the reason immediately below. There are only cap arms; the ``kind``,
+``unit`` and ``sampling_fraction`` columns of an earlier revision went with the
+fraction arms they existed to distinguish.
 
-A nominal sampling fraction is **not** an evidence cut. A branch survives
-whenever *any* sample below it is retained, so retention of mutations runs well
-above the fraction of samples drawn -- on the v11 gisaid tree, 1% of 21J's
-samples keeps 4.10% of its nucleotide mutations and 10% keeps 22.2%, a curve
-that is concave rather than proportional. Every correlation computed downstream
-therefore has to be keyed to *measured* evidence, which is what this table is
-for.
+A nominal cut is **not** an evidence cut. A branch survives whenever *any*
+sample below it is retained, so retention of mutations runs well above the
+fraction of samples drawn -- on the v11 gisaid tree, 1% of 21J's samples keeps
+4.10% of its nucleotide mutations and 10% keeps 22.2%, a curve that is concave
+rather than proportional. Every correlation computed downstream therefore has to
+be keyed to *measured* evidence, which is what this table is for.
 
 It is also the auditable-absence half of the deliverable. A unit clade thinned
 below ``min_clade_size`` contributes zero files, and in the output tree alone
@@ -34,9 +32,8 @@ failure this file exists to expose. Requested-but-absent and
 present-but-not-requested both raise.
 
 *The draw against the file it was drawn from.* ``n_samples_arm`` is asserted
-against ``retained_for_spec`` -- ``round(frac * n_full)`` for a frac arm,
-``min(n_full, cap)`` for a cap arm -- computed against the **sample files**, not
-against the clade-counts checkpoint the DAG used. The two can disagree: the
+against ``retained_count`` -- ``min(n_full, cap)`` -- computed against the
+**sample files**, not against the clade-counts checkpoint the DAG used. The two can disagree: the
 checkpoint keys on the metadata clade column's first whitespace-delimited token
 while ``samples_by_clade`` matches with ``^clade( |$)``, so a divergence would
 silently produce an arm at a slightly different depth than the one recorded.
@@ -82,10 +79,7 @@ PCP_REASONS = COUNTS_REASONS + [
 
 COLUMNS = [
     "arm",
-    "kind",
-    "unit",
     "seed",
-    "sampling_fraction",
     "max_samples",
     "clade",
     "gene",
@@ -202,13 +196,10 @@ for arm in sorted(roster):
     # a fan-out that declined a clade the rule approves, which is the failure
     # this file exists to expose.
     unit = list(spec["unit"])
-    kind = subsample.spec_kind(spec)
-    frac = spec["frac"]
-    cap = spec["cap"]
+    cap = int(spec["cap"])
     seed = int(spec["seed"])
     included = set(spec["included"])
     excluded = set(spec["excluded"])
-    unit_label = spec.get("unit_label", "-".join(unit))
     depth = subsample.depth_label(spec)
 
     if included | excluded != set(unit):
@@ -218,9 +209,9 @@ for arm in sorted(roster):
         )
 
     if not unit:
-        # An arm that thins nothing -- a cap at or above every clade's size, the
-        # cap analogue of ``sampling_fractions: [1.0]``. It is a legitimate
-        # configuration and its outputs must byte-equal the full tree's, so it
+        # An arm that thins nothing -- a cap at or above every clade's size.
+        # It is a legitimate configuration, the degenerate arm, and its outputs
+        # must byte-equal the full tree's, so it
         # gets a row naming it with an **empty clade**: with no row at all the
         # arm would be absent from this table entirely, which is precisely the
         # "thinned away vs never wired" ambiguity the roster exists to remove.
@@ -236,11 +227,8 @@ for arm in sorted(roster):
         log(f"{arm}: thins no clade ({depth}); every clade is a control")
         rows.append({
             "arm": arm,
-            "kind": kind,
-            "unit": unit_label,
             "seed": seed,
-            "sampling_fraction": "" if frac is None else frac,
-            "max_samples": "" if cap is None else int(cap),
+            "max_samples": cap,
             "clade": "",
             "gene": "",
             "included": False,
@@ -277,18 +265,15 @@ for arm in sorted(roster):
 
         base = {
             "arm": arm,
-            "kind": kind,
-            "unit": unit_label,
             "seed": seed,
-            "sampling_fraction": "" if frac is None else frac,
-            "max_samples": "" if cap is None else int(cap),
+            "max_samples": cap,
             "clade": clade,
             "included": is_included,
             "n_samples_full": n_full,
         }
 
         if not is_included:
-            expected = subsample.retained_for_spec(n_full, spec)
+            expected = subsample.retained_count(n_full, cap)
             log(
                 f"{arm}/{clade}: excluded -- {depth} of {n_full} = {expected}, "
                 f"against min_clade_size {min_clade_size}"
@@ -304,16 +289,16 @@ for arm in sorted(roster):
             continue
 
         n_arm = n_lines(arm_samples_path)
-        expected = subsample.retained_for_spec(n_full, spec)
+        expected = subsample.retained_count(n_full, cap)
         if n_arm != expected:
             problems.append(
                 f"arm {arm}, clade {clade}: drew {n_arm} samples, expected "
                 f"{depth} of {n_full} = {expected}"
             )
-        # A cap arm must not carry a clade at or below its cap: such a clade is
+        # An arm must not carry a clade at or below its cap: such a clade is
         # untouched, so an arm directory holding it would claim a thinning that
         # did not happen and its "control" rows would silently become arm rows.
-        if kind == subsample.KIND_CAP and n_full <= int(cap):
+        if n_full <= cap:
             problems.append(
                 f"arm {arm}, clade {clade}: cap {cap} but the clade has only "
                 f"{n_full} samples, so it is not thinned and must not appear in "
@@ -339,13 +324,12 @@ for arm in sorted(roster):
         # slight over-prediction. What the number supports is "a same-signed
         # deviation of many sd at two independent seeds indicates a bug".
         n_nodes, k_nodes = node_table(outdir, clade)
-        # ``p`` is the *realized* fraction, not the configured one. The draw is
-        # fixed-size ``round(frac * n)``, so the effective per-sample retention
-        # probability is ``n_arm / n_full`` -- 4/7 rather than 0.5 for a
-        # seven-sample clade at 0.5. The two agree to many digits at production
-        # clade sizes and differ by 14% at CI sizes, so using the configured
-        # value would make the comparison look biased on exactly the data where
-        # it is cheap to check.
+        # ``p`` is the *realized* per-sample retention, not anything read off
+        # the config. The draw is fixed-size ``min(n, cap)``, so the effective
+        # probability is ``n_arm / n_full`` -- 0.0115 for 21J capped from
+        # 4,344,573 to 50,000. A cap has no nominal fraction to substitute here
+        # at all, which is the point: every retention number in this table is
+        # measured.
         predicted, predicted_sd = subsample.expected_mutation_retention(
             n_nodes, k_nodes, n_arm / n_full
         )

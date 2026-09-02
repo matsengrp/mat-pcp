@@ -9,13 +9,14 @@ second implementation agreeing on ``19A`` and disagreeing on exactly the values
 the regex exists for, with both results looking like plausible clade rosters
 (#149's observation, one axis over).
 
-The draw preserves the input file's order, so ``sampling_fractions: [1.0]``
-reproduces the input byte-for-byte and every output below the arm is byte-equal
-to the full tree's.
+The draw preserves the input file's order, so an arm's list is a
+**subsequence** of the full tree's rather than a permutation of a subset. Note
+what that does *not* buy: a clade at or below the cap never reaches this script
+at all -- the membership check below raises -- because an untouched clade is a
+control by reading the full tree's file, not by having a copy of it drawn here.
 
-**Membership is decided from the sample list, not from a param.** A ``frac``
-arm's unit is named in the config and checked directly; a ``cap`` arm's is
-derived (``n_clade > max_samples``), and the number this script would need to
+**Membership is decided from the sample list, not from a param.** An arm's unit
+is derived (``n_clade > max_samples``), and the number this script would need to
 re-derive it -- the clade's full sample count -- is exactly what it has just
 read. Applying the predicate to the file rather than to a resolved list keeps
 the sampler independent of the ``get_clades`` checkpoint (resolving one inside
@@ -44,8 +45,8 @@ output_path = snakemake.output.samples
 clade = snakemake.wildcards.clade
 arm = snakemake.wildcards.arm
 spec = dict(snakemake.params.spec)
-kind = subsample.spec_kind(spec)
 seed = int(spec["seed"])
+cap = int(spec["cap"])
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -58,42 +59,23 @@ def log(msg):
 
 with open(full_samples_path) as f:
     # Keep the lines verbatim, including any trailing whitespace the upstream
-    # awk emitted: the degenerate arm's promise is byte-equality, and stripping
-    # then re-joining would quietly normalize a file it claims to reproduce.
+    # awk emitted. Stripping and re-joining would quietly normalize the sample
+    # names, which are the join key every downstream comparison against full
+    # depth uses.
     samples = f.read().split("\n")
 
 trailing_newline = samples and samples[-1] == ""
 if trailing_newline:
     samples = samples[:-1]
 
-# Defensive, both kinds: a clade the arm does not thin reaching here means a
-# fan-out routed an untouched clade through the sampler.
-if kind == subsample.KIND_CAP:
-    cap = int(spec["cap"])
-    if len(samples) <= cap:
-        raise ValueError(
-            f"Arm {arm!r} was asked to subsample clade {clade!r}, which has "
-            f"{len(samples)} samples -- at or below the cap of {cap}, so it is "
-            f"not one of this arm's clades. A clade at or below the cap is "
-            f"untouched and reads the full tree's files unchanged; writing a "
-            f"copy here would make the arm directory claim a clade it did not "
-            f"thin."
-        )
-else:
-    unit = list(spec["unit"])
-    if clade not in unit:
-        raise ValueError(
-            f"Arm {arm!r} was asked to subsample clade {clade!r}, which is not "
-            f"in its unit {unit}. Only unit clades are thinned; every other "
-            f"clade reads the full tree's files unchanged."
-        )
-
-log(
-    f"Arm {arm} ({subsample.depth_label(spec)}): clade {clade}, seed {seed}, "
-    f"unit {subsample.unit_label(spec)}"
-)
+log(f"Arm {arm} ({subsample.depth_label(spec)}): clade {clade}, seed {seed}")
 log(f"Read {len(samples)} samples from {full_samples_path}")
 
+# Emptiness is checked *before* membership, and the order is load-bearing. Every
+# cap is >= 1, so an empty list is also at or below the cap and would otherwise
+# be reported as "this clade is not one of the arm's" -- true but not the
+# problem. An empty list means the clade extraction disagrees with the
+# checkpoint, which is a different bug with a different owner.
 if not samples:
     raise ValueError(
         f"{full_samples_path} is empty, so clade {clade!r} has nothing to "
@@ -102,7 +84,19 @@ if not samples:
         f"extraction disagrees with the checkpoint."
     )
 
-drawn = subsample.select_for_spec(samples, spec, clade)
+# Defensive: a clade the arm does not thin reaching here means a fan-out routed
+# an untouched clade through the sampler.
+if len(samples) <= cap:
+    raise ValueError(
+        f"Arm {arm!r} was asked to subsample clade {clade!r}, which has "
+        f"{len(samples)} samples -- at or below the cap of {cap}, so it is "
+        f"not one of this arm's clades. A clade at or below the cap is "
+        f"untouched and reads the full tree's files unchanged; writing a "
+        f"copy here would make the arm directory claim a clade it did not "
+        f"thin."
+    )
+
+drawn = subsample.select_cap(samples, cap, seed, clade)
 log(
     f"Retained {len(drawn)} of {len(samples)} samples "
     f"({subsample.depth_label(spec)})"

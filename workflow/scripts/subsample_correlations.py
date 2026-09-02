@@ -29,12 +29,13 @@ makes the population a set of mutations there is evidence *about*.
 
 *r cannot see bias or compression, so it is never reported alone.* Pearson r is
 invariant to any linear transform of the arm's estimates, so a systematic shift
-and a systematic shrinkage are both invisible to it. On the completed fraction
-arms 21J's regression slope falls to 0.477 at p=0.01 while r still reads 0.765,
-and 21I's to 0.217 at r=0.601 -- the arms shrink fitness effects toward zero as
-evidence thins, which is what the pseudocount does to a mutation whose
-observations vanished. ``rmse``, ``bias``, ``regression_slope`` and the two
-standard deviations are reported beside every coefficient for that reason.
+and a systematic shrinkage are both invisible to it. At ``cap_5000_0`` on the
+v12 gisaid tree 21J's regression slope is **0.117** while r still reads 0.431,
+and its estimates' sd falls from 1.77 to 0.48 -- an 8.5x compression that r
+prices at a halving. The arms shrink fitness effects toward zero as evidence
+thins, which is what the pseudocount does to a mutation whose observations
+vanished. ``rmse``, ``bias``, ``regression_slope`` and the two standard
+deviations are reported beside every coefficient for that reason.
 
 *What thinning costs is measured as a fraction of observed counts, not of
 distinct mutations.* ``count_fraction = sum(actual_count_arm) /
@@ -83,9 +84,9 @@ its grid but thins only its unit, so a clade the arm does not thin must come out
 **identical** to full depth. Reporting those rows with ``thinned=False`` turns
 the table into its own check: a control clade with rmse > 0 means the arm leaked
 into a clade it was never meant to touch, which is the fan-out bug this feature
-had to fix once already. For a ``cap`` arm the controls are the clades at or
-below the cap and cost nothing to obtain, where a ``frac`` arm gets them only by
-leaving clades deliberately unthinned.
+had to fix once already. The controls are the clades at or below the cap, so
+they cost nothing to obtain and cannot be chosen -- they fall out of the arm's
+definition rather than being clades someone remembered to leave alone.
 
 Spearman is computed as Pearson-on-ranks rather than via ``pandas``' ``method=
 "spearman"``, which imports ``scipy`` -- absent from this environment.
@@ -121,11 +122,8 @@ ESTIMATORS = ["delta_fitness_ratio", "delta_fitness_bayesian"]
 
 COLUMNS = [
     "arm",
-    "kind",
-    "unit",
     "seed",
     "clade",
-    "sampling_fraction",
     "max_samples",
     "thinned",
     "estimator",
@@ -238,13 +236,10 @@ n_thinned_compared = 0
 
 for arm in sorted(roster):
     spec = roster[arm]
-    kind = subsample.spec_kind(spec)
     unit = set(spec["unit"])
     included = set(spec["included"])
     seed = int(spec["seed"])
-    frac = spec["frac"]
-    cap = spec["cap"]
-    unit_label = spec.get("unit_label", "-".join(sorted(unit)))
+    cap = int(spec["cap"])
 
     arm_fitness_dir = os.path.join(outdir, "aamut_fitness", arm)
     if not os.path.isdir(arm_fitness_dir):
@@ -323,12 +318,9 @@ for arm in sorted(roster):
 
         base = {
             "arm": arm,
-            "kind": kind,
-            "unit": unit_label,
             "seed": seed,
             "clade": clade,
-            "sampling_fraction": "" if frac is None else frac,
-            "max_samples": "" if cap is None else int(cap),
+            "max_samples": cap,
             "thinned": thinned,
             "n_ground_truth": n_ground_truth,
             "sum_actual_full": int(sum_actual_full),

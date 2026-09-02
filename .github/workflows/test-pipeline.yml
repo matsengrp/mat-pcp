@@ -310,7 +310,17 @@ jobs:
     # step it would rot unnoticed until someone opened it.
     - name: Validate the subsampling analysis notebook
       run: |
-        pixi run marimo check --strict notebooks/subsample_correlations.py
+        found=0
+        for nb in notebooks/*.py; do
+          [ -e "$nb" ] || continue
+          found=$((found + 1))
+          pixi run marimo check --strict "$nb"
+        done
+        if [ "$found" -eq 0 ]; then
+          echo "No notebooks/*.py matched -- the glob or the layout changed."
+          exit 1
+        fi
+        echo "Checked $found notebook(s)."
 
     - name: Validate Snakefile syntax
       run: |

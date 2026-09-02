@@ -1699,12 +1699,11 @@ def validate_subsample_arms(output_dir):
 
     **An arm's samples are a subset of the clade's, of exactly the right size.**
     Set containment over the emitted lists, no duplicates, and the retained
-    count against the arm's own kind -- ``round(frac * n_full)`` for a fraction
-    arm, ``min(n_full, max_samples)`` for a cap arm. This is check 1 of the
-    issue, and it is the only statement that the sampler drew from the list it
-    was pointed at.
+    count against ``min(n_full, max_samples)``. This is check 1 of the issue,
+    and it is the only statement that the sampler drew from the list it was
+    pointed at.
 
-    **A cap arm carries only clades strictly above its cap.** A clade at or
+    **An arm carries only clades strictly above its cap.** A clade at or
     below the cap is untouched, so an arm directory holding it would claim a
     thinning that did not happen and would turn one of the arm's own controls
     into an arm row. An arm that thins *nothing* (a cap at or above every
@@ -1752,7 +1751,7 @@ def validate_subsample_arms(output_dir):
     diffs = []
     summary = pd.read_csv(summary_path)
     expected_cols = {
-        "arm", "kind", "unit", "seed", "sampling_fraction", "max_samples",
+        "arm", "seed", "max_samples",
         "clade", "gene", "included",
         "n_samples_full", "n_samples_arm", "sample_fraction_realized",
         "n_nt_mutations_full", "n_nt_mutations_arm", "nt_mutation_retention",
@@ -1784,11 +1783,10 @@ def validate_subsample_arms(output_dir):
     excluding_arms = set()
 
     for arm, arm_rows in roster.groupby("arm"):
-        kind = str(arm_rows["kind"].iloc[0])
-        # The unit is the set of clades the summary named for this arm, not the
-        # ``unit`` *label*: a cap arm's label is "all" because its unit is
-        # derived and would otherwise be a 200-character cell that changes with
-        # the tree. For a fraction arm the label is still cross-checked below.
+        # The unit is the set of clades the summary named for this arm. There is
+        # no configured unit to cross-check it against: membership is derived
+        # from the tree's clade sizes, which is why the summary records the
+        # resolved list the fan-out actually used.
         unit = sorted(
             {str(c) for c in arm_rows["clade"] if str(c) and str(c) != "nan"}
         )
@@ -1805,14 +1803,6 @@ def validate_subsample_arms(output_dir):
                 )
             degenerate_arms.append(arm)
             continue
-
-        if kind == "frac":
-            label = sorted(set(str(arm_rows["unit"].iloc[0]).split("-")))
-            if label != unit:
-                diffs.append(
-                    f"{arm}: the unit label {label} disagrees with the clades "
-                    f"the summary rostered {unit}"
-                )
 
         for _, row in arm_rows.iterrows():
             clade = str(row["clade"])
@@ -1863,23 +1853,18 @@ def validate_subsample_arms(output_dir):
             if len(set(drawn)) != len(drawn):
                 diffs.append(f"{arm}/{clade}: the drawn list has duplicates")
 
-            if kind == "cap":
-                cap = int(row["max_samples"])
-                expected_n = min(len(full), cap)
-                how = f"min({len(full)}, {cap})"
-                # Strictly above the cap: a clade at or below it is untouched,
-                # so its presence here means the arm claimed a clade it did not
-                # thin -- and that clade is no longer a control.
-                if len(full) <= cap:
-                    diffs.append(
-                        f"{arm}/{clade}: cap {cap} but the clade has only "
-                        f"{len(full)} samples, so it is not thinned and must "
-                        f"not appear in the arm"
-                    )
-            else:
-                frac = float(row["sampling_fraction"])
-                expected_n = int(round(frac * len(full)))
-                how = f"round({frac} * {len(full)})"
+            cap = int(row["max_samples"])
+            expected_n = min(len(full), cap)
+            how = f"min({len(full)}, {cap})"
+            # Strictly above the cap: a clade at or below it is untouched, so
+            # its presence here means the arm claimed a clade it did not thin --
+            # and that clade is no longer a control.
+            if len(full) <= cap:
+                diffs.append(
+                    f"{arm}/{clade}: cap {cap} but the clade has only "
+                    f"{len(full)} samples, so it is not thinned and must "
+                    f"not appear in the arm"
+                )
             if len(drawn) != expected_n:
                 diffs.append(
                     f"{arm}/{clade}: drew {len(drawn)} samples, expected "
@@ -2017,7 +2002,7 @@ def validate_subsample_arms(output_dir):
     # check 5 just established are invariant to sampling depth. So
     # `K = sum(expected) / sum(actual)` over each clade's synonymous training
     # rows is a property of the grid and the shared rates alone, and must not
-    # move with the sampling fraction. It is asserted per clade rather than
+    # move with the cap. It is asserted per clade rather than
     # pooled: pooling lets one clade's K rise while another's falls.
     #
     # This is what makes an arm's fitness effects comparable to full depth at

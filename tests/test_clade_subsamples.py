@@ -10,29 +10,37 @@ module, so a test that patched script text would report the guard as covered
 while the code it guards sat one file away (CLAUDE.md pattern 14's observation,
 one axis over).
 
-**What a pipeline run cannot check, and this file therefore must.**
+**What a pipeline run cannot check, and this file therefore must.** No shipped
+production config sets ``clade_subsamples`` at all, and the CI config's clades
+(19A at 2 samples, 19B at 5, 20A at 46) are far too small for the shipped caps
+of 50000/20000/5000 to touch anything, so every property below is unreachable
+from a production run and most are unreachable from CI too.
 
-*Order preservation is invisible on the test data.* The degenerate arm's
-byte-equality is what proves the subsampling machinery left the ordinary path
-alone, and it rests on the draw preserving the input file's order. But at
-``frac: 1.0`` a sampler that emitted its picks in *draw* order would still emit
-the same set, and no count, no roster and no row total would move -- only the
-file's bytes would, and CI byte-compares only that one arm. The fixture here
-uses a fraction where draw order and file order differ observably.
+*Order preservation is invisible end-to-end.*
+``validate_subsample_arms`` asserts set containment and the retained count, both
+of which a reordering leaves intact, so a sampler that sorted its output -- or
+emitted its picks in draw order -- passes every pipeline check. The fixture's
+seven samples are therefore deliberately unsorted and the draw is partial, so
+file order and draw order differ observably.
 
-*Banker's rounding is unobservable at the CI clade sizes.* ``round(frac * n)``
-and ``floor(frac * n)`` agree for 19B at 0.2 (1 either way) and for 20A at 0.5
-(23 either way), so a sampler using either passes CI. The fixture uses ``n=7``
-at ``0.5``, where ``round`` gives 4 and ``floor`` gives 3.
+*The membership boundary is unreachable in CI.* Membership is ``n > cap``
+strictly, and the difference from ``n >= cap`` shows only for a clade of exactly
+``cap`` samples. No CI clade has 1000 or 20 samples, so a widened predicate
+moves nothing there; the fixture caps at exactly ``len(FULL_SAMPLES)``.
 
-*Trailing-zero arm collisions cannot arise from a shipped config.* YAML parses
-``0.10`` as ``0.1``, so ``str(frac)`` would name two arms identically -- but no
-config carries both spellings, so the collision is unreachable end-to-end.
+*An empty draw is a hard failure and a below-``min_clade_size`` draw is an
+exclusion, and CI reaches neither.* ``validate_entries`` forces ``cap >= 1`` and
+``resolve_unit`` admits only ``n > cap``, so no accepted config can produce an
+empty draw -- the guard is defence in depth against the failure that would
+otherwise surface as a crash inside ``matUtils`` with nothing able to attribute
+it to clade size (#149's SIGSEGV, one axis over). The exclusion needs
+``min_clade_size > cap``, which no config sets.
 
-*A zero-sample draw is a hard failure and a below-``min_clade_size`` draw is an
-exclusion, and CI reaches only the second.* ``config_test_data.yaml``'s smallest
-arm retains 1 sample, so nothing exercises the ``matUtils extract -s`` on an
-empty list case -- the same latent shape #149 hit with its own floor.
+*The removed fraction keys cannot be rejected by any shipped config, because
+none carries them.* ``sampling_fractions`` and ``unit`` belonged to the fraction
+arms and are refused **by name** so that a config written against them says
+what happened rather than failing as an unknown-key schema error. Nothing
+end-to-end exercises that path.
 
 Hermetic: synthetic sample lists and a synthetic output tree. Nothing reads a
 pipeline output.
@@ -128,10 +136,10 @@ def _mutated_workflow(tmp, edits):
 # Fixture
 # ---------------------------------------------------------------------------
 #
-# Seven samples, deliberately NOT in sorted order: ``select_subsample`` must
-# return them in *this* order, so a sampler that sorted its output -- or emitted
-# picks in draw order -- is caught. Seven at 0.5 is also where banker's rounding
-# bites: round(3.5) == 4 while floor(3.5) == 3.
+# Seven samples, deliberately NOT in sorted order: ``select_cap`` must return
+# them in *this* order, so a sampler that sorted its output -- or emitted picks
+# in draw order -- is caught. Seven is also one more than any cap used below, so
+# every draw is partial and the ordering is observable.
 FULL_SAMPLES = [
     "zeta/2021",
     "alpha/2020",
@@ -141,9 +149,12 @@ FULL_SAMPLES = [
     "gamma/2021",
     "delta/2021",
 ]
-UNIT = ["20A"]
 CLADE = "20A"
 SEED = 0
+# The cap used by every fixture below. Four of seven, so the draw is partial --
+# which is what makes order preservation and subset containment observable at
+# all -- and it is what ``_write_summary_fixture``'s ``n_arm`` default matches.
+CAP = 4
 
 
 def _write_samples(path, samples, trailing_newline=True):
@@ -151,24 +162,8 @@ def _write_samples(path, samples, trailing_newline=True):
     path.write_text("\n".join(samples) + ("\n" if trailing_newline else ""))
 
 
-def frac_spec(frac, unit=None):
-    return {
-        "kind": subsample.KIND_FRAC,
-        "unit": list(UNIT if unit is None else unit),
-        "seed": SEED,
-        "frac": frac,
-        "cap": None,
-    }
-
-
 def cap_spec(cap, seed=SEED):
-    return {
-        "kind": subsample.KIND_CAP,
-        "unit": None,
-        "seed": seed,
-        "frac": None,
-        "cap": cap,
-    }
+    return {"seed": seed, "cap": cap}
 
 
 def _run_draw_spec(tmp, spec, arm, clade=CLADE, scripts_dir=None,
@@ -192,26 +187,12 @@ def _run_draw_spec(tmp, spec, arm, clade=CLADE, scripts_dir=None,
     return out
 
 
-def run_draw(tmp, frac, clade=CLADE, unit=None, scripts_dir=None,
-             samples=None, trailing_newline=True):
-    unit = UNIT if unit is None else unit
-    return _run_draw_spec(
-        tmp,
-        frac_spec(frac, unit),
-        subsample.arm_name(unit, SEED, frac),
-        clade=clade,
-        scripts_dir=scripts_dir,
-        samples=samples,
-        trailing_newline=trailing_newline,
-    )
-
-
 def run_cap_draw(tmp, cap, clade=CLADE, scripts_dir=None, samples=None,
                  trailing_newline=True, seed=SEED):
     return _run_draw_spec(
         tmp,
         cap_spec(cap, seed),
-        subsample.cap_arm_name(cap, seed),
+        subsample.arm_name(cap, seed),
         clade=clade,
         scripts_dir=scripts_dir,
         samples=samples,
@@ -222,42 +203,40 @@ def run_cap_draw(tmp, cap, clade=CLADE, scripts_dir=None, samples=None,
 # ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
+def check_a_cap_at_or_above_the_size_returns_the_list_verbatim():
+    """``select_cap`` at or above ``len(samples)`` returns the list unchanged.
 
-
-def check_degenerate_arm_reproduces_the_input_byte_for_byte():
-    """``sampling_fractions: [1.0]`` must emit the input file verbatim.
-
-    This is the only end-to-end evidence that the arm machinery did not perturb
-    the ordinary path: every output below a degenerate arm inherits the identity
-    from this file.
+    Unreachable through the pipeline -- ``resolve_unit`` admits a clade only
+    when ``n > cap`` and the sampler raises if an untouched one arrives anyway
+    -- so this exercises the library invariant directly. It is what makes
+    "a clade at or below the cap is not thinned" a property of the draw rather
+    than only of the fan-out, and it is the one place a future sampler that
+    drew every index instead of returning early would be caught.
     """
     failures = []
-    with tempfile.TemporaryDirectory() as tmp:
-        out = run_draw(tmp, 1.0)
-        full = Path(tmp) / "mat" / "clades" / f"{CLADE}_samples.txt"
-        if out.read_bytes() != full.read_bytes():
+    n = len(FULL_SAMPLES)
+    for cap in (n, n + 1, n * 10):
+        got = subsample.select_cap(FULL_SAMPLES, cap, SEED, CLADE)
+        if got != FULL_SAMPLES:
             failures.append(
-                "degenerate arm (frac=1.0) is not byte-identical to its input:\n"
-                f"  full: {full.read_bytes()!r}\n  arm:  {out.read_bytes()!r}"
-            )
-    # And with no trailing newline, so the round-trip is not merely tolerant of
-    # one particular ending.
-    with tempfile.TemporaryDirectory() as tmp:
-        out = run_draw(tmp, 1.0, trailing_newline=False)
-        full = Path(tmp) / "mat" / "clades" / f"{CLADE}_samples.txt"
-        if out.read_bytes() != full.read_bytes():
-            failures.append(
-                "degenerate arm is not byte-identical when the input has no "
-                "trailing newline"
+                f"cap {cap} over {n} samples returned {got}, expected the "
+                f"input list verbatim"
             )
     return failures
 
 
 def check_draw_preserves_file_order():
-    """A partial draw keeps the input's order, not the order it was drawn in."""
+    """A partial draw keeps the input's order, not the order it was drawn in.
+
+    The fixture's seven samples are deliberately unsorted, so a sampler that
+    sorted its output -- or emitted its picks in draw order -- lands in a
+    different order than the input's and is caught. No pipeline run checks
+    this: ``validate_subsample_arms`` asserts set containment and the retained
+    count, both of which a reordering leaves intact.
+    """
     failures = []
     with tempfile.TemporaryDirectory() as tmp:
-        drawn = run_draw(tmp, 0.5).read_text().split("\n")
+        drawn = run_cap_draw(tmp, CAP).read_text().split("\n")
         drawn = [d for d in drawn if d]
         positions = [FULL_SAMPLES.index(d) for d in drawn]
         if positions != sorted(positions):
@@ -268,293 +247,129 @@ def check_draw_preserves_file_order():
             failures.append(f"draw {drawn} is not a subset of the full list")
         if len(set(drawn)) != len(drawn):
             failures.append(f"draw {drawn} contains duplicates")
-        if len(drawn) != 4:
+        if len(drawn) != CAP:
             failures.append(
-                f"draw kept {len(drawn)} samples, expected round(0.5 * 7) = 4"
+                f"draw kept {len(drawn)} samples, expected min(7, {CAP}) = {CAP}"
             )
     return failures
 
 
 def check_emitting_draw_order_is_caught():
-    """Mutation test: drop the sort and the degenerate arm stops matching."""
-    failures = []
-    with tempfile.TemporaryDirectory() as tmp:
-        scripts = _mutated_workflow(
-            tmp,
-            {MODULE_REL: (
-                "idx = np.sort(rng.choice(n, size=k, replace=False))",
-                "idx = rng.choice(n, size=k, replace=False)",
-            )},
-        )
-        out = run_draw(tmp, 1.0, scripts_dir=scripts)
-        full = Path(tmp) / "mat" / "clades" / f"{CLADE}_samples.txt"
-        if out.read_bytes() == full.read_bytes():
-            failures.append(
-                "removing the sort from select_subsample left the degenerate "
-                "arm byte-identical, so the ordering guarantee is untested"
-            )
-    return failures
+    """Mutation test: drop the sort and the emitted order stops matching the file.
 
-
-def check_flooring_instead_of_rounding_is_caught():
-    """Mutation test: ``int()`` for ``round()`` changes the retained count."""
-    failures = []
-    expected = subsample.retained_count(len(FULL_SAMPLES), 0.5)
-    if expected != 4:
-        failures.append(
-            f"fixture no longer distinguishes round from floor: round(0.5 * "
-            f"{len(FULL_SAMPLES)}) = {expected}"
-        )
-    with tempfile.TemporaryDirectory() as tmp:
-        scripts = _mutated_workflow(
-            tmp,
-            {MODULE_REL: (
-                "return int(round(float(frac) * int(n_samples)))",
-                "return int(float(frac) * int(n_samples))",
-            )},
-        )
-        drawn = [d for d in run_draw(tmp, 0.5, scripts_dir=scripts)
-                 .read_text().split("\n") if d]
-        if len(drawn) == expected:
-            failures.append(
-                "flooring instead of rounding produced the same count, so the "
-                "size rule is untested"
-            )
-    return failures
-
-
-def check_draw_is_a_pure_function_of_unit_seed_clade_fraction():
-    """An arm's list cannot move when another fraction is added or removed.
-
-    Otherwise a later config edit silently redefines earlier rungs of the
-    ladder, and every number already computed against them becomes wrong with
-    nothing to attribute it to.
+    Checked over several seeds rather than one. A four-of-seven draw whose
+    indices happen to come out ascending is in file order by luck, so a single
+    seed could leave the mutant looking correct -- the check needs at least one
+    seed where the unsorted draw is observably out of order.
     """
     failures = []
-
-    def digest(fractions):
-        arms = subsample.validate_entries(
-            [{"unit": UNIT, "sampling_fractions": fractions, "seed": SEED}]
+    with tempfile.TemporaryDirectory() as tmp:
+        scripts = _mutated_workflow(
+            tmp,
+            {MODULE_REL: (
+                "idx = np.sort(rng.choice(n, size=cap, replace=False))",
+                "idx = rng.choice(n, size=cap, replace=False)",
+            )},
         )
-        name = subsample.arm_name(UNIT, SEED, 0.5)
-        assert name in arms
-        drawn = subsample.select_subsample(FULL_SAMPLES, 0.5, UNIT, SEED, CLADE)
-        return hashlib.md5("\n".join(drawn).encode()).hexdigest()
-
-    baseline = digest([0.5])
-    for fractions in ([0.5, 0.25], [0.25, 0.5], [1.0, 0.5, 0.25], [0.5]):
-        if digest(fractions) != baseline:
+        reordered = False
+        for seed in range(8):
+            out = run_cap_draw(tmp, CAP, scripts_dir=scripts, seed=seed)
+            drawn = [d for d in out.read_text().split("\n") if d]
+            positions = [FULL_SAMPLES.index(d) for d in drawn]
+            if positions != sorted(positions):
+                reordered = True
+                break
+        if not reordered:
             failures.append(
-                f"the 0.5 arm's draw moved when the entry's fractions were "
-                f"{fractions}"
-            )
-    # A different clade, unit or seed *must* give a different draw, or the
-    # "pure function of the tuple" claim is vacuous. Checked on a list long
-    # enough that a collision is not luck: at 7 samples there are only
-    # C(7, 4) = 35 sorted subsets, so two unrelated seeds coincide routinely.
-    wide = [f"s{i}" for i in range(200)]
-    variants = {
-        "clade": subsample.select_subsample(wide, 0.5, UNIT, SEED, "21J"),
-        "unit": subsample.select_subsample(wide, 0.5, ["21J"], SEED, CLADE),
-        "seed": subsample.select_subsample(wide, 0.5, UNIT, 1, CLADE),
-        "fraction": subsample.select_subsample(wide, 0.25, UNIT, SEED, CLADE),
-    }
-    base_draw = subsample.select_subsample(wide, 0.5, UNIT, SEED, CLADE)
-    for key, draw in variants.items():
-        if draw == base_draw:
-            failures.append(
-                f"changing the {key} did not change the draw, so the seed does "
-                f"not depend on it"
+                "removing the sort from select_cap still emitted every draw in "
+                "file order across 8 seeds, so the ordering guarantee is untested"
             )
     return failures
-
-
 def check_seeding_from_iteration_order_is_caught():
-    """Mutation test: seed from position and the draw stops being stable."""
+    """Mutation test: collapse the RNG key and every clade draws alike.
+
+    ``cap_rng``'s key is a string literal, so a refactor can rewrite it without
+    any assertion noticing -- and a key that dropped the clade would give every
+    clade of a given size the same sample list, which is well-formed and wrong.
+    """
     failures = []
     scripts_edits = {MODULE_REL: (
-        'key = "|".join([ARM_PREFIX, "-".join(unit), str(seed), clade, frac_token(frac)])',
+        'key = "|".join([ARM_PREFIX, cap_token(cap), str(seed), clade])',
         'key = "|".join([ARM_PREFIX, str(seed)])',
     )}
     with tempfile.TemporaryDirectory() as tmp:
         module = _load_mutated(tmp, scripts_edits, "subsample_seedkey")
         wide = [f"s{i}" for i in range(200)]
-        a = module.select_subsample(wide, 0.5, UNIT, SEED, CLADE)
-        b = module.select_subsample(wide, 0.5, ["21J"], SEED, "21J")
-        # Under the mutation the key no longer mentions the clade, unit or
-        # fraction, so every arm draws the same indices. If the two draws still
-        # differ, something *other* than ``arm_rng``'s key is keying the draw
-        # and the purity check above is proving less than it claims.
+        a = module.select_cap(wide, 100, SEED, CLADE)
+        b = module.select_cap(wide, 100, SEED, "21J")
+        # Under the mutation the key no longer mentions the clade or the cap, so
+        # every arm draws the same indices. If the two draws still differ,
+        # something *other* than ``cap_rng``'s key is keying the draw and the
+        # purity check above is proving less than it claims.
         if a != b:
             failures.append(
                 "collapsing the RNG key to the seed alone still gave different "
                 "draws per clade, so something else is seeding the draw"
             )
     return failures
-
-
-def check_trailing_zero_fractions_name_one_arm():
-    """``0.10`` and ``0.1`` are the same fraction and must collide loudly."""
-    failures = []
-    if subsample.arm_name(UNIT, SEED, 0.10) != subsample.arm_name(UNIT, SEED, 0.1):
-        failures.append("0.10 and 0.1 produced different arm names")
-    try:
-        subsample.validate_entries(
-            [
-                {"unit": UNIT, "sampling_fractions": [0.1], "seed": SEED},
-                {"unit": UNIT, "sampling_fractions": [0.10], "seed": SEED},
-            ]
-        )
-        failures.append(
-            "two entries yielding the same arm name did not raise, so one would "
-            "silently overwrite the other's outputs"
-        )
-    except ValueError:
-        pass
-    return failures
-
-
-def check_str_frac_naming_is_caught():
-    """Mutation test: ``str(frac)`` is not a canonical fraction encoding.
-
-    ``frac_token`` exists so that any two float values standing for the same
-    basis-point fraction name the same arm. Float arithmetic does not respect
-    that -- ``0.1 * 0.5`` is ``0.05000000000000001`` -- so under ``str`` a
-    config that computed a fraction rather than writing it out would silently
-    get a *different* arm directory, and its outputs would not join to the ones
-    already computed at that depth.
-    """
-    failures = []
-    computed = 0.1 * 0.5
-    if computed == 0.05:
-        failures.append(
-            "the fixture no longer distinguishes the encodings: 0.1 * 0.5 == "
-            "0.05 exactly on this platform"
-        )
-        return failures
-    if subsample.frac_token(computed) != subsample.frac_token(0.05):
-        failures.append(
-            f"frac_token({computed}) != frac_token(0.05), so equal fractions do "
-            f"not name one arm"
-        )
-    with tempfile.TemporaryDirectory() as tmp:
-        module = _load_mutated(
-            tmp,
-            {MODULE_REL: (
-                'return f"{round(float(frac) * 1e4):d}bp"',
-                "return str(frac)",
-            )},
-            "subsample_strfrac",
-        )
-        if module.frac_token(computed) == module.frac_token(0.05):
-            failures.append(
-                "str(frac) gave the same token for 0.1 * 0.5 and 0.05, so this "
-                "check proves nothing about the encoding"
-            )
-        # And the pinned form must contain no path- or wildcard-hostile
-        # characters, which is the other half of why it is pinned.
-    token = subsample.frac_token(0.05)
-    if not token.isalnum():
-        failures.append(f"frac_token produced a non-alphanumeric token: {token!r}")
-    return failures
-
-
-def check_fraction_range_is_enforced():
-    """A fraction outside ``0 < frac <= 1.0`` raises rather than being clamped."""
-    failures = []
-    for bad in (0.0, -0.1, 1.5, 2):
-        try:
-            subsample.validate_entries(
-                [{"unit": UNIT, "sampling_fractions": [bad], "seed": SEED}]
-            )
-            failures.append(
-                f"sampling fraction {bad} was accepted; a clamped fraction "
-                f"produces a well-formed arm at the wrong depth"
-            )
-        except ValueError:
-            pass
-    for bad in ("0.5", None, True):
-        try:
-            subsample.validate_entries(
-                [{"unit": UNIT, "sampling_fractions": [bad], "seed": SEED}]
-            )
-            failures.append(f"non-numeric sampling fraction {bad!r} was accepted")
-        except ValueError:
-            pass
-    return failures
-
-
-def check_unit_validation():
-    """Unit names must be path-safe, dash-free, unique and known to the tree."""
-    failures = []
-    cases = {
-        "dashed clade": {"unit": ["21J-1"], "sampling_fractions": [0.5]},
-        "empty unit": {"unit": [], "sampling_fractions": [0.5]},
-        "repeated clade": {"unit": ["21J", "21J"], "sampling_fractions": [0.5]},
-        "slash in clade": {"unit": ["21J/x"], "sampling_fractions": [0.5]},
-        "unknown key": {"unit": ["21J"], "sampling_fractions": [0.5], "oops": 1},
-        "non-int seed": {"unit": ["21J"], "sampling_fractions": [0.5], "seed": 0.5},
-    }
-    for label, entry in cases.items():
-        try:
-            subsample.validate_entries([entry])
-            failures.append(f"{label} was accepted: {entry!r}")
-        except ValueError:
-            pass
-    try:
-        subsample.validate_entries(
-            [{"unit": ["21J"], "sampling_fractions": [0.5]}],
-            known_clades={"19A", "20A"},
-        )
-        failures.append(
-            "a unit naming a clade the tree does not process was accepted; that "
-            "clade has no subtree to thin"
-        )
-    except ValueError:
-        pass
-    return failures
-
-
-def check_zero_draw_raises_and_small_draw_is_merely_excluded():
+def check_min_clade_size_excludes_rather_than_raises():
     """The two thresholds are different in kind, and must stay so.
 
-    ``matUtils extract -s`` on an empty sample list is undefined, so a clade
-    thinned to zero is a **hard failure**. ``min_clade_size`` says how big a
-    clade the user wants, so a clade thinned below it is merely **excluded** --
-    and recorded, since an absent directory is otherwise indistinguishable from
-    a wiring mistake.
+    ``matUtils extract -s`` on an empty sample list is undefined, so a draw of
+    zero is a **hard failure**. ``min_clade_size`` says how big a clade the user
+    wants, so a clade thinned below it is merely **excluded** -- and recorded,
+    since an absent directory is otherwise indistinguishable from a wiring
+    mistake. Reachable exactly when ``min_clade_size > cap``, which no shipped
+    config sets.
     """
     failures = []
-    arms = subsample.validate_entries(
-        [{"unit": ["A"], "sampling_fractions": [0.01], "seed": 0}]
-    )
-    try:
-        subsample.check_arm_sizes(arms, {"A": 10}, min_clade_size=0)
-        failures.append(
-            "round(0.01 * 10) = 0 did not raise; matUtils extract -s on an "
-            "empty list is undefined"
-        )
-    except ValueError:
-        pass
-
-    arms = subsample.validate_entries(
-        [{"unit": ["A"], "sampling_fractions": [0.2], "seed": 0}]
-    )
-    kept = subsample.check_arm_sizes(arms, {"A": 10}, min_clade_size=5)
+    arms = subsample.validate_entries([{"max_samples": [2], "seed": 0}])
     arm = next(iter(arms))
+    kept = subsample.check_arm_sizes(arms, {"A": 10}, min_clade_size=5)
     if kept[arm]:
         failures.append(
-            f"round(0.2 * 10) = 2 below min_clade_size 5 was kept: {kept[arm]}"
+            f"cap 2 below min_clade_size 5 was kept: {kept[arm]}"
         )
     kept = subsample.check_arm_sizes(arms, {"A": 10}, min_clade_size=2)
     if kept[arm] != {"A": 2}:
         failures.append(
-            f"round(0.2 * 10) = 2 at min_clade_size 2 should be kept, got "
-            f"{kept[arm]}"
+            f"cap 2 at min_clade_size 2 should be kept, got {kept[arm]}"
         )
+    # A clade at or below the cap is never in the unit, so it is neither kept
+    # nor excluded -- it simply is not this arm's business.
+    kept = subsample.check_arm_sizes(arms, {"A": 2, "B": 1}, min_clade_size=0)
+    if kept[arm] != {}:
+        failures.append(
+            f"clades at or below the cap appeared in the arm: {kept[arm]}"
+        )
+    return failures
+
+
+def check_an_empty_draw_is_a_hard_failure_not_an_exclusion():
+    """A draw of zero raises where a small draw is excluded.
+
+    ``validate_entries`` forces ``cap >= 1`` and ``resolve_unit`` admits only
+    ``n > cap``, so ``check_arm_sizes`` cannot see an empty draw from any
+    accepted config -- the spec here is hand-built to reach the branch. That is
+    the point of keeping it: it is defence in depth for the one failure that
+    would otherwise surface as a crash inside ``matUtils`` with nothing able to
+    attribute it to clade size (#149's SIGSEGV, one axis over).
+    """
+    failures = []
+    arms = {"cap_0_0": {"seed": 0, "cap": 0}}
     try:
-        subsample.check_arm_sizes(arms, {"B": 10})
-        failures.append("a unit clade absent from the clade counts did not raise")
+        subsample.check_arm_sizes(arms, {"A": 10}, min_clade_size=0)
+        failures.append(
+            "a cap of 0 did not raise; matUtils extract -s on an empty list is "
+            "undefined"
+        )
+    except ValueError:
+        pass
+    # And the same via the draw itself, which is the other route to an empty
+    # list reaching matUtils.
+    try:
+        subsample.select_cap(FULL_SAMPLES, 0, SEED, CLADE)
+        failures.append("select_cap at cap 0 did not raise")
     except ValueError:
         pass
     return failures
@@ -573,57 +388,50 @@ def check_treating_a_zero_draw_as_an_exclusion_is_caught():
             )},
             "subsample_demoted",
         )
-        arms = module.validate_entries(
-            [{"unit": ["A"], "sampling_fractions": [0.01], "seed": 0}]
-        )
         try:
-            module.check_arm_sizes(arms, {"A": 10}, min_clade_size=0)
+            module.check_arm_sizes(
+                {"cap_0_0": {"seed": 0, "cap": 0}}, {"A": 10}, min_clade_size=0
+            )
         except ValueError:
             failures.append(
                 "demoting the empty-draw check still raised, so this check "
                 "proves nothing"
             )
     return failures
+def check_an_empty_full_list_raises_about_emptiness():
+    """An empty full list raises, and about the *right* thing.
 
-
-def check_a_non_unit_clade_is_refused_by_the_sampler():
-    """Thinning a clade the config never named must raise, not silently draw.
-
-    ``per_unit_clade_inputs`` routes non-unit clades to the full tree's files,
-    so this can only be reached by a wiring mistake -- and a wiring mistake here
-    produces an arm whose "unchanged" clades are quietly thinned, which nothing
-    downstream can detect.
+    Order matters here rather than merely the fact of raising. Every cap is
+    ``>= 1``, so an empty list is also at or below the cap: if the membership
+    check ran first, an empty list would be reported as "this clade is not one
+    of the arm's" -- true, and the wrong bug. An empty list means the clade
+    extraction disagrees with the checkpoint, which has a different owner.
     """
     failures = []
     with tempfile.TemporaryDirectory() as tmp:
         try:
-            run_draw(tmp, 0.5, clade="19A", unit=["20A"])
-            failures.append(
-                "the sampler thinned 19A for an arm whose unit is ['20A']"
-            )
-        except ValueError:
-            pass
-    return failures
-
-
-def check_an_empty_full_list_raises():
-    """A clade whose full sample list is empty raises rather than writing one."""
-    failures = []
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
-            run_draw(tmp, 0.5, samples=[])
+            # ``trailing_newline=False`` so the file is genuinely 0 bytes,
+            # which is what ``samples_by_clade``'s awk writes for a clade with
+            # no rows. With a trailing newline it would hold one blank line --
+            # a different, malformed input.
+            run_cap_draw(tmp, CAP, samples=[], trailing_newline=False)
             failures.append("an empty full sample list did not raise")
-        except ValueError:
-            pass
+        except ValueError as exc:
+            if "is empty" not in str(exc):
+                failures.append(
+                    f"an empty list raised, but about membership rather than "
+                    f"emptiness: {exc}"
+                )
     return failures
 
 
-def check_retention_exceeds_the_sampling_fraction():
-    """Realized retention runs above nominal, concavely, and is hand-checkable.
+def check_retention_exceeds_the_realized_sample_fraction():
+    """Realized retention runs above the sample fraction, concavely.
 
     A branch survives whenever *any* sample below it is retained, which is why
-    a nominal fraction is not an evidence cut and why every downstream number
-    has to be keyed to the measured retention instead.
+    a nominal cut is not an evidence cut and why every downstream number has to
+    be keyed to measured retention instead. Hand-checkable at the fixture's
+    sizes so the closed form is pinned to arithmetic rather than to itself.
     """
     failures = []
     # Three nodes, two samples and one mutation each, at p = 0.5:
@@ -701,7 +509,7 @@ def _write_summary_fixture(root, arm, n_full=7, n_arm=4, drop_arm_samples=False)
             muts, index=False
         )
         # ``leaves_sharing_mutations`` is the ``n_node`` the closed form needs.
-        # Two samples under each branch, so at p = 4/7 the closed form predicts
+        # Two samples under each branch, so at the realized p = 4/7 it predicts
         # 3 * (1 - (3/7)^2) = 2.4490 of the 3 mutations -- deliberately well
         # above the sample fraction, which is the whole point of the statistic.
         tsv = root / "mutations" / arm_dir / f"{CLADE}_mutations.tsv"
@@ -734,15 +542,19 @@ def run_summary(root, roster, min_clade_size=2, genes=("S",)):
     return pd.read_csv(out)
 
 
-def _roster(arm, frac, included, excluded, n_retained, unit=None, cap=None):
-    unit = UNIT if unit is None else unit
+def _roster(arm, cap, included, excluded, n_retained, unit=None):
+    """The param the Snakefile passes, for one arm over one clade.
+
+    ``unit`` is the *resolved* list the fan-out used, which is what the summary
+    reconciles against the file tree. There is no configured unit to fall back
+    on -- membership is derived from the tree's clade sizes -- so a roster whose
+    unit disagrees with the arm directory is exactly the failure the file exists
+    to expose, and the tests below construct that disagreement deliberately.
+    """
     return {
         arm: {
-            "kind": subsample.KIND_CAP if cap is not None else subsample.KIND_FRAC,
-            "unit": list(unit),
-            "unit_label": "all" if cap is not None else "-".join(unit),
+            "unit": list([CLADE] if unit is None else unit),
             "seed": SEED,
-            "frac": frac,
             "cap": cap,
             "included": included,
             "excluded": excluded,
@@ -754,10 +566,10 @@ def _roster(arm, frac, included, excluded, n_retained, unit=None, cap=None):
 def check_summary_reports_realized_retention():
     """The happy path: one counts row and one per-gene row, ratios measured."""
     failures = []
-    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    arm = subsample.arm_name(CAP, SEED)
     with tempfile.TemporaryDirectory() as tmp:
         _write_summary_fixture(tmp, arm)
-        df = run_summary(tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}))
+        df = run_summary(tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}))
     counts = df[df["gene"].isna() | (df["gene"] == "")]
     genes = df[df["gene"] == "S"]
     if len(counts) != 1 or len(genes) != 1:
@@ -818,10 +630,13 @@ def check_summary_reports_realized_retention():
 def check_summary_records_an_excluded_clade():
     """A clade thinned below ``min_clade_size`` is named with ``included=False``."""
     failures = []
-    arm = subsample.arm_name(UNIT, SEED, 0.2)
+    # cap 1 against min_clade_size 2: min(7, 1) = 1 is below the threshold, so
+    # the clade is declined. cap 2 would be *kept* at that threshold, which is
+    # the boundary the summary raises on -- so the fixture has to sit below it.
+    arm = subsample.arm_name(1, SEED)
     with tempfile.TemporaryDirectory() as tmp:
         _write_summary_fixture(tmp, arm, drop_arm_samples=True)
-        df = run_summary(tmp, _roster(arm, 0.2, [], [CLADE], {}), min_clade_size=2)
+        df = run_summary(tmp, _roster(arm, 1, [], [CLADE], {}), min_clade_size=2)
     if len(df) != 1:
         failures.append(f"expected exactly one row for an excluded clade, got {len(df)}")
         return failures
@@ -830,7 +645,7 @@ def check_summary_records_an_excluded_clade():
         failures.append("an excluded clade was recorded as included")
     if int(row["n_samples_arm"]) != 1:
         failures.append(
-            f"expected round(0.2 * 7) = 1 recorded for the excluded clade, got "
+            f"expected min(7, 1) = 1 recorded for the excluded clade, got "
             f"{row['n_samples_arm']}"
         )
     return failures
@@ -839,12 +654,12 @@ def check_summary_records_an_excluded_clade():
 def check_summary_reconciles_in_both_directions():
     """Requested-but-absent and present-but-declined both raise."""
     failures = []
-    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    arm = subsample.arm_name(CAP, SEED)
 
     with tempfile.TemporaryDirectory() as tmp:
         _write_summary_fixture(tmp, arm, drop_arm_samples=True)
         try:
-            run_summary(tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}))
+            run_summary(tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}))
             failures.append(
                 "a clade the roster says is included, with no sample list on "
                 "disk, did not raise"
@@ -855,7 +670,7 @@ def check_summary_reconciles_in_both_directions():
     with tempfile.TemporaryDirectory() as tmp:
         _write_summary_fixture(tmp, arm)
         try:
-            run_summary(tmp, _roster(arm, 0.5, [], [CLADE], {}))
+            run_summary(tmp, _roster(arm, CAP, [], [CLADE], {}))
             failures.append(
                 "a clade the roster declined, whose subtree nonetheless exists "
                 "on disk, did not raise -- a stale intermediate would be read "
@@ -870,10 +685,10 @@ def check_summary_reconciles_in_both_directions():
         _write_summary_fixture(tmp, arm, drop_arm_samples=True)
         try:
             run_summary(
-                tmp, _roster(arm, 0.5, [], [CLADE], {}), min_clade_size=2
+                tmp, _roster(arm, CAP, [], [CLADE], {}), min_clade_size=2
             )
             failures.append(
-                "round(0.5 * 7) = 4 >= min_clade_size 2 was recorded as an "
+                "min(7, 4) = 4 >= min_clade_size 2 was recorded as an "
                 "exclusion without raising"
             )
         except ValueError:
@@ -890,13 +705,13 @@ def check_summary_catches_a_draw_of_the_wrong_size():
     otherwise produce an arm at a different depth than the one recorded.
     """
     failures = []
-    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    arm = subsample.arm_name(CAP, SEED)
     with tempfile.TemporaryDirectory() as tmp:
-        _write_summary_fixture(tmp, arm, n_arm=3)  # should be round(0.5 * 7) = 4
+        _write_summary_fixture(tmp, arm, n_arm=3)  # should be min(7, 4) = 4
         try:
-            run_summary(tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}))
+            run_summary(tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}))
             failures.append(
-                "an arm holding 3 samples where round(0.5 * 7) = 4 did not raise"
+                "an arm holding 3 samples where min(7, 4) = 4 did not raise"
             )
         except ValueError:
             pass
@@ -992,10 +807,10 @@ def check_correlation_uses_the_ground_truth_set_not_the_grid():
     the 29 genuinely scored mutations give 1.000.
     """
     failures = []
-    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    arm = subsample.arm_name(CAP, SEED)
     with tempfile.TemporaryDirectory() as tmp:
         _corr_fixture(tmp, arm)
-        got = run_correlations(tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}))
+        got = run_correlations(tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}))
         row = got[
             (got["estimator"] == "delta_fitness_ratio")
             & (got["population"] == GT_POPULATION)
@@ -1037,7 +852,7 @@ def check_correlation_uses_the_ground_truth_set_not_the_grid():
 def check_correlating_the_whole_grid_is_caught():
     """Mutating the script to drop the scored filter must move the answer."""
     failures = []
-    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    arm = subsample.arm_name(CAP, SEED)
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "tree"
         _corr_fixture(root, arm)
@@ -1055,7 +870,7 @@ def check_correlating_the_whole_grid_is_caught():
             input=_Namespace(fitness=[]),
             output=_Namespace(summary=str(out)),
             params=_Namespace(
-                roster=_roster(arm, 0.5, [CLADE], [], {CLADE: 4}),
+                roster=_roster(arm, CAP, [CLADE], [], {CLADE: 4}),
                 outdir=str(root),
                 count_threshold=10,
             ),
@@ -1104,11 +919,11 @@ def check_count_fraction_counts_observations_not_mutations():
     what makes the expected value exactly 0.25 rather than approximately so.
     """
     failures = []
-    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    arm = subsample.arm_name(CAP, SEED)
     with tempfile.TemporaryDirectory() as tmp:
         # Still scored on both sides, but at a quarter of the counts.
         _corr_fixture(tmp, arm, arm_actual=3)
-        got = run_correlations(tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}))
+        got = run_correlations(tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}))
         row = got[
             (got["estimator"] == "delta_fitness_ratio")
             & (got["population"] == GT_POPULATION)
@@ -1157,11 +972,11 @@ def check_ground_truth_set_is_fixed_across_sampling_depths():
     entirely plausible -- it is simply a different set at every depth.
     """
     failures = []
-    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    arm = subsample.arm_name(CAP, SEED)
     with tempfile.TemporaryDirectory() as tmp:
         # arm_actual=1: still scored, but far below the threshold of 10.
         _corr_fixture(tmp, arm, arm_actual=1)
-        got = run_correlations(tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}))
+        got = run_correlations(tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}))
         row = got[
             (got["estimator"] == "delta_fitness_ratio")
             & (got["population"] == GT_POPULATION)
@@ -1194,7 +1009,7 @@ def check_ground_truth_set_is_fixed_across_sampling_depths():
             input=_Namespace(fitness=[]),
             output=_Namespace(summary=str(out)),
             params=_Namespace(
-                roster=_roster(arm, 0.5, [CLADE], [], {CLADE: 4}),
+                roster=_roster(arm, CAP, [CLADE], [], {CLADE: 4}),
                 outdir=str(root),
                 count_threshold=10,
             ),
@@ -1229,13 +1044,13 @@ def check_correlation_keeps_empty_populations_as_rows():
     this is the ordinary case rather than a corner.
     """
     failures = []
-    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    arm = subsample.arm_name(CAP, SEED)
     with tempfile.TemporaryDirectory() as tmp:
         _corr_fixture(tmp, arm)
         # Threshold far above any count in the fixture, so the filtered
         # population is empty for both estimators.
         got = run_correlations(
-            tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}), count_threshold=1000
+            tmp, _roster(arm, CAP, [CLADE], [], {CLADE: 4}), count_threshold=1000
         )
         filtered = got[got["population"].str.contains(">=1000")]
         if len(filtered) != 2:
@@ -1266,24 +1081,12 @@ def check_a_control_clade_that_disagrees_raises():
     config never named.
     """
     failures = []
-    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    arm = subsample.arm_name(CAP, SEED)
     with tempfile.TemporaryDirectory() as tmp:
         _corr_fixture(tmp, arm)
         # Same tree, but the roster says this clade is NOT in the arm's unit --
         # so its (deliberately disagreeing) effects must be reported as a leak.
-        roster = {
-            arm: {
-                "kind": subsample.KIND_FRAC,
-                "unit": ["21J"],
-                "unit_label": "21J",
-                "seed": SEED,
-                "frac": 0.5,
-                "cap": None,
-                "included": ["21J"],
-                "excluded": [],
-                "n_retained": {"21J": 4},
-            }
-        }
+        roster = _roster(arm, CAP, ["21J"], [], {"21J": 4}, unit=["21J"])
         try:
             run_correlations(tmp, roster)
             failures.append(
@@ -1299,12 +1102,8 @@ def check_a_control_clade_that_disagrees_raises():
 
 
 # ---------------------------------------------------------------------------
-# Cap arms (#151 amendment)
+# Membership: which clades an arm thins
 # ---------------------------------------------------------------------------
-#
-# No shipped production config sets a cap either, and the CI config's clades are
-# far too small for the shipped values (50000/20000/5000) to touch anything, so
-# every property below is unreachable from any pipeline run.
 
 
 def check_cap_thins_only_clades_above_it():
@@ -1356,8 +1155,8 @@ def check_including_a_clade_at_the_cap_is_caught():
             tmp,
             {
                 MODULE_REL: (
-                    "        return [c for c, n in clade_sizes.items() if int(n) > cap]",
-                    "        return [c for c, n in clade_sizes.items() if int(n) >= cap]",
+                    "    return [c for c, n in clade_sizes.items() if int(n) > cap]",
+                    "    return [c for c, n in clade_sizes.items() if int(n) >= cap]",
                 )
             },
             "subsample_cap_boundary",
@@ -1407,24 +1206,24 @@ def check_the_sampler_refuses_a_clade_at_or_below_the_cap():
 
 
 def check_cap_draw_is_a_pure_function_of_cap_seed_clade():
-    """A cap arm's list cannot move when another cap is added or removed.
+    """An arm's list cannot move when another cap is added or removed.
 
-    Stronger than the fraction arms' guarantee, and deliberately so: a cap arm's
-    *unit* is derived from the tree's clade sizes, so keying the draw on the unit
-    would make every clade's sample list depend on how many other clades
-    happened to exceed the cap. A tree gaining one large clade would then
-    silently redraw every arm, and nothing downstream could attribute it.
+    The key deliberately omits the **unit**: it is derived from the tree's clade
+    sizes, so keying the draw on it would make every clade's sample list depend
+    on how many other clades happened to exceed the cap. A tree gaining one
+    large clade would then silently redraw every arm, and nothing downstream
+    could attribute it.
     """
     failures = []
     samples = [f"s{i}/2021" for i in range(200)]
     baseline = None
     for caps in ([50], [50, 20], [20, 50], [5, 20, 50], [50]):
         arms = subsample.validate_entries([{"max_samples": caps, "seed": SEED}])
-        name = subsample.cap_arm_name(50, SEED)
+        name = subsample.arm_name(50, SEED)
         if name not in arms:
             failures.append(f"cap 50 missing from arms built with {caps}")
             continue
-        drawn = subsample.select_for_spec(samples, arms[name], CLADE)
+        drawn = subsample.select_cap(samples, arms[name]["cap"], SEED, CLADE)
         digest = hashlib.md5("\n".join(drawn).encode()).hexdigest()
         if baseline is None:
             baseline = digest
@@ -1435,9 +1234,9 @@ def check_cap_draw_is_a_pure_function_of_cap_seed_clade():
     # And two clades of the same size must draw differently, or the seed is not
     # reaching the per-clade key at all.
     arms = subsample.validate_entries([{"max_samples": [50], "seed": SEED}])
-    spec = arms[subsample.cap_arm_name(50, SEED)]
-    if subsample.select_for_spec(samples, spec, "20A") == subsample.select_for_spec(
-        samples, spec, "21J"
+    spec = arms[subsample.arm_name(50, SEED)]
+    if subsample.select_cap(samples, spec["cap"], SEED, "20A") == (
+        subsample.select_cap(samples, spec["cap"], SEED, "21J")
     ):
         failures.append(
             "two different clades drew identically, so the clade is not part "
@@ -1447,12 +1246,10 @@ def check_cap_draw_is_a_pure_function_of_cap_seed_clade():
 
 
 def check_cap_validation():
-    """``max_samples`` must be a non-empty list of integers >= 1, and alone."""
+    """``max_samples`` must be a non-empty list of integers >= 1."""
     failures = []
     cases = {
-        "cap with a unit": {"unit": ["20A"], "max_samples": [10]},
-        "cap and fractions": {"max_samples": [10], "sampling_fractions": [0.5]},
-        "neither depth key": {"unit": ["20A"]},
+        "no depth key": {"seed": 0},
         "cap not a list": {"max_samples": 10},
         "empty cap list": {"max_samples": []},
         "zero cap": {"max_samples": [0]},
@@ -1482,7 +1279,7 @@ def check_cap_validation():
     return failures
 
 
-def check_cap_arms_size_and_exclude_like_fraction_arms():
+def check_check_arm_sizes_reports_the_cap_and_honours_min_clade_size():
     """``check_arm_sizes`` reports ``min(n, cap)`` and honours min_clade_size."""
     failures = []
     arms = subsample.validate_entries([{"max_samples": [100], "seed": 0}])
@@ -1502,20 +1299,54 @@ def check_cap_arms_size_and_exclude_like_fraction_arms():
     return failures
 
 
+def check_the_removed_fraction_keys_are_rejected_by_name():
+    """``sampling_fractions`` and ``unit`` must fail with an explanation.
+
+    They belonged to the fraction arms, which applied one sampling fraction to
+    an explicitly named unit of clades. A config written against them would
+    otherwise fail as an unknown-key schema error, which says nothing about
+    where the feature went -- and the wrong reading is available: an operator
+    seeing "unknown key" is as likely to conclude the key is misspelled as that
+    the mechanism is gone.
+    """
+    failures = []
+    cases = {
+        "fractions alone": {"unit": ["20A"], "sampling_fractions": [0.5]},
+        "fractions beside a cap": {"max_samples": [10], "sampling_fractions": [0.5]},
+        "unit beside a cap": {"unit": ["20A"], "max_samples": [10]},
+    }
+    for label, entry in cases.items():
+        try:
+            subsample.validate_entries([entry])
+            failures.append(f"{label} was accepted: {entry!r}")
+            continue
+        except ValueError as exc:
+            if "#151" not in str(exc) or "max_samples" not in str(exc):
+                failures.append(
+                    f"{label} raised, but without saying what replaced it: {exc}"
+                )
+    # An ordinary unknown key must still say "unknown", not point at the
+    # fraction arms -- otherwise the message above is just the generic one.
+    try:
+        subsample.validate_entries([{"max_samples": [10], "oops": 1}])
+        failures.append("an unknown key was accepted")
+    except ValueError as exc:
+        if "unknown" not in str(exc):
+            failures.append(f"an unknown key raised the wrong message: {exc}")
+    return failures
+
+
 CHECKS = [
-    ("degenerate arm is byte-identical", check_degenerate_arm_reproduces_the_input_byte_for_byte),
+    ("a cap at or above the size returns the list verbatim", check_a_cap_at_or_above_the_size_returns_the_list_verbatim),
     ("draw preserves file order", check_draw_preserves_file_order),
     ("emitting draw order is caught", check_emitting_draw_order_is_caught),
-    ("flooring instead of rounding is caught", check_flooring_instead_of_rounding_is_caught),
-    ("draw is a pure function of (unit, seed, clade, frac)", check_draw_is_a_pure_function_of_unit_seed_clade_fraction),
-    ("trailing-zero fractions name one arm", check_trailing_zero_fractions_name_one_arm),
-    ("fraction range is enforced", check_fraction_range_is_enforced),
-    ("unit validation", check_unit_validation),
-    ("zero draw raises, small draw is excluded", check_zero_draw_raises_and_small_draw_is_merely_excluded),
+    ("seeding from iteration order is caught", check_seeding_from_iteration_order_is_caught),
+    ("min_clade_size excludes rather than raises", check_min_clade_size_excludes_rather_than_raises),
+    ("an empty draw is a hard failure, not an exclusion", check_an_empty_draw_is_a_hard_failure_not_an_exclusion),
     ("demoting the zero-draw failure is caught", check_treating_a_zero_draw_as_an_exclusion_is_caught),
-    ("a non-unit clade is refused by the sampler", check_a_non_unit_clade_is_refused_by_the_sampler),
-    ("an empty full list raises", check_an_empty_full_list_raises),
-    ("retention exceeds the sampling fraction", check_retention_exceeds_the_sampling_fraction),
+    ("an empty full list raises about emptiness", check_an_empty_full_list_raises_about_emptiness),
+    ("retention exceeds the realized sample fraction", check_retention_exceeds_the_realized_sample_fraction),
+    ("the removed fraction keys are rejected by name", check_the_removed_fraction_keys_are_rejected_by_name),
     ("summary reports realized retention", check_summary_reports_realized_retention),
     ("summary records an excluded clade", check_summary_records_an_excluded_clade),
     ("summary reconciles in both directions", check_summary_reconciles_in_both_directions),
@@ -1523,9 +1354,9 @@ CHECKS = [
     ("cap thins only clades above it", check_cap_thins_only_clades_above_it),
     ("including a clade at the cap is caught", check_including_a_clade_at_the_cap_is_caught),
     ("the sampler refuses a clade at or below the cap", check_the_sampler_refuses_a_clade_at_or_below_the_cap),
-    ("cap draw is a pure function of (cap, seed, clade)", check_cap_draw_is_a_pure_function_of_cap_seed_clade),
+    ("the draw is a pure function of (cap, seed, clade)", check_cap_draw_is_a_pure_function_of_cap_seed_clade),
     ("cap validation", check_cap_validation),
-    ("cap arms size and exclude like fraction arms", check_cap_arms_size_and_exclude_like_fraction_arms),
+    ("check_arm_sizes reports the cap and honours min_clade_size", check_check_arm_sizes_reports_the_cap_and_honours_min_clade_size),
     ("correlation uses the ground-truth set, not the grid", check_correlation_uses_the_ground_truth_set_not_the_grid),
     ("correlating the whole grid is caught", check_correlating_the_whole_grid_is_caught),
     ("count_fraction sums observations, not distinct mutations", check_count_fraction_counts_observations_not_mutations),
@@ -1566,11 +1397,12 @@ def main():
             print(f"  - {f}")
         sys.exit(1)
     print(
-        "\nPASSED: the degenerate arm is byte-identical, the draw is a pure "
-        "function of (unit, seed, clade, fraction) in file order, a zero draw "
-        "is a hard failure while a below-min_clade_size draw is a recorded "
-        "exclusion, the summary reconciles its roster against the file tree in "
-        "both directions, and every guard fires on a deliberately broken module."
+        "\nPASSED: membership is strictly above the cap, the draw is a pure "
+        "function of (cap, seed, clade) in file order, an empty draw is a hard "
+        "failure while a below-min_clade_size draw is a recorded exclusion, the "
+        "correlations use a ground-truth set fixed at full depth, the summary "
+        "reconciles its roster against the file tree in both directions, and "
+        "every guard fires on a deliberately broken module."
     )
 
 

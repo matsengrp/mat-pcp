@@ -149,49 +149,23 @@ pcp_date_cutoffs:
   - "2020-06-01"
   - "2022-06-01"
 
-# Clade-subsampling arms (#151). Three arms, none vacuous:
-#
-#   frac_20A_0_10000bp  20A at fraction 1.0 -- the degenerate arm. Every sample is
-#                       retained, in the input list's order, so its outputs must be
-#                       byte-identical to the full tree's. This is what makes "the
-#                       subsampling machinery did not perturb the ordinary path" a
-#                       measurement rather than an inspection, and it is the only
-#                       check that would catch a sampler emitting its picks in draw
-#                       order instead of file order.
-#   frac_20A_0_5000bp   20A at 0.5 -- genuinely thinning, 23 of 46 samples. Without
-#                       it a run would exercise only the two boundary cases and
-#                       never a real subsample.
-#   frac_19B_0_2000bp   19B at 0.2 -- round(0.2 * 5) = 1, below `min_clade_size: 2`,
-#                       so the clade is excluded from the arm and recorded with
-#                       `included=false`. The arm still builds (over 19A and 20A at
-#                       full depth), which is what exercises a clade *dropping out
-#                       of the grid*. Without an arm that declines a clade, the
-#                       roster in `subsample_summary.csv` would never be asked to
-#                       distinguish "thinned away" from a wiring mistake.
-#
-# 21J/21I -- the production unit -- are unreachable here: `max_clades: 3` yields
-# 19A/19B/20A, and naming a clade this tree does not process is a hard failure.
+# Clade-subsampling arms (#151). Two arms, neither vacuous.
 clade_subsamples:
-  - unit: [20A]
-    sampling_fractions: [1.0, 0.5]
-    seed: 0
-  - unit: [19B]
-    sampling_fractions: [0.2]
-    seed: 0
-  # Cap arms (#151 amendment). The three CI clades are 19A (2 samples), 19B (5)
-  # and 20A (46), so:
+  # The three CI clades are 19A (2 samples), 19B (5) and 20A (46), so both cap
+  # shapes are carried:
   #
-  #   cap_1000_0  caps nothing -- the cap analogue of `sampling_fractions: [1.0]`.
-  #               Its unit is *empty*, every clade is a control, and every output
-  #               must be byte-identical to the full tree's. That empty unit is
-  #               the case worth having in CI: it is the one shape where the
-  #               fan-out helpers, the roster and the summary all have nothing to
+  #   cap_1000_0  caps nothing -- the **degenerate arm**. Its unit is *empty*,
+  #               every clade is a control, and every output must be
+  #               byte-identical to the full tree's. That empty unit is the case
+  #               worth having in CI: it is the one shape where the fan-out
+  #               helpers, the roster and the summary all have nothing to
   #               iterate, and a crash there would otherwise surface first on a
   #               production tree.
   #   cap_20_0    thins 20A (46 -> 20) and leaves 19A and 19B untouched, so one
   #               run exercises a thinned clade and two controls at once -- which
-  #               is the property that distinguishes a cap arm from a fraction
-  #               arm and is invisible to any `sampling_fractions` entry.
+  #               is the property an arm's self-checking rests on, since a
+  #               control with rmse > 0 means the arm reached a clade it was
+  #               never meant to touch.
   #
   # The shipped production caps (50000/20000/5000) would thin nothing here, so
   # they cannot be used: every guard below the cap would go unexercised.
