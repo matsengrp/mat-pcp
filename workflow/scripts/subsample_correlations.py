@@ -3,49 +3,62 @@
 
 This is the headline result the arms exist to produce: how far a clade's
 estimated fitness effects drift as its sampling depth falls. One row per
-``(arm, clade, estimator, filter)``, keyed to measured evidence.
+``(arm, clade, estimator, population)``, keyed to measured evidence.
 
-Five things about the shape are load-bearing.
+Six things about the shape are load-bearing.
 
-*The correlation is computed over **scored** mutations, not the grid.* Every row
-of ``{clade}_aamut_fitness.csv`` carries a ``delta_fitness_ratio`` -- the grid is
-enumerated from the clade founder and filled with zero counts, so a mutation that
-was never observed still gets a number, driven entirely by its expected count.
-On the test data that is 121,348 of 121,427 rows for 20A. Correlating over all of
-them measures the grid's construction, which is invariant to sampling fraction by
-design, and returns a confident coefficient describing nothing: 0.619 for the
-ratio estimator where the 29 genuinely scored mutations give 1.000. ``scored``
-means ``actual_count > 0``, and the population is the **intersection** -- scored
-at both depths -- because a mutation the arm never observed has no estimate to
-compare, only an absence, which is what ``coverage`` reports instead.
+*The population is a **fixed** ground-truth set, defined on the full-depth row.*
+A mutation is in it when ``max(actual_count, expected_count) >= count_threshold``
+**at full depth**, so the set is identical for every arm and the coefficients are
+comparable across sampling depths. Filtering on the *arm's* row instead -- the
+obvious reading, and what this script did first -- is survivorship bias: it drops
+exactly the mutations the thinning destroyed, so the denominator shrinks with the
+cut and a degrading estimator reports a flat correlation. Every arm has an
+estimate for every mutation in the set, because the grid is enumerated from the
+clade founder by ``build_count_table`` and does not depend on sampling depth;
+the join therefore asserts ``one_to_one`` **and** that no ground-truth row was
+lost, rather than trusting the merge.
 
-*The count filter is applied to the arm's row, never the full-depth row.* The arm
-is the side whose evidence is being cut; filtering on the target would move the
-mutation set for two reasons at once and make the two filters incomparable.
+*Correlating over the whole grid would measure the grid.* Every row carries a
+``delta_fitness_ratio`` even where nothing was observed -- 121,348 of 121,427
+rows for 20A on the test data -- and those rows are invariant to sampling depth
+by construction, so a grid-wide coefficient is a confident number describing
+``build_count_table``'s enumeration: 0.619 for the ratio estimator where the 29
+genuinely scored mutations give 1.000. The ``>= count_threshold`` floor is what
+makes the population a set of mutations there is evidence *about*.
+
+*r cannot see bias or compression, so it is never reported alone.* Pearson r is
+invariant to any linear transform of the arm's estimates, so a systematic shift
+and a systematic shrinkage are both invisible to it. On the completed fraction
+arms 21J's regression slope falls to 0.477 at p=0.01 while r still reads 0.765,
+and 21I's to 0.217 at r=0.601 -- the arms shrink fitness effects toward zero as
+evidence thins, which is what the pseudocount does to a mutation whose
+observations vanished. ``rmse``, ``bias``, ``regression_slope`` and the two
+standard deviations are reported beside every coefficient for that reason.
 
 *The two estimators are never pooled.* ``delta_fitness_ratio`` and
-``delta_fitness_bayesian`` respond differently to thin evidence -- the Bayesian
-estimator shrinks toward zero as counts fall while the ratio does not -- so a
-single coefficient would hide which one degrades and where.
+``delta_fitness_bayesian`` respond differently to thin evidence, so a single
+coefficient would hide which one degrades and where.
 
 *A coefficient is meaningless without the n beside it, and sometimes with it.*
-The count filter raises rho partly by dropping hard cases, so ``n_mutations`` is
-reported on every row and a row is **kept with an empty coefficient** rather than
-dropped when the population is too small or one side is constant. A silently
-absent row reads as "not applicable"; an explicit ``n_mutations`` with a blank
-``pearson_r`` reads as "asked, and there was nothing to answer with".
-``max_actual_count_full`` is reported for the same reason: when every scored
+A row is **kept with an empty coefficient** rather than dropped when the
+population is too small or one side is constant: a silently absent row reads as
+"not applicable", where an explicit ``n_mutations`` with a blank ``pearson_r``
+reads as "asked, and there was nothing to answer with".
+``max_actual_count_full`` is reported for the same reason -- when every scored
 mutation carries exactly one observation, ``delta_fitness_ratio`` is a
 deterministic function of the expected count, the two columns are collinear by
 construction, and the resulting 1.000 is arithmetic rather than agreement. That
 is the whole regime on the test data, and no coefficient alone can show it.
 
 *Non-unit clades are included as a control.* An arm re-aggregates every clade in
-its grid but thins only its unit, so a non-unit clade's fitness must come out
-**identical** to full depth. Reporting those rows with ``thinned=False`` turns the
-table into its own check: a control clade with rho < 1 means the arm leaked into a
-clade the config never named, which is the fan-out bug this feature had to fix
-once already. Dropping them would remove the evidence that it stayed fixed.
+its grid but thins only its unit, so a clade the arm does not thin must come out
+**identical** to full depth. Reporting those rows with ``thinned=False`` turns
+the table into its own check: a control clade with rmse > 0 means the arm leaked
+into a clade it was never meant to touch, which is the fan-out bug this feature
+had to fix once already. For a ``cap`` arm the controls are the clades at or
+below the cap and cost nothing to obtain, where a ``frac`` arm gets them only by
+leaving clades deliberately unthinned.
 
 Spearman is computed as Pearson-on-ranks rather than via ``pandas``' ``method=
 "spearman"``, which imports ``scipy`` -- absent from this environment.
@@ -81,14 +94,17 @@ ESTIMATORS = ["delta_fitness_ratio", "delta_fitness_bayesian"]
 
 COLUMNS = [
     "arm",
+    "kind",
     "unit",
     "seed",
     "clade",
-    "fraction",
+    "sampling_fraction",
+    "max_samples",
     "thinned",
     "estimator",
-    "filter",
+    "population",
     "n_mutations",
+    "n_ground_truth",
     "n_scored_full",
     "n_scored_arm",
     "coverage",
@@ -97,6 +113,10 @@ COLUMNS = [
     "spearman_rho",
     "rmse",
     "median_abs_diff",
+    "bias",
+    "regression_slope",
+    "sd_full",
+    "sd_arm",
 ]
 
 
@@ -131,22 +151,52 @@ def spearman(x, y):
 
 
 def stats_for(sub, estimator):
-    """``(n, r, rho, rmse, median_abs_diff)`` for one population and estimator."""
+    """Agreement statistics for one population and estimator.
+
+    Returns a dict rather than a tuple because it carries eight numbers whose
+    order nothing else depends on, and a positional swap between ``bias`` and
+    ``median_abs_diff`` would be invisible in the output.
+
+    ``bias`` is signed ``mean(arm - full)``: the direction matters, because on
+    the completed arms it is positive everywhere -- thinned arms estimate
+    mutations as *more fit* than full depth does -- and an absolute value would
+    hide that. ``regression_slope`` is the least-squares slope of arm on full,
+    which is 1.0 for an unbiased-in-scale estimate and falls toward 0 as the
+    estimates shrink toward the pseudocount's bound.
+    """
     a = sub[f"{estimator}_full"]
     b = sub[f"{estimator}_arm"]
     keep = a.notna() & b.notna()
-    a, b = a[keep], b[keep]
+    a, b = a[keep].to_numpy(dtype=float), b[keep].to_numpy(dtype=float)
     n = int(len(a))
+    out = {
+        "n_mutations": n,
+        "pearson_r": None,
+        "spearman_rho": None,
+        "rmse": None,
+        "median_abs_diff": None,
+        "bias": None,
+        "regression_slope": None,
+        "sd_full": None,
+        "sd_arm": None,
+    }
     if n == 0:
-        return n, None, None, None, None
-    diff = (a - b).abs()
-    return (
-        n,
-        pearson(a, b),
-        spearman(a, b),
-        float(np.sqrt(((a - b) ** 2).mean())),
-        float(diff.median()),
-    )
+        return out
+    diff = b - a
+    out["rmse"] = float(np.sqrt((diff ** 2).mean()))
+    out["median_abs_diff"] = float(np.median(np.abs(diff)))
+    out["bias"] = float(diff.mean())
+    out["pearson_r"] = pearson(a, b)
+    out["spearman_rho"] = spearman(a, b)
+    if n >= 2:
+        out["sd_full"] = float(a.std(ddof=1))
+        out["sd_arm"] = float(b.std(ddof=1))
+        var_full = float(((a - a.mean()) ** 2).sum())
+        if var_full > 0:
+            out["regression_slope"] = float(
+                ((a - a.mean()) * (b - b.mean())).sum() / var_full
+            )
+    return out
 
 
 def fmt(value, places=6):
@@ -159,11 +209,13 @@ n_thinned_compared = 0
 
 for arm in sorted(roster):
     spec = roster[arm]
-    unit = list(spec["unit"])
-    frac = float(spec["frac"])
-    seed = int(spec["seed"])
+    kind = subsample.spec_kind(spec)
+    unit = set(spec["unit"])
     included = set(spec["included"])
-    unit_label = "-".join(unit)
+    seed = int(spec["seed"])
+    frac = spec["frac"]
+    cap = spec["cap"]
+    unit_label = spec.get("unit_label", "-".join(sorted(unit)))
 
     arm_fitness_dir = os.path.join(outdir, "aamut_fitness", arm)
     if not os.path.isdir(arm_fitness_dir):
@@ -192,7 +244,7 @@ for arm in sorted(roster):
         merged = full.merge(
             armd, on=JOIN_KEY, suffixes=("_full", "_arm"), validate="one_to_one"
         )
-        # The grid is invariant to sampling fraction, so an inner join that lost
+        # The grid is invariant to sampling depth, so an inner join that lost
         # rows means the founder moved or a gene dropped out -- which would make
         # every coefficient below a comparison of two different mutation sets.
         if len(merged) != len(full) or len(merged) != len(armd):
@@ -204,6 +256,16 @@ for arm in sorted(roster):
             )
             continue
 
+        # The fixed ground-truth set: read off the **full-depth** row, so it is
+        # the same set of mutations at every sampling depth and the coefficients
+        # below are comparable across arms.
+        gt_mask = (
+            merged[["actual_count_full", "expected_count_full"]].max(axis=1)
+            >= count_threshold
+        )
+        ground_truth = merged[gt_mask]
+        n_ground_truth = int(gt_mask.sum())
+
         scored_full = merged["actual_count_full"] > 0
         scored_arm = merged["actual_count_arm"] > 0
         both = merged[scored_full & scored_arm]
@@ -211,28 +273,24 @@ for arm in sorted(roster):
         n_scored_arm = int(scored_arm.sum())
         coverage = len(both) / n_scored_full if n_scored_full else None
         thinned = clade in unit and clade in included
-        if thinned and len(both):
+        if thinned and n_ground_truth:
             n_thinned_compared += 1
 
-        # The threshold is read off the *arm's* row: it is the side whose
-        # evidence is being cut, and filtering on the full-depth row would move
-        # the mutation set for two reasons at once.
-        strong = both[
-            both[["actual_count_arm", "expected_count_arm"]].max(axis=1)
-            >= count_threshold
-        ]
         populations = [
-            ("unfiltered", both),
-            (f"max(actual,expected)_arm>={count_threshold:g}", strong),
+            (f"ground_truth_max_full>={count_threshold:g}", ground_truth),
+            ("scored_at_both_depths", both),
         ]
 
         base = {
             "arm": arm,
+            "kind": kind,
             "unit": unit_label,
             "seed": seed,
             "clade": clade,
-            "fraction": frac,
+            "sampling_fraction": "" if frac is None else frac,
+            "max_samples": "" if cap is None else int(cap),
             "thinned": thinned,
+            "n_ground_truth": n_ground_truth,
             "n_scored_full": n_scored_full,
             "n_scored_arm": n_scored_arm,
             "coverage": fmt(coverage),
@@ -241,43 +299,50 @@ for arm in sorted(roster):
             ),
         }
 
-        for filter_name, population in populations:
+        for population_name, population in populations:
             for estimator in ESTIMATORS:
-                n, r, rho, rmse, mad = stats_for(population, estimator)
+                stats = stats_for(population, estimator)
                 rows.append({
                     **base,
                     "estimator": estimator,
-                    "filter": filter_name,
-                    "n_mutations": n,
-                    "pearson_r": fmt(r),
-                    "spearman_rho": fmt(rho),
-                    "rmse": fmt(rmse),
-                    "median_abs_diff": fmt(mad),
+                    "population": population_name,
+                    "n_mutations": stats["n_mutations"],
+                    "pearson_r": fmt(stats["pearson_r"]),
+                    "spearman_rho": fmt(stats["spearman_rho"]),
+                    "rmse": fmt(stats["rmse"]),
+                    "median_abs_diff": fmt(stats["median_abs_diff"]),
+                    "bias": fmt(stats["bias"]),
+                    "regression_slope": fmt(stats["regression_slope"]),
+                    "sd_full": fmt(stats["sd_full"]),
+                    "sd_arm": fmt(stats["sd_arm"]),
                 })
 
                 # A control clade must reproduce full depth exactly. Checked on
-                # the numbers rather than on the coefficient, since r is
-                # undefined when a population is constant and would pass by
-                # being blank.
+                # rmse rather than on the coefficient, since r is undefined when
+                # a population is constant and would pass by being blank. Run on
+                # the ground-truth population because it is non-empty wherever
+                # the clade has any evidence at all.
                 if (
                     not thinned
-                    and filter_name == "unfiltered"
-                    and rmse is not None
-                    and rmse > 0
+                    and population_name.startswith("ground_truth")
+                    and stats["rmse"] is not None
+                    and stats["rmse"] > 0
                 ):
                     problems.append(
-                        f"arm {arm}, clade {clade} is not in the arm's unit "
-                        f"{unit}, so its fitness effects must equal full "
-                        f"depth's, but {estimator} differs (rmse {rmse:.6g} over "
-                        f"{n} mutations). The arm reached a clade the config "
-                        f"never named."
+                        f"arm {arm}, clade {clade} is not thinned by this arm "
+                        f"({subsample.depth_label(spec)}), so its fitness "
+                        f"effects must equal full depth's, but {estimator} "
+                        f"differs (rmse {stats['rmse']:.6g} over "
+                        f"{stats['n_mutations']} mutations). The arm reached a "
+                        f"clade it was never meant to touch."
                     )
 
         log(
             f"{arm}/{clade}{'' if thinned else ' [control]'}: "
-            f"{n_scored_arm}/{n_scored_full} scored mutations "
-            f"(coverage {fmt(coverage)}), max full-depth count "
-            f"{base['max_actual_count_full']}"
+            f"{n_ground_truth} ground-truth mutations "
+            f"(max(actual,expected) >= {count_threshold:g} at full depth), "
+            f"{n_scored_arm}/{n_scored_full} scored (coverage {fmt(coverage)}), "
+            f"max full-depth count {base['max_actual_count_full']}"
         )
 
 if problems:
@@ -293,8 +358,8 @@ summary.to_csv(output_path, index=False)
 
 if not n_thinned_compared:
     log(
-        "VACUOUS: no arm thinned a clade that retained any scored mutation, so "
-        "no row of this table compares a subsampled estimate against full depth."
+        "VACUOUS: no arm thinned a clade with any ground-truth mutation, so no "
+        "row of this table compares a subsampled estimate against full depth."
     )
 else:
     thinned_rows = summary[summary["thinned"] & (summary["n_mutations"] > 0)]
@@ -310,5 +375,5 @@ else:
             f"table is {maxcount}. With one observation per scored mutation, "
             f"delta_fitness_ratio is a deterministic function of the expected "
             f"count and any correlation it shows is arithmetic, not agreement. "
-            f"These coefficients do not measure subsampling noise."
+            f"NOT A NOISE MEASUREMENT."
         )

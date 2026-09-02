@@ -12,6 +12,16 @@ the regex exists for, with both results looking like plausible clade rosters
 The draw preserves the input file's order, so ``sampling_fractions: [1.0]``
 reproduces the input byte-for-byte and every output below the arm is byte-equal
 to the full tree's.
+
+**Membership is decided from the sample list, not from a param.** A ``frac``
+arm's unit is named in the config and checked directly; a ``cap`` arm's is
+derived (``n_clade > max_samples``), and the number this script would need to
+re-derive it -- the clade's full sample count -- is exactly what it has just
+read. Applying the predicate to the file rather than to a resolved list keeps
+the sampler independent of the ``get_clades`` checkpoint (resolving one inside
+``params`` would tie this rule's scheduling to it) while still failing loudly if
+a fan-out routes an untouched clade here: that would silently produce an arm
+whose "unchanged" clades are not.
 """
 
 import os
@@ -33,9 +43,9 @@ full_samples_path = snakemake.input.samples
 output_path = snakemake.output.samples
 clade = snakemake.wildcards.clade
 arm = snakemake.wildcards.arm
-unit = list(snakemake.params.unit)
-seed = int(snakemake.params.seed)
-frac = float(snakemake.params.frac)
+spec = dict(snakemake.params.spec)
+kind = subsample.spec_kind(spec)
+seed = int(spec["seed"])
 log_file = snakemake.log[0] if hasattr(snakemake, "log") and snakemake.log else None
 
 
@@ -56,17 +66,32 @@ trailing_newline = samples and samples[-1] == ""
 if trailing_newline:
     samples = samples[:-1]
 
-if clade not in unit:
-    # Defensive: only unit clades are thinned, and a non-unit clade reaching
-    # here means a fan-out routed an untouched clade through the sampler --
-    # which would silently produce an arm whose "unchanged" clades are not.
-    raise ValueError(
-        f"Arm {arm!r} was asked to subsample clade {clade!r}, which is not in "
-        f"its unit {unit}. Only unit clades are thinned; every other clade "
-        f"reads the full tree's files unchanged."
-    )
+# Defensive, both kinds: a clade the arm does not thin reaching here means a
+# fan-out routed an untouched clade through the sampler.
+if kind == subsample.KIND_CAP:
+    cap = int(spec["cap"])
+    if len(samples) <= cap:
+        raise ValueError(
+            f"Arm {arm!r} was asked to subsample clade {clade!r}, which has "
+            f"{len(samples)} samples -- at or below the cap of {cap}, so it is "
+            f"not one of this arm's clades. A clade at or below the cap is "
+            f"untouched and reads the full tree's files unchanged; writing a "
+            f"copy here would make the arm directory claim a clade it did not "
+            f"thin."
+        )
+else:
+    unit = list(spec["unit"])
+    if clade not in unit:
+        raise ValueError(
+            f"Arm {arm!r} was asked to subsample clade {clade!r}, which is not "
+            f"in its unit {unit}. Only unit clades are thinned; every other "
+            f"clade reads the full tree's files unchanged."
+        )
 
-log(f"Arm {arm}: clade {clade}, unit {unit}, seed {seed}, fraction {frac}")
+log(
+    f"Arm {arm} ({subsample.depth_label(spec)}): clade {clade}, seed {seed}, "
+    f"unit {subsample.unit_label(spec)}"
+)
 log(f"Read {len(samples)} samples from {full_samples_path}")
 
 if not samples:
@@ -77,8 +102,11 @@ if not samples:
         f"extraction disagrees with the checkpoint."
     )
 
-drawn = subsample.select_subsample(samples, frac, unit, seed, clade)
-log(f"Retained {len(drawn)} samples (round({frac} * {len(samples)}))")
+drawn = subsample.select_for_spec(samples, spec, clade)
+log(
+    f"Retained {len(drawn)} of {len(samples)} samples "
+    f"({subsample.depth_label(spec)})"
+)
 
 with open(output_path, "w") as f:
     f.write("\n".join(drawn))

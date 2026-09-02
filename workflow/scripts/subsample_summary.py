@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Record what each subsampling arm actually retained (#151).
 
+An arm is either a ``frac`` arm (one sampling fraction over a named unit of
+clades) or a ``cap`` arm (every clade above ``max_samples`` thinned down to it,
+smaller clades untouched). Both are reported here in one table: ``kind`` says
+which, and ``sampling_fraction`` / ``max_samples`` carry the configured depth
+with the inapplicable one blank. **Neither is the number to key an analysis
+to** -- ``sample_fraction_realized`` and ``nt_mutation_retention`` are, for the
+reason immediately below, and for a cap arm the configured depth is not even a
+fraction.
+
 A nominal sampling fraction is **not** an evidence cut. A branch survives
 whenever *any* sample below it is retained, so retention of mutations runs well
 above the fraction of samples drawn -- on the v11 gisaid tree, 1% of 21J's
@@ -24,8 +33,9 @@ detect a fan-out which declined a clade the arithmetic approved, which is the
 failure this file exists to expose. Requested-but-absent and
 present-but-not-requested both raise.
 
-*The draw against the file it was drawn from.* ``n_samples_arm ==
-round(frac * n_samples_full)`` is asserted against the **sample files**, not
+*The draw against the file it was drawn from.* ``n_samples_arm`` is asserted
+against ``retained_for_spec`` -- ``round(frac * n_full)`` for a frac arm,
+``min(n_full, cap)`` for a cap arm -- computed against the **sample files**, not
 against the clade-counts checkpoint the DAG used. The two can disagree: the
 checkpoint keys on the metadata clade column's first whitespace-delimited token
 while ``samples_by_clade`` matches with ``^clade( |$)``, so a divergence would
@@ -72,9 +82,11 @@ PCP_REASONS = COUNTS_REASONS + [
 
 COLUMNS = [
     "arm",
+    "kind",
     "unit",
     "seed",
     "sampling_fraction",
+    "max_samples",
     "clade",
     "gene",
     "included",
@@ -184,18 +196,56 @@ problems = []
 
 for arm in sorted(roster):
     spec = roster[arm]
+    # The *resolved* unit the fan-out used. A cap arm's is derived from the clade
+    # sizes rather than named, so re-deriving it here -- the obvious alternative
+    # -- would be a second evaluation of the membership rule and could not detect
+    # a fan-out that declined a clade the rule approves, which is the failure
+    # this file exists to expose.
     unit = list(spec["unit"])
-    frac = float(spec["frac"])
+    kind = subsample.spec_kind(spec)
+    frac = spec["frac"]
+    cap = spec["cap"]
     seed = int(spec["seed"])
     included = set(spec["included"])
     excluded = set(spec["excluded"])
-    unit_label = "-".join(unit)
+    unit_label = spec.get("unit_label", "-".join(unit))
+    depth = subsample.depth_label(spec)
 
     if included | excluded != set(unit):
         problems.append(
             f"arm {arm}: roster's included+excluded {sorted(included | excluded)} "
             f"does not partition its unit {sorted(unit)}"
         )
+
+    if not unit:
+        # An arm that thins nothing -- a cap at or above every clade's size, the
+        # cap analogue of ``sampling_fractions: [1.0]``. It is a legitimate
+        # configuration and its outputs must byte-equal the full tree's, so it
+        # gets a row naming it with an **empty clade**: with no row at all the
+        # arm would be absent from this table entirely, which is precisely the
+        # "thinned away vs never wired" ambiguity the roster exists to remove.
+        # The empty ``clade`` is what distinguishes it from a declined clade,
+        # which carries a clade name and ``included=False``.
+        arm_dir = os.path.join(outdir, "mat", "clades", arm)
+        if os.path.isdir(arm_dir):
+            problems.append(
+                f"arm {arm}: thins no clade ({depth} is at or above every "
+                f"clade's size), but {arm_dir} exists. Its per-clade files "
+                f"would be read as thinned when nothing was drawn."
+            )
+        log(f"{arm}: thins no clade ({depth}); every clade is a control")
+        rows.append({
+            "arm": arm,
+            "kind": kind,
+            "unit": unit_label,
+            "seed": seed,
+            "sampling_fraction": "" if frac is None else frac,
+            "max_samples": "" if cap is None else int(cap),
+            "clade": "",
+            "gene": "",
+            "included": False,
+        })
+        continue
 
     for clade in unit:
         arm_samples_path = os.path.join(
@@ -227,24 +277,26 @@ for arm in sorted(roster):
 
         base = {
             "arm": arm,
+            "kind": kind,
             "unit": unit_label,
             "seed": seed,
-            "sampling_fraction": frac,
+            "sampling_fraction": "" if frac is None else frac,
+            "max_samples": "" if cap is None else int(cap),
             "clade": clade,
             "included": is_included,
             "n_samples_full": n_full,
         }
 
         if not is_included:
-            expected = subsample.retained_count(n_full, frac)
+            expected = subsample.retained_for_spec(n_full, spec)
             log(
-                f"{arm}/{clade}: excluded -- round({frac} * {n_full}) = "
-                f"{expected}, against min_clade_size {min_clade_size}"
+                f"{arm}/{clade}: excluded -- {depth} of {n_full} = {expected}, "
+                f"against min_clade_size {min_clade_size}"
             )
             if expected >= min_clade_size:
                 problems.append(
                     f"arm {arm}, clade {clade}: recorded as excluded, but "
-                    f"round({frac} * {n_full}) = {expected} >= min_clade_size "
+                    f"{depth} of {n_full} = {expected} >= min_clade_size "
                     f"{min_clade_size}. A clade the arithmetic approves must not "
                     f"be silently declined by the fan-out."
                 )
@@ -252,11 +304,20 @@ for arm in sorted(roster):
             continue
 
         n_arm = n_lines(arm_samples_path)
-        expected = subsample.retained_count(n_full, frac)
+        expected = subsample.retained_for_spec(n_full, spec)
         if n_arm != expected:
             problems.append(
                 f"arm {arm}, clade {clade}: drew {n_arm} samples, expected "
-                f"round({frac} * {n_full}) = {expected}"
+                f"{depth} of {n_full} = {expected}"
+            )
+        # A cap arm must not carry a clade at or below its cap: such a clade is
+        # untouched, so an arm directory holding it would claim a thinning that
+        # did not happen and its "control" rows would silently become arm rows.
+        if kind == subsample.KIND_CAP and n_full <= int(cap):
+            problems.append(
+                f"arm {arm}, clade {clade}: cap {cap} but the clade has only "
+                f"{n_full} samples, so it is not thinned and must not appear in "
+                f"the arm's unit."
             )
         if n_arm < min_clade_size:
             problems.append(

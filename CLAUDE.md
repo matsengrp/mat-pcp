@@ -890,8 +890,10 @@ mat-pcp/
     degenerate arm is the ordinary path rather than a second implementation.**
     Measuring when a pooled model beats per-clade counts needs the *same* clade
     re-estimated at several sampling depths (#151, for dasm2-experiments#1130).
-    An **arm** is one sampling fraction applied to one **unit** of clades, and
-    six things about the shape are load-bearing.
+    An **arm** is one sampling depth applied to one **unit** of clades, and
+    six things about the shape are load-bearing. There are two *kinds* of arm --
+    a `frac` arm and a `cap` arm; everything below holds for both, and what
+    differs is at the end.
 
     *The hook is one file, which is what makes both arms move together.*
     `mat/clades/{clade}_samples.txt` is the only input determining a clade's
@@ -1050,10 +1052,92 @@ mat-pcp/
     r = 1.000 is arithmetic -- the test tree's whole regime, which is why both
     `validate_test.py` and `notebooks/subsample_correlations.py` say
     **NOT A NOISE MEASUREMENT** rather than printing a reassuring coefficient.
-    Guarded by four checks in `tests/test_clade_subsamples.py`, whose fixture is
-    built so the grid correlation and the scored correlation must **disagree in
-    sign** (80 unscored rows agreeing perfectly, 6 scored rows anti-correlated),
-    so a script correlating the grid is caught rather than merely unproven.
+    Guarded by five checks in `tests/test_clade_subsamples.py`, whose fixture is
+    built so the grid correlation and the ground-truth correlation must
+    **disagree in sign** (80 sub-threshold rows agreeing perfectly, 6
+    ground-truth rows anti-correlated), so a script correlating the grid is
+    caught rather than merely unproven.
+
+    *The population is fixed on the full-depth row, and the obvious alternative
+    is survivorship bias.* A mutation is in the ground-truth set when
+    `max(actual_count, expected_count) >= 10` **at full depth**, so the set is
+    identical at every sampling depth. Reading the threshold off the *arm's*
+    row instead — which this script did first — drops exactly the mutations the
+    thinning destroyed, so the denominator shrinks with the cut and a degrading
+    estimator reports a flat correlation over an ever-easier population. Nothing
+    end-to-end can see it: every coefficient is well-formed under the wrong
+    reading and the population it selects looks entirely plausible, it is simply
+    a different set per arm. The fixture therefore drops the arm's counts below
+    the threshold while leaving full depth's above it, so the correct
+    implementation compares 6 mutations where the survivorship mutant compares
+    0. And **r is never reported alone**, because it is invariant to any linear
+    transform of the arm's estimates and so cannot see either a shift or a
+    compression: on the completed fraction arms 21J's regression slope falls to
+    0.477 at p=0.01 while r still reads 0.765, and 21I's to 0.217 at r=0.601.
+    `rmse`, `bias`, `regression_slope`, `sd_full` and `sd_arm` sit beside every
+    coefficient for that reason.
+
+    *A `cap` arm derives its unit instead of naming it, and that is the whole
+    difference.* `max_samples: X` thins every clade with more than X samples down
+    to exactly X and leaves smaller clades untouched. A `frac` arm intervenes on
+    **size** — each clade keeps the same share, so the tree's sampling imbalance
+    survives and one arm is one point on the depth curve. A cap intervenes on
+    **composition**, which is what the pooled-vs-per-clade question actually
+    asks. Four consequences.
+
+    *One arm spans the curve, and its controls are free.* At `max_samples:
+    50000` on the v12 gisaid tree, 30 of 56 clades are capped and their effective
+    fractions run 1.15% (21J) to 100%; the 26 untouched clades are
+    byte-identical controls **by construction**, where a frac arm gets controls
+    only by leaving clades deliberately unthinned. It also dissolves the
+    founder-proximity problem that gates a frac unit: a frac unit must name every
+    clade whose founder is close enough that leaving it at full depth sets an
+    evidence floor (measured, 21L alone leaves 2,737,183 samples within 20 nt —
+    139% of the unit — so an honest 21L ladder needs a five-clade unit), whereas
+    a cap leaves no large clade at full depth at all.
+
+    *`resolve_unit` is the single definition of membership, and it must be.*
+    A cap arm's unit depends on the tree's clade sizes, which only the
+    `get_clades` checkpoint knows, so it cannot be written in the config. Every
+    fan-out helper, the roster param and the summary read that one function; a
+    second derivation would let the fan-out and the sampler disagree about one
+    clade. The sampler itself is the exception and deliberately so: it applies
+    the predicate to the **sample list it has already read** (`len(samples) >
+    cap`) rather than to a resolved unit param, because resolving a checkpoint
+    inside `params` would tie the rule's scheduling to it. The unit is also
+    resolved against the *processed* roster, not `clade_counts.csv`, which names
+    every clade the metadata mentions including ones dropped by
+    `clades_to_exclude` — 21A on every production tree — for which requesting
+    `mat/clades/{arm}/21A_samples.txt` would ask for a subtree that is never
+    extracted. Membership is **strictly** above the cap: a clade of exactly `cap`
+    samples is already at the target, so thinning it would write an identical
+    file into the arm directory and turn one of the arm's own controls into an
+    arm row.
+
+    *`cap_rng` keys on `(cap, seed, clade)` and deliberately **omits the
+    unit***, unlike `arm_rng`. Keying on a derived unit would make each clade's
+    draw depend on how many *other* clades happened to exceed the cap, so a tree
+    gaining one large clade would silently redraw every arm with nothing able to
+    attribute it. Generalizing the module did not move the fraction arms: all
+    eight completed `frac_21J-21I_*` sample lists reproduce byte-for-byte
+    through the new `select_for_spec` path, which is checked because
+    `arm_rng`'s hashed key is a string literal that a refactor could rewrite
+    without any test noticing.
+
+    *An arm that thins **nothing** is legitimate and must stay visible.* A cap at
+    or above every clade's size is the cap analogue of `sampling_fractions:
+    [1.0]`: its unit is empty, every clade is a control, and every output must
+    byte-equal the full tree's. With no unit clades it would contribute **no
+    rows at all** to `subsample_summary.csv` and so be indistinguishable from an
+    arm that was never wired — #137's empty era and #149's empty cutoff roster
+    restated a third time — so it is recorded with an **empty `clade`**, which
+    is what distinguishes it from a declined clade (a clade name with
+    `included=False`). `config_test_data.yaml` carries both cap shapes
+    (`max_samples: [1000, 20]` against clades of 2/5/46) because the shipped
+    production caps thin nothing at CI sizes, so every guard below the cap would
+    otherwise go unexercised — and the empty-unit arm is the one shape where the
+    fan-out helpers, the roster and the summary all have nothing to iterate.
+
     See [#151](https://github.com/matsengrp/mat-pcp/issues/151).
 
 

@@ -1,0 +1,46 @@
+# Overlay: the three per-clade cap arms (#151 amendment, 2026-09-01).
+#
+# Layered on top of a production config rather than edited into it:
+#
+#   pixi run snakemake --configfile config/config-2026-08-06-six-genes.yaml \
+#                                   config/overlay-subsample-cap.yaml ...
+#
+# Snakemake merges multiple --configfile values in order, so this adds the arms
+# without touching the config that built the released tree. Every shipped
+# production config is required to leave `clade_subsamples` empty, because
+# full-size arms cost tens of wall-hours and are launched by naming their paths.
+#
+# A **cap** arm thins every clade with more than `max_samples` samples down to
+# exactly that many and leaves smaller clades untouched. Unlike a fraction arm it
+# intervenes on the *composition* of the training set rather than only its size,
+# which is the intervention dasm2-experiments#1130 A1.1 is actually asking about.
+#
+# Why these three values, on `gisaid-and-public_2026-08-06_v12` (56 clades,
+# 16,984,774 samples, 12,366,859 nt mutations, median clade 59,392):
+#
+#   X=50000  30 clades capped, 1,961,678 samples (11.5%), ~24.6% of nt mutations.
+#            Roughly the median clade size -- "equalize to the typical clade".
+#            21J lands near 5% of its mutations, where the completed 5% fraction
+#            arm measured r=0.897 and a regression slope of 0.71.
+#   X=20000  41 capped, 933,711 samples (5.5%), ~14.3% of mutations. 21J at ~2.6%
+#            of its mutations, below the deepest fraction rung run so far.
+#   X=5000   49 capped, 257,894 samples (1.5%), ~5.7% of mutations. Deliberately
+#            past the cliff: 21J at 0.12% of its samples.
+#
+# The ladder stops at 5,000. At X=1,000 the whole tree retains 55,588 sequences
+# and 234,806 nt mutations with 55 of 56 clades capped -- probably too little for
+# DASM to learn from, and it leaves a single untouched clade, destroying the
+# internal controls that make an arm self-checking.
+#
+# Mutation retention is *not* the sample fraction: a branch survives whenever any
+# sample below it is retained, so retention is concave. The percentages above come
+# from R(p) = 1.162 * p**0.704, fitted to the four completed fraction arms'
+# measured retention on 21J (4.54% at p=0.01, 14.60% at 0.05, 23.53% at 0.10,
+# 37.41% at 0.20). Values below p=0.01 are extrapolated past the fitted range;
+# `subsample_summary.csv` replaces every one of them with a measurement.
+#
+# The draw is a pure function of (cap, seed, clade), so adding or removing a cap
+# here cannot move an arm that has already been built.
+clade_subsamples:
+  - max_samples: [50000, 20000, 5000]
+    seed: 0

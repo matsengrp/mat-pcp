@@ -121,22 +121,58 @@ def _(mo, os, output_dir, pd):
         not os.path.isdir(fitness_dir),
         mo.md(f"**No `aamut_fitness/` under `{output_dir.value}`.**"),
     )
-    # Arms are the frac_* subdirectories; the fraction is recoverable from the
-    # trailing basis-point token, which is how the Snakefile builds the name
-    # (``frac_<unit>_<seed>_<bp>bp``).
+    # Two kinds of arm. ``frac_<unit>_<seed>_<bp>bp`` thins a named unit by a
+    # sampling fraction; ``cap_<max_samples>_<seed>`` thins every clade above the
+    # cap down to it and leaves smaller clades untouched.
     arms = sorted(
         d
         for d in os.listdir(fitness_dir)
-        if os.path.isdir(os.path.join(fitness_dir, d)) and d.startswith("frac_")
+        if os.path.isdir(os.path.join(fitness_dir, d))
+        and d.startswith(("frac_", "cap_"))
     )
-    mo.stop(not arms, mo.md("**No `frac_*` arm directories found.**"))
+    mo.stop(not arms, mo.md("**No `frac_*` or `cap_*` arm directories found.**"))
 
-    def arm_fraction(arm):
+    def arm_kind(arm):
+        return "cap" if arm.startswith("cap_") else "frac"
+
+    def arm_depth(arm):
+        """The configured depth: a sampling fraction, or a per-clade cap."""
+        if arm_kind(arm) == "cap":
+            return float(arm.split("_")[1])
         return int(arm.rsplit("_", 1)[-1][:-2]) / 10000.0
 
-    def arm_unit(arm):
-        return arm.split("_")[1].split("-")
-    return arm_fraction, arm_unit, arms, fitness_dir, retention
+    def arm_label(arm):
+        if arm_kind(arm) == "cap":
+            return f"cap {int(arm_depth(arm)):,}"
+        return f"frac {arm_depth(arm):g}"
+
+    def thinned_clades(arm):
+        """The clades this arm actually thinned, read from the file tree.
+
+        Deliberately not parsed from the arm name. A cap arm's unit is derived
+        from the tree's clade sizes and does not appear in its name at all, and
+        ``mat/clades/{arm}/`` holds exactly the clades the sampler drew -- the
+        same predicate the pipeline used, rather than a second derivation of it.
+        A clade absent here is a control: the arm re-aggregated it but read its
+        per-clade files from the full tree unchanged.
+        """
+        d = os.path.join(output_dir.value, "mat", "clades", arm)
+        if not os.path.isdir(d):
+            return set()
+        return {
+            n[: -len("_samples.txt")]
+            for n in os.listdir(d)
+            if n.endswith("_samples.txt")
+        }
+    return (
+        arm_depth,
+        arm_kind,
+        arm_label,
+        arms,
+        fitness_dir,
+        retention,
+        thinned_clades,
+    )
 
 
 @app.cell
@@ -145,13 +181,15 @@ def _(
     ESTIMATORS,
     GT_THRESHOLD,
     JOIN_KEY,
-    arm_fraction,
-    arm_unit,
+    arm_depth,
+    arm_kind,
+    arm_label,
     arms,
     fitness_dir,
     np,
     os,
     pd,
+    thinned_clades,
 ):
     def pearson(x, y):
         """Pearson r, or None where it is undefined rather than merely small."""
@@ -165,6 +203,27 @@ def _(
         a = np.asarray(a, dtype=float)
         b = np.asarray(b, dtype=float)
         return float(np.sqrt(((a - b) ** 2).mean()))
+
+    def bias(a, b):
+        """Signed mean(arm - full). The direction matters and |.| would hide it."""
+        return float((np.asarray(b, dtype=float) - np.asarray(a, dtype=float)).mean())
+
+    def slope(a, b):
+        """Least-squares slope of arm on full: 1.0 if unbiased in scale.
+
+        r is invariant to any linear transform of the arm's estimates, so it
+        cannot see the shrinkage toward zero that thin evidence produces. This
+        can: on the completed fraction arms it falls to 0.477 (21J at p=0.01)
+        and 0.217 (21I) while r still reads 0.765 and 0.601.
+        """
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
+        if len(a) < 2:
+            return None
+        var = ((a - a.mean()) ** 2).sum()
+        if var == 0:
+            return None
+        return float(((a - a.mean()) * (b - b.mean())).sum() / var)
 
     def ground_truth(clade):
         """The fixed target set for one clade, from its full-depth table only."""
@@ -199,7 +258,7 @@ def _(
 
     rows = []
     for _arm in arms:
-        _unit = set(arm_unit(_arm))
+        _unit = thinned_clades(_arm)
         for _name in sorted(os.listdir(os.path.join(fitness_dir, _arm))):
             if not _name.endswith("_aamut_fitness.csv") or _name.startswith("all_"):
                 continue
@@ -207,8 +266,10 @@ def _(
             _m = joined(_arm, _clade)
             _row = {
                 "arm": _arm,
+                "arm_label": arm_label(_arm),
+                "kind": arm_kind(_arm),
                 "clade": _clade,
-                "fraction": arm_fraction(_arm),
+                "depth": arm_depth(_arm),
                 "thinned": _clade in _unit,
                 "n_ground_truth": len(_m),
                 "median_count_full": float(_m["actual_count_full"].median()),
@@ -219,6 +280,12 @@ def _(
                 _row[f"r_{_est}"] = pearson(_m[f"{_est}_full"], _m[f"{_est}_arm"])
                 _row[f"rmse_{_est}"] = (
                     rmse(_m[f"{_est}_full"], _m[f"{_est}_arm"]) if len(_m) else None
+                )
+                _row[f"bias_{_est}"] = (
+                    bias(_m[f"{_est}_full"], _m[f"{_est}_arm"]) if len(_m) else None
+                )
+                _row[f"slope_{_est}"] = (
+                    slope(_m[f"{_est}_full"], _m[f"{_est}_arm"]) if len(_m) else None
                 )
             for _t, _v in survival(_m["actual_count_arm"]).items():
                 _row[f"frac_count_ge_{_t}"] = _v
@@ -244,7 +311,7 @@ def _(control, mo, summary, thinned):
     mo.callout(
         mo.md(
             f"**{summary['arm'].nunique()} arm(s)**, {len(thinned)} thinned "
-            f"(clade, fraction) pair(s), {len(control)} control pair(s). "
+            f"(clade, depth) pair(s), {len(control)} control pair(s). "
             f"Controls must reproduce full depth exactly: **{len(bad)}** of "
             f"{len(control)} disagree"
             + (
@@ -261,10 +328,25 @@ def _(control, mo, summary, thinned):
 @app.cell
 def _(mo):
     mo.md("""
-    ## Pearson r vs sampling fraction, over the fixed ground-truth set
+    ## Pearson r vs sampling depth, over the fixed ground-truth set
 
     n is constant along each curve by construction — the same mutations are
     scored at every depth, so only the arm-side estimate moves.
+
+    The two kinds of arm are plotted separately because their x-axes are
+    different quantities: a `frac` arm's depth is a fraction of *each* clade's
+    samples, a `cap` arm's is an absolute per-clade sample count. Reading a
+    cap's x-value as a fraction would be wrong by two orders of magnitude, and
+    the effective fraction it implies differs per clade — that is the whole
+    point of a cap, and it is why the per-clade curves of a cap arm are not
+    comparable to one another at a fixed x either. Use
+    `subsample_summary.csv`'s measured retention for that comparison.
+
+    RMSE is the **RMSE of the `delta_fitness_ratio` estimator** — the
+    root-mean-square difference between the arm's estimate and full depth's, in
+    log-fitness units. It is not a ratio of anything. It is reported beside r
+    because r is scale-free: it cannot see a systematic shift or the shrinkage
+    toward zero that thin evidence produces.
     """)
     return
 
@@ -276,39 +358,49 @@ def _(mo, plt, thinned):
         mo.md("**No thinned rows** — no arm subsampled a clade in its unit."),
     )
 
-    _clades = sorted(thinned["clade"].unique())
+    _panels = [
+        (_kind, _clade)
+        for _kind in sorted(thinned["kind"].unique())
+        for _clade in sorted(thinned[thinned["kind"] == _kind]["clade"].unique())
+    ]
     fig, _axes = plt.subplots(
-        1, len(_clades), figsize=(5.6 * len(_clades), 4.4), squeeze=False
+        1, len(_panels), figsize=(5.6 * len(_panels), 4.4), squeeze=False
     )
 
-    for _col, _clade in enumerate(_clades):
-        _g = thinned[thinned["clade"] == _clade].sort_values("fraction")
+    for _col, (_kind, _clade) in enumerate(_panels):
+        _g = thinned[
+            (thinned["kind"] == _kind) & (thinned["clade"] == _clade)
+        ].sort_values("depth")
         _ax = _axes[0][_col]
         for _est, _marker in [
             ("delta_fitness_ratio", "o"),
             ("delta_fitness_bayesian", "s"),
         ]:
             _ax.plot(
-                _g["fraction"],
+                _g["depth"],
                 _g[f"r_{_est}"],
                 marker=_marker,
                 label=_est.replace("delta_fitness_", ""),
             )
         _ax2 = _ax.twinx()
         _ax2.plot(
-            _g["fraction"],
+            _g["depth"],
             _g["rmse_delta_fitness_ratio"],
             marker="x",
             ls="--",
             c="grey",
-            label="RMSE (ratio)",
+            label="RMSE of delta_fitness_ratio",
         )
         _ax2.set_ylabel("RMSE, log-fitness units")
         _ax2.set_ylim(0, None)
         _ax.set_title(
-            f"{_clade} — fixed ground truth, n = {int(_g['n_ground_truth'].iloc[0]):,}"
+            f"{_clade} ({_kind}) — fixed ground truth, "
+            f"n = {int(_g['n_ground_truth'].iloc[0]):,}"
         )
-        _ax.set_xlabel("nominal sampling fraction")
+        _ax.set_xlabel(
+            "per-clade cap (samples)" if _kind == "cap"
+            else "nominal sampling fraction"
+        )
         _ax.set_ylabel("Pearson r vs full depth")
         _ax.set_xscale("log")
         _ax.set_ylim(0, 1.02)
@@ -357,7 +449,7 @@ def _(mo):
 
 
 @app.cell
-def _(arm_fraction, arms, mo, np, os, output_dir, pd, plt, thinned):
+def _(arm_depth, arm_label, arms, mo, np, os, output_dir, pd, plt, thinned):
     mo.stop(thinned.empty)
 
     _NT_DIR = os.path.join(output_dir.value, "fitness", "ntmut_fitness")
@@ -403,7 +495,7 @@ def _(arm_fraction, arms, mo, np, os, output_dir, pd, plt, thinned):
     for _row, _clade in enumerate(_clades):
         _full = _nt_counts(_clade)
         _by_depth = [(None, _full)]
-        for _arm in sorted(arms, key=arm_fraction, reverse=True):
+        for _arm in sorted(arms, key=arm_depth, reverse=True):
             _a = _nt_counts(_clade, _arm)
             if len(_a) != len(_full):
                 raise ValueError(
@@ -412,18 +504,18 @@ def _(arm_fraction, arms, mo, np, os, output_dir, pd, plt, thinned):
                     f"sampling depth, so these survival curves would have "
                     f"different denominators"
                 )
-            _by_depth.append((arm_fraction(_arm), _a))
+            _by_depth.append((arm_label(_arm), _a))
 
         for _col, (_which, _label) in enumerate(_PANELS):
             _ax = _axes[_row][_col]
             _hi = max(float(np.nanmax(_quantity(_full, _which))), 2.0)
             _xs = np.geomspace(0.05, _hi, 90)
-            for _frac, _frame in _by_depth:
+            for _depth, _frame in _by_depth:
                 _y = _surv(_quantity(_frame, _which), _xs)
-                if _frac is None:
+                if _depth is None:
                     _ax.plot(_xs, _y, lw=2.5, c="black", label="full depth")
                 else:
-                    _ax.plot(_xs, _y, label=f"{_frac:g}")
+                    _ax.plot(_xs, _y, label=_depth)
             _ax.axvline(10, ls=":", c="grey", lw=1)
             _ax.set_xscale("log")
             _ax.set_xlabel(f"x  ({_label})")
@@ -432,7 +524,7 @@ def _(arm_fraction, arms, mo, np, os, output_dir, pd, plt, thinned):
             _ax.set_ylim(0, 1.02)
             _ax.grid(alpha=0.3)
             if _col == 0:
-                _ax.legend(fontsize=8, title="sampling fraction")
+                _ax.legend(fontsize=8, title="sampling depth")
 
     fig3.tight_layout()
     fig3
@@ -457,9 +549,9 @@ def _(mo):
 @app.cell
 def _(joined, np, plt, thinned):
     pairs = (
-        thinned[["arm", "clade", "fraction"]]
+        thinned[["arm", "arm_label", "clade", "depth"]]
         .drop_duplicates()
-        .sort_values(["clade", "fraction"])
+        .sort_values(["clade", "depth"])
     )
     _ncol = min(4, len(pairs))
     _nrow = (len(pairs) + _ncol - 1) // _ncol
@@ -512,7 +604,7 @@ def _(joined, np, plt, thinned):
             )
         )
         _ax.plot([_lo_v, _hi_v], [_lo_v, _hi_v], ls="--", c="black", lw=1)
-        _ax.set_title(f"{_r['clade']} @ {_r['fraction']:g}   n={len(_both):,}")
+        _ax.set_title(f"{_r['clade']} @ {_r['arm_label']}   n={len(_both):,}")
         _ax.set_xlabel("full-depth delta_fitness_ratio")
         _ax.set_ylabel("arm delta_fitness_ratio")
         _ax.grid(alpha=0.3)
@@ -536,14 +628,15 @@ def _(mo):
 @app.cell
 def _(COUNT_THRESHOLDS, mo, thinned):
     cols = (
-        ["clade", "fraction", "n_ground_truth"]
+        ["clade", "kind", "arm_label", "n_ground_truth"]
         + ["r_delta_fitness_ratio", "r_delta_fitness_bayesian"]
-        + ["rmse_delta_fitness_ratio"]
+        + ["rmse_delta_fitness_ratio", "bias_delta_fitness_ratio"]
+        + ["slope_delta_fitness_ratio"]
         + [f"frac_count_ge_{t}" for t in COUNT_THRESHOLDS]
         + ["median_count_arm", "median_count_full"]
     )
     mo.ui.table(
-        thinned[cols].sort_values(["clade", "fraction"]),
+        thinned[cols].sort_values(["clade", "kind", "arm_label"]),
         page_size=20,
     )
     return

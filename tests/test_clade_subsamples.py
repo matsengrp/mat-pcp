@@ -151,11 +151,29 @@ def _write_samples(path, samples, trailing_newline=True):
     path.write_text("\n".join(samples) + ("\n" if trailing_newline else ""))
 
 
-def run_draw(tmp, frac, clade=CLADE, unit=None, scripts_dir=None,
-             samples=None, trailing_newline=True):
-    unit = UNIT if unit is None else unit
+def frac_spec(frac, unit=None):
+    return {
+        "kind": subsample.KIND_FRAC,
+        "unit": list(UNIT if unit is None else unit),
+        "seed": SEED,
+        "frac": frac,
+        "cap": None,
+    }
+
+
+def cap_spec(cap, seed=SEED):
+    return {
+        "kind": subsample.KIND_CAP,
+        "unit": None,
+        "seed": seed,
+        "frac": None,
+        "cap": cap,
+    }
+
+
+def _run_draw_spec(tmp, spec, arm, clade=CLADE, scripts_dir=None,
+                   samples=None, trailing_newline=True):
     samples = FULL_SAMPLES if samples is None else samples
-    arm = subsample.arm_name(unit, SEED, frac)
     full = Path(tmp) / "mat" / "clades" / f"{clade}_samples.txt"
     _write_samples(full, samples, trailing_newline)
     out = Path(tmp) / "mat" / "clades" / arm / f"{clade}_samples.txt"
@@ -163,7 +181,7 @@ def run_draw(tmp, frac, clade=CLADE, unit=None, scripts_dir=None,
     snake = _Namespace(
         input=_Namespace(samples=str(full)),
         output=_Namespace(samples=str(out)),
-        params=_Namespace(unit=unit, seed=SEED, frac=frac),
+        params=_Namespace(spec=spec),
         wildcards=_Namespace(clade=clade, arm=arm),
         log=[],
     )
@@ -172,6 +190,33 @@ def run_draw(tmp, frac, clade=CLADE, unit=None, scripts_dir=None,
     )
     _exec_script(script, {"snakemake": snake})
     return out
+
+
+def run_draw(tmp, frac, clade=CLADE, unit=None, scripts_dir=None,
+             samples=None, trailing_newline=True):
+    unit = UNIT if unit is None else unit
+    return _run_draw_spec(
+        tmp,
+        frac_spec(frac, unit),
+        subsample.arm_name(unit, SEED, frac),
+        clade=clade,
+        scripts_dir=scripts_dir,
+        samples=samples,
+        trailing_newline=trailing_newline,
+    )
+
+
+def run_cap_draw(tmp, cap, clade=CLADE, scripts_dir=None, samples=None,
+                 trailing_newline=True, seed=SEED):
+    return _run_draw_spec(
+        tmp,
+        cap_spec(cap, seed),
+        subsample.cap_arm_name(cap, seed),
+        clade=clade,
+        scripts_dir=scripts_dir,
+        samples=samples,
+        trailing_newline=trailing_newline,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -689,12 +734,16 @@ def run_summary(root, roster, min_clade_size=2, genes=("S",)):
     return pd.read_csv(out)
 
 
-def _roster(arm, frac, included, excluded, n_retained):
+def _roster(arm, frac, included, excluded, n_retained, unit=None, cap=None):
+    unit = UNIT if unit is None else unit
     return {
         arm: {
-            "unit": UNIT,
+            "kind": subsample.KIND_CAP if cap is not None else subsample.KIND_FRAC,
+            "unit": list(unit),
+            "unit_label": "all" if cap is not None else "-".join(unit),
             "seed": SEED,
             "frac": frac,
+            "cap": cap,
             "included": included,
             "excluded": excluded,
             "n_retained": n_retained,
@@ -883,36 +932,46 @@ def _write_fitness(path, rows):
     ).to_csv(path, index=False)
 
 
-def _corr_fixture(root, arm, scored_disagree=True):
-    """A grid where the scored and whole-grid correlations MUST disagree.
+def _corr_fixture(root, arm, scored_disagree=True, arm_actual=12):
+    """A grid where the ground-truth and whole-grid correlations MUST disagree.
 
-    Eighty unscored rows (``actual_count`` 0 on both sides) carry values that
-    agree perfectly, as real unscored grid rows do -- they are functions of the
-    expected count, which is invariant to sampling depth. Six scored rows carry
-    values that are *anti*-correlated between the two depths.
+    Eighty unscored rows (``actual_count`` 0 on both sides, ``expected_count``
+    0.5) carry values that agree perfectly, as real unscored grid rows do --
+    they are functions of the expected count, which is invariant to sampling
+    depth. Six rows carry ``actual_count`` 12 at full depth, clearing the
+    ground-truth threshold of 10, and values that are *anti*-correlated between
+    the two depths.
 
-    So the whole-grid Pearson r is near +1 and the scored-only r is near -1. A
+    So the whole-grid Pearson r is near +1 and the ground-truth r is near -1. A
     script that correlated over the grid would report a confident positive
     number, which is precisely the mistake this fixture exists to catch.
+
+    ``arm_actual`` sets the *arm's* count on those six rows. Lowering it below
+    the threshold leaves the ground-truth set unchanged (it is defined on the
+    full-depth row) while making an arm-side filter drop them -- which is how
+    the survivorship-bias mutant is distinguished from the correct one.
     """
     root = Path(root)
     d = root / "aamut_fitness"
     unscored = [(f"A{i}V", 0, 0.1 * i, 0.2 * i) for i in range(80)]
-    scored_full = [(f"S{i}V", 3, float(i), float(i)) for i in range(6)]
+    scored_full = [(f"S{i}V", 12, float(i), float(i)) for i in range(6)]
     scored_arm = (
-        [(f"S{i}V", 3, float(5 - i), float(5 - i)) for i in range(6)]
+        [(f"S{i}V", arm_actual, float(5 - i), float(5 - i)) for i in range(6)]
         if scored_disagree
-        else [(f"S{i}V", 3, float(i), float(i)) for i in range(6)]
+        else [(f"S{i}V", arm_actual, float(i), float(i)) for i in range(6)]
     )
     _write_fitness(d / f"{CLADE}_aamut_fitness.csv", unscored + scored_full)
     _write_fitness(d / arm / f"{CLADE}_aamut_fitness.csv", unscored + scored_arm)
     return root
 
 
+GT_POPULATION = "ground_truth_max_full>=10"
+
+
 def run_correlations(root, roster, count_threshold=10):
     out = Path(root) / "correlation_summary.csv"
     snake = _Namespace(
-        input=_Namespace(fitness=[], summary=""),
+        input=_Namespace(fitness=[]),
         output=_Namespace(summary=str(out)),
         params=_Namespace(
             roster=roster, outdir=str(root), count_threshold=count_threshold
@@ -923,11 +982,11 @@ def run_correlations(root, roster, count_threshold=10):
     return pd.read_csv(out)
 
 
-def check_correlation_uses_scored_mutations_not_the_grid():
-    """The population is the scored intersection, never the whole grid.
+def check_correlation_uses_the_ground_truth_set_not_the_grid():
+    """The population is the fixed ground-truth set, never the whole grid.
 
     Every grid row carries a fitness value even when nothing was observed, and
-    those rows are invariant to sampling fraction, so correlating over them
+    those rows are invariant to sampling depth, so correlating over them
     measures the grid's construction and returns a confident number describing
     nothing. Measured on the real test tree: 0.619 over 121,427 grid rows where
     the 29 genuinely scored mutations give 1.000.
@@ -939,20 +998,32 @@ def check_correlation_uses_scored_mutations_not_the_grid():
         got = run_correlations(tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}))
         row = got[
             (got["estimator"] == "delta_fitness_ratio")
-            & (got["filter"] == "unfiltered")
+            & (got["population"] == GT_POPULATION)
         ].iloc[0]
         if int(row["n_mutations"]) != 6:
             failures.append(
                 f"correlated over {row['n_mutations']} mutations, expected the "
-                f"6 scored ones (the fixture has 80 unscored grid rows that "
-                f"must be excluded)"
+                f"6 ground-truth ones (the fixture has 80 sub-threshold grid "
+                f"rows that must be excluded)"
             )
         if row["pearson_r"] > -0.99:
             failures.append(
                 f"pearson_r is {row['pearson_r']}, expected about -1.0. The "
-                f"fixture's scored rows are anti-correlated and its unscored "
-                f"rows agree perfectly, so a positive value means the whole "
-                f"grid was correlated instead of the scored intersection."
+                f"fixture's ground-truth rows are anti-correlated and its "
+                f"sub-threshold rows agree perfectly, so a positive value means "
+                f"the whole grid was correlated instead."
+            )
+        if int(row["n_ground_truth"]) != 6:
+            failures.append(
+                f"n_ground_truth is {row['n_ground_truth']}, expected 6"
+            )
+        # r is scale-free; the fixture's arm values are the full-depth ones
+        # reversed, so the slope must be about -1 and both sds equal.
+        if abs(row["regression_slope"] + 1.0) > 1e-6:
+            failures.append(
+                f"regression_slope is {row['regression_slope']}, expected -1.0 "
+                f"for a fixture whose arm values are the full-depth values "
+                f"reversed"
             )
         if abs(row["coverage"] - 1.0) > 1e-9:
             failures.append(
@@ -973,14 +1044,14 @@ def check_correlating_the_whole_grid_is_caught():
             tmp,
             {
                 "scripts/subsample_correlations.py": (
-                    "both = merged[scored_full & scored_arm]",
-                    "both = merged",
+                    "        ground_truth = merged[gt_mask]",
+                    "        ground_truth = merged",
                 )
             },
         )
         out = root / "correlation_summary.csv"
         snake = _Namespace(
-            input=_Namespace(fitness=[], summary=""),
+            input=_Namespace(fitness=[]),
             output=_Namespace(summary=str(out)),
             params=_Namespace(
                 roster=_roster(arm, 0.5, [CLADE], [], {CLADE: 4}),
@@ -998,14 +1069,94 @@ def check_correlating_the_whole_grid_is_caught():
         got = pd.read_csv(out)
         row = got[
             (got["estimator"] == "delta_fitness_ratio")
-            & (got["filter"] == "unfiltered")
+            & (got["population"] == GT_POPULATION)
         ].iloc[0]
         if int(row["n_mutations"]) == 6 and row["pearson_r"] < -0.99:
             failures.append(
                 "correlating the whole grid produced the same answer as "
-                "correlating the scored intersection, so the test cannot tell "
+                "correlating the ground-truth set, so the test cannot tell "
                 "them apart"
             )
+    return failures
+
+
+def check_ground_truth_set_is_fixed_across_sampling_depths():
+    """The threshold is read off the **full-depth** row, never the arm's.
+
+    Filtering on the arm's row is survivorship bias: it drops exactly the
+    mutations the thinning destroyed, so the denominator shrinks with the cut
+    and a degrading estimator reports a flat correlation over an ever-easier
+    population. The two readings are indistinguishable on any fixture where the
+    arm's counts match the full tree's, which is why this one drops the arm's
+    counts below the threshold while leaving the full-depth counts above it: the
+    correct implementation still compares 6 mutations, an arm-side filter
+    compares 0.
+
+    Nothing end-to-end can see this. Every coefficient is still well-formed
+    under the wrong reading, and on a real tree the population it produces looks
+    entirely plausible -- it is simply a different set at every depth.
+    """
+    failures = []
+    arm = subsample.arm_name(UNIT, SEED, 0.5)
+    with tempfile.TemporaryDirectory() as tmp:
+        # arm_actual=1: still scored, but far below the threshold of 10.
+        _corr_fixture(tmp, arm, arm_actual=1)
+        got = run_correlations(tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}))
+        row = got[
+            (got["estimator"] == "delta_fitness_ratio")
+            & (got["population"] == GT_POPULATION)
+        ].iloc[0]
+        if int(row["n_mutations"]) != 6:
+            failures.append(
+                f"the arm's counts fell below the threshold and the population "
+                f"shrank to {row['n_mutations']}; the ground-truth set is "
+                f"defined on the full-depth row and must stay at 6"
+            )
+
+    # And the survivorship reading must give a different answer, or this check
+    # cannot tell the two apart.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "tree"
+        _corr_fixture(root, arm, arm_actual=1)
+        scripts = _mutated_workflow(
+            tmp,
+            {
+                "scripts/subsample_correlations.py": (
+                    '            merged[["actual_count_full", '
+                    '"expected_count_full"]].max(axis=1)',
+                    '            merged[["actual_count_arm", '
+                    '"expected_count_arm"]].max(axis=1)',
+                )
+            },
+        )
+        out = root / "correlation_summary.csv"
+        snake = _Namespace(
+            input=_Namespace(fitness=[]),
+            output=_Namespace(summary=str(out)),
+            params=_Namespace(
+                roster=_roster(arm, 0.5, [CLADE], [], {CLADE: 4}),
+                outdir=str(root),
+                count_threshold=10,
+            ),
+            log=[],
+        )
+        try:
+            _exec_script(
+                scripts / "subsample_correlations.py", {"snakemake": snake}
+            )
+            got = pd.read_csv(out)
+            row = got[
+                (got["estimator"] == "delta_fitness_ratio")
+                & (got["population"] == GT_POPULATION)
+            ].iloc[0]
+            if int(row["n_mutations"]) == 6:
+                failures.append(
+                    "filtering on the arm's row gave the same population as "
+                    "filtering on the full-depth row, so the test cannot "
+                    "distinguish survivorship bias from the fixed set"
+                )
+        except Exception:
+            pass  # raising is an acceptable way to be caught
     return failures
 
 
@@ -1026,10 +1177,10 @@ def check_correlation_keeps_empty_populations_as_rows():
         got = run_correlations(
             tmp, _roster(arm, 0.5, [CLADE], [], {CLADE: 4}), count_threshold=1000
         )
-        filtered = got[got["filter"].str.contains(">=1000")]
+        filtered = got[got["population"].str.contains(">=1000")]
         if len(filtered) != 2:
             failures.append(
-                f"expected 2 filtered rows (one per estimator), got "
+                f"expected 2 ground-truth rows (one per estimator), got "
                 f"{len(filtered)} -- an empty population was dropped instead "
                 f"of recorded"
             )
@@ -1062,9 +1213,12 @@ def check_a_control_clade_that_disagrees_raises():
         # so its (deliberately disagreeing) effects must be reported as a leak.
         roster = {
             arm: {
+                "kind": subsample.KIND_FRAC,
                 "unit": ["21J"],
+                "unit_label": "21J",
                 "seed": SEED,
                 "frac": 0.5,
+                "cap": None,
                 "included": ["21J"],
                 "excluded": [],
                 "n_retained": {"21J": 4},
@@ -1078,9 +1232,215 @@ def check_a_control_clade_that_disagrees_raises():
                 "go unreported"
             )
         except ValueError as exc:
-            if "never named" not in str(exc):
+            if "never meant to touch" not in str(exc):
                 failures.append(f"raised, but not about the leak: {exc}")
     return failures
+
+
+
+# ---------------------------------------------------------------------------
+# Cap arms (#151 amendment)
+# ---------------------------------------------------------------------------
+#
+# No shipped production config sets a cap either, and the CI config's clades are
+# far too small for the shipped values (50000/20000/5000) to touch anything, so
+# every property below is unreachable from any pipeline run.
+
+
+def check_cap_thins_only_clades_above_it():
+    """``n > cap`` is drawn; ``n <= cap`` is returned unchanged and undrawn.
+
+    The strictness matters at exactly one clade size and nowhere else: a clade
+    of exactly ``cap`` samples is already at the target, so thinning it would
+    write an identical file into the arm directory and make the arm claim a
+    clade it did not thin. That clade is then no longer a control.
+    """
+    failures = []
+    n = len(FULL_SAMPLES)
+    for cap, expect_drawn in ((n - 1, True), (n, False), (n + 1, False)):
+        drawn = subsample.select_cap(FULL_SAMPLES, cap, SEED, CLADE)
+        if expect_drawn:
+            if len(drawn) != cap:
+                failures.append(
+                    f"cap {cap} over {n} samples retained {len(drawn)}, "
+                    f"expected {cap}"
+                )
+        elif drawn != FULL_SAMPLES:
+            failures.append(
+                f"cap {cap} over {n} samples altered the list; a clade at or "
+                f"below the cap must be returned unchanged"
+            )
+    # The same predicate, at the level the fan-out uses.
+    sizes = {"big": n + 1, "exact": n, "small": n - 1}
+    unit = subsample.resolve_unit(cap_spec(n), sizes)
+    if unit != ["big"]:
+        failures.append(
+            f"resolve_unit at cap {n} returned {unit}, expected ['big'] -- a "
+            f"clade of exactly cap samples is untouched and must not be in the "
+            f"unit"
+        )
+    return failures
+
+
+def check_including_a_clade_at_the_cap_is_caught():
+    """``n > cap`` mutated to ``n >= cap`` must change the resolved unit.
+
+    Mutation-tested in ``modules/subsample.py``, not in the script: the operator
+    implementing membership works in the module, and patching script text would
+    report the guard as covered while the code it guards sat one file away.
+    """
+    failures = []
+    n = len(FULL_SAMPLES)
+    with tempfile.TemporaryDirectory() as tmp:
+        mutated = _load_mutated(
+            tmp,
+            {
+                MODULE_REL: (
+                    "        return [c for c, n in clade_sizes.items() if int(n) > cap]",
+                    "        return [c for c, n in clade_sizes.items() if int(n) >= cap]",
+                )
+            },
+            "subsample_cap_boundary",
+        )
+        sizes = {"big": n + 1, "exact": n, "small": n - 1}
+        unit = mutated.resolve_unit(cap_spec(n), sizes)
+        if unit == ["big"]:
+            failures.append(
+                "widening the membership test to '>=' produced the same unit, "
+                "so the boundary is untested"
+            )
+    return failures
+
+
+def check_the_sampler_refuses_a_clade_at_or_below_the_cap():
+    """A fan-out routing an untouched clade to the sampler is a hard failure.
+
+    The sampler decides membership from the sample list it has already read,
+    rather than from a resolved unit param -- a cap arm's unit depends on the
+    ``get_clades`` checkpoint, and resolving one inside ``params`` would tie the
+    rule's scheduling to it. The predicate must still be the same one.
+    """
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            run_cap_draw(tmp, len(FULL_SAMPLES))
+            failures.append(
+                "the sampler thinned a clade at exactly the cap; an arm whose "
+                "'unchanged' clades are quietly rewritten would look correct "
+                "in every count"
+            )
+        except ValueError:
+            pass
+    with tempfile.TemporaryDirectory() as tmp:
+        out = run_cap_draw(tmp, len(FULL_SAMPLES) - 1)
+        got = out.read_text().rstrip("\n").split("\n")
+        if len(got) != len(FULL_SAMPLES) - 1:
+            failures.append(
+                f"the sampler wrote {len(got)} samples at cap "
+                f"{len(FULL_SAMPLES) - 1}"
+            )
+        if got != [s for s in FULL_SAMPLES if s in got]:
+            failures.append(
+                f"the cap draw did not preserve the input file's order: {got}"
+            )
+    return failures
+
+
+def check_cap_draw_is_a_pure_function_of_cap_seed_clade():
+    """A cap arm's list cannot move when another cap is added or removed.
+
+    Stronger than the fraction arms' guarantee, and deliberately so: a cap arm's
+    *unit* is derived from the tree's clade sizes, so keying the draw on the unit
+    would make every clade's sample list depend on how many other clades
+    happened to exceed the cap. A tree gaining one large clade would then
+    silently redraw every arm, and nothing downstream could attribute it.
+    """
+    failures = []
+    samples = [f"s{i}/2021" for i in range(200)]
+    baseline = None
+    for caps in ([50], [50, 20], [20, 50], [5, 20, 50], [50]):
+        arms = subsample.validate_entries([{"max_samples": caps, "seed": SEED}])
+        name = subsample.cap_arm_name(50, SEED)
+        if name not in arms:
+            failures.append(f"cap 50 missing from arms built with {caps}")
+            continue
+        drawn = subsample.select_for_spec(samples, arms[name], CLADE)
+        digest = hashlib.md5("\n".join(drawn).encode()).hexdigest()
+        if baseline is None:
+            baseline = digest
+        elif digest != baseline:
+            failures.append(
+                f"the cap-50 arm's draw moved when the config listed {caps}"
+            )
+    # And two clades of the same size must draw differently, or the seed is not
+    # reaching the per-clade key at all.
+    arms = subsample.validate_entries([{"max_samples": [50], "seed": SEED}])
+    spec = arms[subsample.cap_arm_name(50, SEED)]
+    if subsample.select_for_spec(samples, spec, "20A") == subsample.select_for_spec(
+        samples, spec, "21J"
+    ):
+        failures.append(
+            "two different clades drew identically, so the clade is not part "
+            "of the RNG key"
+        )
+    return failures
+
+
+def check_cap_validation():
+    """``max_samples`` must be a non-empty list of integers >= 1, and alone."""
+    failures = []
+    cases = {
+        "cap with a unit": {"unit": ["20A"], "max_samples": [10]},
+        "cap and fractions": {"max_samples": [10], "sampling_fractions": [0.5]},
+        "neither depth key": {"unit": ["20A"]},
+        "cap not a list": {"max_samples": 10},
+        "empty cap list": {"max_samples": []},
+        "zero cap": {"max_samples": [0]},
+        "negative cap": {"max_samples": [-5]},
+        "float cap": {"max_samples": [50000.0]},
+        "string cap": {"max_samples": ["50000"]},
+        "bool cap": {"max_samples": [True]},
+        "non-int seed": {"max_samples": [10], "seed": 0.5},
+    }
+    for label, entry in cases.items():
+        try:
+            subsample.validate_entries([entry])
+            failures.append(f"{label} was accepted: {entry!r}")
+        except ValueError:
+            pass
+    # Duplicate arm names must collide loudly rather than silently share outputs.
+    try:
+        subsample.validate_entries(
+            [{"max_samples": [50000], "seed": 0}, {"max_samples": [50000], "seed": 0}]
+        )
+        failures.append("two entries yielding cap_50000_0 did not raise")
+    except ValueError:
+        pass
+    arms = subsample.validate_entries([{"max_samples": [50000, 20000], "seed": 0}])
+    if sorted(arms) != ["cap_20000_0", "cap_50000_0"]:
+        failures.append(f"unexpected cap arm names: {sorted(arms)}")
+    return failures
+
+
+def check_cap_arms_size_and_exclude_like_fraction_arms():
+    """``check_arm_sizes`` reports ``min(n, cap)`` and honours min_clade_size."""
+    failures = []
+    arms = subsample.validate_entries([{"max_samples": [100], "seed": 0}])
+    sizes = {"big": 1000, "at_cap": 100, "small": 50}
+    kept = subsample.check_arm_sizes(arms, sizes, min_clade_size=0)["cap_100_0"]
+    if kept != {"big": 100}:
+        failures.append(
+            f"expected only the above-cap clade at its cap, got {kept}"
+        )
+    # A min_clade_size above the cap excludes rather than raises: the cap says
+    # what can be built, min_clade_size says how big a clade the user wants.
+    kept = subsample.check_arm_sizes(arms, sizes, min_clade_size=500)["cap_100_0"]
+    if kept != {}:
+        failures.append(
+            f"a cap below min_clade_size should exclude the clade, got {kept}"
+        )
+    return failures
+
 
 CHECKS = [
     ("degenerate arm is byte-identical", check_degenerate_arm_reproduces_the_input_byte_for_byte),
@@ -1100,8 +1460,15 @@ CHECKS = [
     ("summary records an excluded clade", check_summary_records_an_excluded_clade),
     ("summary reconciles in both directions", check_summary_reconciles_in_both_directions),
     ("summary catches a wrong-size draw", check_summary_catches_a_draw_of_the_wrong_size),
-    ("correlation uses scored mutations, not the grid", check_correlation_uses_scored_mutations_not_the_grid),
+    ("cap thins only clades above it", check_cap_thins_only_clades_above_it),
+    ("including a clade at the cap is caught", check_including_a_clade_at_the_cap_is_caught),
+    ("the sampler refuses a clade at or below the cap", check_the_sampler_refuses_a_clade_at_or_below_the_cap),
+    ("cap draw is a pure function of (cap, seed, clade)", check_cap_draw_is_a_pure_function_of_cap_seed_clade),
+    ("cap validation", check_cap_validation),
+    ("cap arms size and exclude like fraction arms", check_cap_arms_size_and_exclude_like_fraction_arms),
+    ("correlation uses the ground-truth set, not the grid", check_correlation_uses_the_ground_truth_set_not_the_grid),
     ("correlating the whole grid is caught", check_correlating_the_whole_grid_is_caught),
+    ("the ground-truth set is fixed across sampling depths", check_ground_truth_set_is_fixed_across_sampling_depths),
     ("empty populations stay as rows with n=0", check_correlation_keeps_empty_populations_as_rows),
     ("a control clade that disagrees raises", check_a_control_clade_that_disagrees_raises),
 ]

@@ -30,20 +30,37 @@ read or moved, and the arm rules read one existing output
 (`glm/curated_counts*.csv`) without changing it. Ships no-bump and rides the next
 schema-breaking bump.
 
-**New config section.** `clade_subsamples` — a list of entries, each thinning a
-*unit* of clades to a list of sampling fractions:
+**New config section.** `clade_subsamples` — a list of entries. Each entry sets
+exactly one depth key, giving two kinds of arm:
 
 ```yaml
 clade_subsamples:
   - unit: [21J, 21I]   # a founder neighbourhood, not one clade
     sampling_fractions: [0.01, 0.05, 0.10, 0.20]
     seed: 0
+  - max_samples: [50000, 20000, 5000]   # every clade above the cap
+    seed: 0
 ```
 
-Each `(unit, seed, fraction)` is one **arm**, named
+`sampling_fractions` thins a *named unit* to that fraction of each clade's
+samples, giving one arm per fraction, named
 `frac_{unit joined by -}_{seed}_{fraction in basis points}bp` (e.g.
-`frac_21J-21I_0_1000bp`). Empty in every production config; the arms are launched
-by naming their paths, since four full-size arms cost ~44 wall-hours.
+`frac_21J-21I_0_1000bp`).
+
+`max_samples` thins **every clade above the cap** down to it and leaves smaller
+clades untouched, giving one arm per cap, named `cap_{max_samples}_{seed}` (e.g.
+`cap_50000_0`). Its unit is *derived* from the tree's clade sizes rather than
+named, which is what lets one arm span a wide range of effective depths at once —
+at `max_samples: 50000` on the v12 gisaid tree, 30 of 56 clades are capped with
+effective fractions from 1.15% (21J) to 100% — and makes the untouched clades
+byte-identical controls by construction. Membership is *strictly* above the cap.
+A cap at or above every clade's size thins nothing: that is the cap analogue of
+`sampling_fractions: [1.0]`, must be byte-identical to the full tree, and is
+recorded in `subsample_summary.csv` with an **empty `clade`** so it cannot be
+mistaken for an arm that was never wired.
+
+Empty in every production config; the arms are launched by naming their paths,
+since a full-size arm costs ~8 CPU-hours.
 
 **New outputs.** Per arm, under an inserted `{arm}/` path segment:
 `mat/clades/{arm}/`, `mutations/{arm}/`, `mutation_counts/{arm}/`,
@@ -55,19 +72,34 @@ nominal fraction is not an evidence cut (1% of 21J's samples keeps 4.1% of its
 nucleotide mutations).
 
 **The analysis, not just the arms.** `correlation_summary.csv` at the output root
-is the headline deliverable: one row per `(arm, clade, estimator, filter)` with
-`pearson_r`, `spearman_rho` and — always — the `n_mutations` they were computed
-on and the `coverage` they say nothing about. The population is the
-**intersection of scored mutations** (`actual_count > 0` on both sides), not the
-grid: every grid row carries a fitness value even when nothing was observed, and
-those rows are invariant to sampling fraction, so correlating over them returns a
-confident number describing the grid's construction. Measured on the test tree,
-that mistake reads 0.619 where the 29 genuinely scored mutations give 1.000.
-Non-unit clades are reported as controls (`thinned=False`) and must reproduce
-full depth exactly, which is the end-to-end evidence that an arm did not reach a
-clade its config never named. `notebooks/subsample_correlations.py` (marimo)
-draws the per-`(clade, fraction)` scatters and the rho-vs-fraction curves from
-it.
+is the headline deliverable: one row per `(arm, clade, estimator, population)`
+with `pearson_r`, `spearman_rho`, `rmse`, `bias`, `regression_slope` and —
+always — the `n_mutations` they were computed on and the `coverage` they say
+nothing about.
+
+The population is a **fixed ground-truth set defined on the full-depth row**:
+`max(actual_count, expected_count) >= subsample_count_threshold` at full depth,
+so it is the same set of mutations at every sampling depth and coefficients are
+comparable across arms. Two alternatives are both wrong and both look reasonable.
+Reading the threshold off the *arm's* row is survivorship bias — it drops exactly
+the mutations the thinning destroyed, so the denominator moves with the cut and a
+degrading estimator reports a flat correlation over an ever-easier population.
+Correlating over the whole grid measures the grid: every grid row carries a
+fitness value even when nothing was observed and those rows do not depend on
+sampling depth, a mistake that reads 0.619 on the test tree where the 29
+genuinely scored mutations give 1.000.
+
+`pearson_r` is never reported alone, because it is invariant to any linear
+transform of the arm's estimates and so can see neither a systematic shift nor
+the shrinkage toward zero that thin evidence produces: on the measured fraction
+arms 21J's `regression_slope` falls to 0.477 at `p = 0.01` while `pearson_r`
+still reads 0.765, and 21I's to 0.217 at 0.601.
+
+Clades an arm did not thin are reported as controls (`thinned=False`) and must
+reproduce full depth exactly, which is the end-to-end evidence that an arm did
+not reach a clade it was never meant to touch.
+`notebooks/subsample_correlations.py` (marimo) draws the per-`(clade, depth)`
+scatters, the r-vs-depth curves and the count-survival eCDFs from it.
 
 **New sidecar on the existing paths.** `mutation_counts/branch_qc/{clade}.csv`
 and `pcps/{gene}/branch_qc/{clade}.csv` (and the `upto_{cutoff}/` and `{arm}/`

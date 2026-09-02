@@ -152,7 +152,12 @@ Two consequences for a consumer. The cutoff sets depend on the **node dating**, 
 
 ### `{arm}/…` — clade subtrees at reduced sampling depth (v12+)
 
-For each entry in the config key `clade_subsamples`, each of its sampling fractions defines one **arm**: the per-clade counts *and* PCP families, rebuilt from subtrees re-extracted at that fraction of each unit clade's samples ([#151](https://github.com/matsengrp/mat-pcp/issues/151)). Additive: `{arm}` is an *optional* path segment, so every existing output path is unchanged.
+For each entry in the config key `clade_subsamples`, each of its sampling depths defines one **arm**: the per-clade counts *and* PCP families, rebuilt from subtrees re-extracted at reduced depth ([#151](https://github.com/matsengrp/mat-pcp/issues/151)). Additive: `{arm}` is an *optional* path segment, so every existing output path is unchanged.
+
+Two kinds of arm, and an entry sets exactly one depth key:
+
+- **`frac_{unit}_{seed}_{fraction}bp`** — `sampling_fractions` thins a *named unit* of clades to that fraction of each clade's samples. It intervenes on **size**: every clade keeps the same share, so the tree's sampling imbalance is preserved and one arm is one point on the depth curve.
+- **`cap_{max_samples}_{seed}`** — `max_samples` thins **every clade above the cap** down to exactly that many samples and leaves smaller clades untouched. It intervenes on **composition**. Its unit is *derived* from the tree's clade sizes rather than named, so one arm spans a wide range of effective depths at once — at `max_samples: 50000` on the v12 gisaid tree, 30 of 56 clades are capped, with effective fractions from 1.15% (21J) to 100% — and the untouched clades are byte-identical controls by construction. Membership is **strictly** above the cap: a clade of exactly `max_samples` samples is already at the target and is not thinned.
 
 **Arm naming** is `frac_{unit joined by -}_{seed}_{fraction in basis points}bp` — `frac_21J-21I_0_1000bp` for `unit: [21J, 21I], seed: 0, frac: 0.10`. Basis points rather than `str(frac)` because YAML parses `0.10` as `0.1` and float arithmetic does not preserve the spelling, so two configs meaning the same depth would otherwise name two arms.
 
@@ -186,15 +191,17 @@ The roster for the above: one row per (arm, clade) with `gene` empty for the cou
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `arm` | string | `frac_{unit}_{seed}_{fraction}bp`. |
-| `unit` | string | The arm's unit clades, joined by `-`. |
+| `arm` | string | `frac_{unit}_{seed}_{fraction}bp` or `cap_{max_samples}_{seed}`. |
+| `kind` | string | `frac` or `cap`. |
+| `unit` | string | A `frac` arm's unit clades joined by `-`; `all` for a `cap` arm, whose unit is derived and would otherwise be a cell that changes with the tree. |
 | `seed` | int | The configured seed. |
-| `sampling_fraction` | float | The configured fraction. |
-| `clade` | string | A clade of the unit. |
+| `sampling_fraction` | float | The configured fraction; empty for a `cap` arm. |
+| `max_samples` | int | The configured cap; empty for a `frac` arm. |
+| `clade` | string | A clade of the unit. **Empty** on the single row recording an arm that thins nothing (a cap at or above every clade's size) — that arm is legitimate, must be byte-identical to the full tree, and would otherwise contribute no rows and be indistinguishable from one never wired. |
 | `gene` | string | Empty on the counts-arm row; a `pcp_genes` entry on the PCP-arm rows. |
 | `included` | bool | Whether the pipeline actually built this pair. |
 | `n_samples_full` | int | Samples in the clade on the whole filtered tree. |
-| `n_samples_arm` | int | `round(sampling_fraction * n_samples_full)`, asserted against the emitted list. |
+| `n_samples_arm` | int | `round(sampling_fraction * n_samples_full)` for a `frac` arm, `min(n_samples_full, max_samples)` for a `cap` arm. Asserted against the emitted list. |
 | `sample_fraction_realized` | float | `n_samples_arm / n_samples_full`. |
 | `n_nt_mutations_full`, `n_nt_mutations_arm` | int | Nucleotide mutations over all branches, pre-QC. Counts-arm rows only (genome-wide). |
 | `nt_mutation_retention` | float | The measured evidence cut. Always ≥ `sample_fraction_realized`. |
@@ -209,6 +216,8 @@ The roster for the above: one row per (arm, clade) with `gene` empty for the cou
 **Why this file exists.** A unit clade thinned below `min_clade_size` is skipped at DAG-construction time and contributes no files, so in the output tree alone it is indistinguishable from a wiring mistake — the same problem `glm/era_fit_summary.csv` solves for empty eras and `pcps/cutoff_summary.csv` for absent cutoff clades. `included` comes from the Snakefile function that drove the fan-out, not from a second evaluation of the sizing arithmetic, and the two are reconciled **in both directions**, raising on either kind of disagreement.
 
 **Two thresholds, different in kind.** A clade thinned below `min_clade_size` is *excluded and recorded*. A clade thinned to **zero** samples is a **hard failure** at DAG construction, because `matUtils extract -s` on an empty sample list is undefined.
+
+**Do not key an analysis to the configured depth.** `sample_fraction_realized` and `nt_mutation_retention` are the measured quantities, and for a `cap` arm the configured depth is not even a fraction — the effective fraction differs per clade by construction, which is the point of a cap.
 
 ### `mutation_counts/branch_qc/{clade}.csv` and `pcps/{gene}/branch_qc/{clade}.csv` (v12+)
 
@@ -227,25 +236,41 @@ The histogram is in the same file as the outcome tally on purpose: the `max_nt_m
 ### `correlation_summary.csv` (output root, #151)
 
 Per-clade fitness effects at reduced sampling depth against full depth. One row
-per `(arm, clade, estimator, filter)`.
+per `(arm, clade, estimator, population)`.
 
 | Column | Description |
 |---|---|
-| `arm`, `unit`, `seed`, `fraction` | The arm and the entry that produced it |
+| `arm`, `kind`, `unit`, `seed`, `sampling_fraction`, `max_samples` | The arm and the entry that produced it |
 | `clade` | The clade being compared |
-| `thinned` | `True` if this clade is in the arm's unit; `False` rows are **controls** and must reproduce full depth exactly |
+| `thinned` | `True` if this arm thinned this clade; `False` rows are **controls** and must reproduce full depth exactly |
 | `estimator` | `delta_fitness_ratio` or `delta_fitness_bayesian`, never pooled |
-| `filter` | `unfiltered`, or `max(actual,expected)_arm>=N` applied to the **arm's** row |
+| `population` | `ground_truth_max_full>=N` (the headline) or `scored_at_both_depths` |
 | `n_mutations` | Size of the population the coefficients were computed on. **Always present**, including 0 |
+| `n_ground_truth` | Size of the fixed ground-truth set for this clade — identical across arms |
 | `n_scored_full`, `n_scored_arm` | Mutations with `actual_count > 0` at each depth |
 | `coverage` | `n_scored_both / n_scored_full` — what the correlation cannot see |
 | `max_actual_count_full` | Highest full-depth count anywhere. At 1, `delta_fitness_ratio` is collinear with the expected count and the coefficients are arithmetic, not agreement |
 | `pearson_r`, `spearman_rho` | Empty when the population is smaller than 3 or one side is constant; the row is **kept** so an unmeasurable population is distinguishable from an unasked one |
-| `rmse`, `median_abs_diff` | Direct magnitude of the drift, in fitness units |
+| `rmse`, `median_abs_diff` | Magnitude of the drift in `delta_fitness_ratio`'s own log-fitness units — **not** a ratio of anything |
+| `bias` | Signed `mean(arm − full)`. Positive everywhere on the measured arms: thin evidence estimates mutations as *more fit* |
+| `regression_slope` | Least-squares slope of arm on full. 1.0 if unbiased in scale; falls toward 0 as estimates shrink to the pseudocount's bound |
+| `sd_full`, `sd_arm` | The two spreads, which is what makes the compression readable |
 
-The population is the **intersection of scored mutations**, not the grid: every
-grid row carries a fitness value even where nothing was observed, and those rows
-do not depend on sampling fraction.
+**The population is fixed on the full-depth row**: a mutation is in the
+ground-truth set when `max(actual_count, expected_count) >= subsample_count_threshold`
+**at full depth**, so it is the same set of mutations at every sampling depth and
+the coefficients are comparable across arms. Two alternatives are both wrong.
+Reading the threshold off the *arm's* row is survivorship bias — it drops exactly
+the mutations the thinning destroyed, so the denominator moves with the cut and a
+degrading estimator reports a flat correlation. Correlating over the whole grid
+measures the grid: every row carries a fitness value even where nothing was
+observed, and those rows do not depend on sampling depth.
+
+**`pearson_r` is never sufficient on its own.** It is invariant to any linear
+transform of the arm's estimates, so it can see neither the bias nor the
+compression. On the completed fraction arms 21J's `regression_slope` falls to
+0.477 at `p = 0.01` while `pearson_r` still reads 0.765, and 21I's to 0.217 at
+0.601.
 
 ## Fitness Estimates
 

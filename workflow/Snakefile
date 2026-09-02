@@ -353,11 +353,21 @@ def get_final_tree():
 # is a config value rather than a constant because it is a property of the date
 # prior, which #146 has already moved once. See the comment block above
 # ``cutoffs.select_for_cutoff`` for the measured distributions.
-# Clade-subsampling arms (#151). Each entry thins a *unit* of clades to a list
-# of sampling fractions, so the same clade can be re-estimated at several
-# sampling depths and the pooled-vs-per-clade crossover measured. Validated at
-# parse time -- a fraction outside ``0 < frac <= 1.0`` and a duplicate arm name
-# are hard failures, never silent clamps, because a clamped fraction produces a
+# Clade-subsampling arms (#151). Two kinds, and an entry sets exactly one:
+#
+#   - ``sampling_fractions`` thins a named *unit* of clades by a fraction. It
+#     intervenes on **size**, so each arm is one point on the depth curve and the
+#     tree's sampling imbalance survives intact.
+#   - ``max_samples`` thins every clade above the cap down to it, leaving smaller
+#     clades untouched. It intervenes on **composition**, which is what the
+#     pooled-vs-per-clade question actually asks about, and one arm spans two
+#     orders of magnitude of effective depth -- with the untouched clades as
+#     byte-identical controls by construction rather than by being deliberately
+#     left unthinned.
+#
+# Validated at parse time -- a fraction outside ``0 < frac <= 1.0``, a cap below
+# 1, an entry setting both depth keys or neither, and a duplicate arm name are
+# all hard failures, never silent clamps, because a clamped depth produces a
 # well-formed arm at the wrong depth.
 SUBSAMPLE_ARMS = subsample_mod.validate_entries(config.get("clade_subsamples"))
 
@@ -1308,6 +1318,40 @@ def clade_sizes(wildcards):
     return dict(zip(counts[clade_col], counts["count"]))
 
 
+def arm_clade_sizes(wildcards):
+    """``{clade: n_samples}`` restricted to this tree's *processed* roster.
+
+    ``clade_counts.csv`` names every clade the metadata mentions, including ones
+    dropped by ``clades_to_exclude`` or beyond ``max_clades``, which have no
+    subtree to thin. A cap arm's unit is derived from clade sizes, so deriving it
+    from the raw counts would request ``mat/clades/{arm}/21A_samples.txt`` for a
+    clade the pipeline never extracts -- and 21A is exactly that case on every
+    production tree (no clade founder is defined for it, so it is excluded).
+
+    Kept in the roster's order, because ``resolve_unit`` preserves the order it
+    is given and the aggregate rules concatenate their inputs in it: the
+    degenerate arm's byte-equality with the full tree rests on that.
+    """
+    sizes = clade_sizes(wildcards)
+    return {c: sizes[c] for c in clades_w_adequate_counts(wildcards) if c in sizes}
+
+
+def arm_units_for_tree(wildcards):
+    """``{arm: [clades it thins]}`` for this tree.
+
+    The single place either kind of arm's membership is resolved -- named for a
+    ``frac`` arm, derived from the clade sizes for a ``cap`` arm. Every fan-out
+    helper, the roster param and the sampler's defensive check read this, so they
+    cannot disagree about one clade.
+    """
+    return subsample_mod.arm_units(SUBSAMPLE_ARMS, arm_clade_sizes(wildcards))
+
+
+def arm_unit_of(wildcards, arm):
+    """This arm's unit as a ``set``, for membership tests in the fan-outs."""
+    return set(arm_units_for_tree(wildcards)[arm])
+
+
 def arm_retained_counts(wildcards):
     """``{arm: {clade: n_retained}}`` for this tree, from the clade counts.
 
@@ -1321,7 +1365,7 @@ def arm_retained_counts(wildcards):
     """
     return subsample_mod.check_arm_sizes(
         SUBSAMPLE_ARMS,
-        clade_sizes(wildcards),
+        arm_clade_sizes(wildcards),
         min_clade_size=config.get("min_clade_size", 100),
     )
 
@@ -1345,7 +1389,7 @@ def arm_clades(wildcards):
     if not arm_dir:
         return full
     arm = arm_dir.rstrip("/")
-    unit = set(arm_spec(arm)["unit"])
+    unit = arm_unit_of(wildcards, arm)
     kept = arm_retained_counts(wildcards)[arm]
     return [c for c in full if c not in unit or c in kept]
 
@@ -1368,7 +1412,7 @@ def per_unit_clade_inputs(path_template, wildcards):
       ``subsample_clade_samples`` and thin a clade the config never named.
     """
     arm_dir = arm_dir_of(wildcards)
-    unit = set(arm_spec(arm_dir.rstrip("/"))["unit"]) if arm_dir else set()
+    unit = arm_unit_of(wildcards, arm_dir.rstrip("/")) if arm_dir else set()
     return [
         path_template.format(
             tree=wildcards.tree,
@@ -1394,8 +1438,8 @@ def arm_sample_lists(wildcards):
         for clade in full
     ]
     retained = arm_retained_counts(wildcards)
-    for arm, spec in SUBSAMPLE_ARMS.items():
-        for clade in spec["unit"]:
+    for arm, unit in arm_units_for_tree(wildcards).items():
+        for clade in unit:
             if clade in retained[arm]:
                 paths.append(
                     os.path.join(
@@ -1426,8 +1470,8 @@ def arm_branch_qc_inputs(wildcards):
                   for gene in PCP_GENES]
     paths = []
     retained = arm_retained_counts(wildcards)
-    for arm, spec in SUBSAMPLE_ARMS.items():
-        for clade in spec["unit"]:
+    for arm, unit in arm_units_for_tree(wildcards).items():
+        for clade in unit:
             if clade not in retained[arm]:
                 continue
             for arm_dir in (arm + "/", ""):
@@ -1450,15 +1494,23 @@ def _arm_roster_param(wildcards):
     failure the file exists to expose (#137's shape, #149's restatement).
     """
     retained = arm_retained_counts(wildcards)
+    units = arm_units_for_tree(wildcards)
     roster = {}
     for arm, spec in SUBSAMPLE_ARMS.items():
         kept = retained[arm]
+        unit = units[arm]
         roster[arm] = {
-            "unit": list(spec["unit"]),
+            "kind": subsample_mod.spec_kind(spec),
+            # The *resolved* unit, not ``spec["unit"]``: a cap arm's is derived
+            # and ``spec["unit"]`` is ``None``. Recording what the fan-out
+            # actually used is the whole point of passing this as a param.
+            "unit": list(unit),
+            "unit_label": subsample_mod.unit_label(spec),
             "seed": spec["seed"],
             "frac": spec["frac"],
-            "included": [c for c in spec["unit"] if c in kept],
-            "excluded": [c for c in spec["unit"] if c not in kept],
+            "cap": spec["cap"],
+            "included": [c for c in unit if c in kept],
+            "excluded": [c for c in unit if c not in kept],
             "n_retained": {c: int(n) for c, n in kept.items()},
         }
     return roster
@@ -2111,9 +2163,12 @@ rule subsample_clade_samples:
     output:
         samples=os.path.join(OUTDIR, "mat/clades/{arm}/{clade}_samples.txt")
     params:
-        unit=lambda wc: arm_spec_from_wildcards(wc)["unit"],
-        seed=lambda wc: arm_spec_from_wildcards(wc)["seed"],
-        frac=lambda wc: arm_spec_from_wildcards(wc)["frac"]
+        # The *spec*, not a resolved unit. A cap arm's unit is derived from the
+        # clade sizes, and resolving a checkpoint inside ``params`` would tie
+        # this rule's scheduling to one -- so the script decides membership from
+        # the sample list it already reads (``len(samples) > cap``), which is the
+        # same predicate ``resolve_unit`` applies to the checkpoint's counts.
+        spec=lambda wc: dict(arm_spec_from_wildcards(wc))
     log:
         os.path.join(OUTDIR, "log/{arm}/subsample_clade_samples_{clade}.log")
     conda:
@@ -2169,8 +2224,9 @@ def arm_fitness_tables(wildcards):
     full = clades_w_adequate_counts(wildcards)
     retained = arm_retained_counts(wildcards)
     targets = []
-    for arm, spec in SUBSAMPLE_ARMS.items():
-        unit = set(spec["unit"])
+    units = arm_units_for_tree(wildcards)
+    for arm in SUBSAMPLE_ARMS:
+        unit = set(units[arm])
         kept = retained[arm]
         # Mirrors ``arm_clades``: every clade the full tree processes except a
         # unit clade thinned below ``min_clade_size``. Spelled out rather than
@@ -2190,20 +2246,30 @@ rule subsample_correlations:
     """Correlate each arm's per-clade fitness effects against full depth (#151).
 
     The headline result the arms exist to produce. One row per
-    ``(arm, clade, estimator, filter)``, always carrying the ``n_mutations`` the
-    coefficient was computed on: the count filter raises rho partly by dropping
-    hard cases, so a coefficient without its n is not readable.
+    ``(arm, clade, estimator, population)``, always carrying the
+    ``n_mutations`` the coefficient was computed on.
 
-    The population is the **intersection of scored mutations**, not the grid.
-    Every grid row carries a ``delta_fitness_ratio`` even when nothing was
-    observed -- 121,348 of 121,427 rows for 20A on the test data -- and those
-    rows are invariant to sampling fraction by construction, so correlating over
-    them returns a confident number describing the grid rather than the
-    estimates. What the vanished mutations contribute instead is ``coverage``.
+    The population is a **fixed ground-truth set defined on the full-depth
+    row** -- ``max(actual_count, expected_count) >= subsample_count_threshold``
+    at full depth -- so it is the same set of mutations at every sampling depth
+    and the coefficients are comparable across arms. Two alternatives are both
+    wrong and both look reasonable. Filtering on the *arm's* row is survivorship
+    bias: it drops exactly the mutations the thinning destroyed, so the
+    denominator moves with the cut and a degrading estimator reports a flat
+    correlation. Correlating over the whole grid measures the grid: every row
+    carries a ``delta_fitness_ratio`` even where nothing was observed (121,348
+    of 121,427 rows for 20A on the test data) and those rows are invariant to
+    sampling depth by construction. What the vanished mutations contribute
+    instead is ``coverage``.
+
+    ``subsample_summary.csv`` is deliberately **not** an input. The script never
+    reads it, and declaring it would make this rule wait on every arm's PCP
+    extraction -- the summary reconciles per-gene branch QC -- which for a cap
+    arm is 30 clades x 6 genes of work that has nothing to do with a correlation
+    between two fitness tables. Both files are requested by ``arm_targets``.
     """
     input:
-        fitness=arm_fitness_tables,
-        summary=os.path.join(OUTDIR, "subsample_summary.csv")
+        fitness=arm_fitness_tables
     output:
         summary=os.path.join(OUTDIR, "correlation_summary.csv")
     params:

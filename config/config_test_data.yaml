@@ -178,6 +178,25 @@ clade_subsamples:
   - unit: [19B]
     sampling_fractions: [0.2]
     seed: 0
+  # Cap arms (#151 amendment). The three CI clades are 19A (2 samples), 19B (5)
+  # and 20A (46), so:
+  #
+  #   cap_1000_0  caps nothing -- the cap analogue of `sampling_fractions: [1.0]`.
+  #               Its unit is *empty*, every clade is a control, and every output
+  #               must be byte-identical to the full tree's. That empty unit is
+  #               the case worth having in CI: it is the one shape where the
+  #               fan-out helpers, the roster and the summary all have nothing to
+  #               iterate, and a crash there would otherwise surface first on a
+  #               production tree.
+  #   cap_20_0    thins 20A (46 -> 20) and leaves 19A and 19B untouched, so one
+  #               run exercises a thinned clade and two controls at once -- which
+  #               is the property that distinguishes a cap arm from a fraction
+  #               arm and is invisible to any `sampling_fractions` entry.
+  #
+  # The shipped production caps (50000/20000/5000) would thin nothing here, so
+  # they cannot be used: every guard below the cap would go unexercised.
+  - max_samples: [1000, 20]
+    seed: 0
 
 # Drop a sample from a cutoff set when its chronumental *predicted* date lands
 # more than this many days after the cutoff (#149). Set to null to disable.
