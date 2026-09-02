@@ -1177,6 +1177,50 @@ mat-pcp/
     See [#151](https://github.com/matsengrp/mat-pcp/issues/151).
 
 
+16. **A rule's `threads` is a scheduler reservation, not a speedup, and this
+    pipeline has no script that reads it.** No script under `workflow/scripts/`
+    or `workflow/modules/` references `snakemake.threads`, and only
+    `optimize_mat_tree` interpolates `{threads}` into a shell command. So for
+    every other rule the number was a pure reservation: at `threads: 4` a
+    `-j 32` run schedules **8** concurrent jobs instead of 32, and the other
+    three quarters of each reservation idle. Nothing fails, no output moves and
+    no log complains -- the run is simply 4x longer, which is why this survived
+    through v12.
+
+    *The measurement, not the intuition, decides.* `cpu_time/wall` from the v12
+    gisaid tree's `benchmarks/*.tsv` is the discriminator: `ntmut_fitness` 0.97
+    across 224 jobs and 31.5 h, `mat_clade_subset` 0.86 over 7.1 h,
+    `window_expected_counts` 1.00, `window_subtree_counts` 0.98, `master_table`
+    0.48 -- all single-threaded despite holding 4 each. Two rules earn their
+    allocation and keep it: `optimize_mat_tree` (passes `{threads}` through) and
+    `chronumental`, which measured **1.25** because JAX threads internally with
+    no flag to pass. `ntmut_fitness` alone explains the whole wall clock:
+    31.54 h / 8 concurrent = 3.9 h against an observed 4h09m, so dropping it to
+    1 is a ~3x speedup of the entire pipeline rather than a micro-optimization.
+
+    *`matUtils` defaults to 32 threads, so the reservation and the reality have
+    to be pinned together.* All seven `matUtils extract` / `matUtils summary`
+    calls now pass `-T {threads}`. Without it, lowering a rule's reservation
+    makes things *worse*: N concurrent jobs each spawn up to 32 threads, so the
+    fix that raises concurrency also multiplies oversubscription, and only the
+    workload's failure to parallelize keeps that harmless today. Two of the
+    call sites (`translate_mat`, `mat_sample_paths`) declare no `threads:` at
+    all, where `{threads}` resolves to Snakemake's 1 -- so they were the worst
+    offenders, reserving one core and inviting 32. Passing `-T` is
+    output-neutral: `extract -o`, `extract -t` and `extract -S` are all
+    byte-identical at `-T 1`, `-T 32` and the default, verified before the
+    values were changed. Note `matUtils` prepends the working directory to
+    *every* path argument including `-t` and `-f`, so it cannot be probed with
+    absolute paths outside its run directory -- which is why the standing
+    evidence is a whole-tree byte comparison rather than a unit test.
+
+    Neither `mem_mb` nor `threads` is a rerun trigger, so correcting them does
+    not invalidate a built tree; but they only throttle at all when the run
+    passes `--resources mem_mb=...`, and `ntmut_fitness` declares `mem_mb=2000`
+    against a measured 235 MB peak, an 8.5x over-declaration that is the same
+    bug in the other resource dimension.
+
+
 ### Configuration Sections
 
 The configuration (`config/config.yaml`) is organized into:
@@ -1257,7 +1301,8 @@ The configuration (`config/config.yaml`) is organized into:
 11. **Fitness**: `fitness_pseudocount`, `fitness_N_f`, `fitness_N_n_exp`
 12. **Gene Configuration**: `orf1ab_to_nsps`, `gene_overlaps`, `genes`
 13. **Site Masking**: `sites_to_exclude`, `site_include_range`
-14. **Threads**: Per-rule thread allocation
+14. **Threads**: Per-rule thread allocation. A reservation only -- see
+    pattern 16; the values are measured from `cpu_time/wall`, not chosen.
 
 ### Output Organization
 

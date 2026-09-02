@@ -20,6 +20,29 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ### Unreleased (no version bump)
 
+#### Thread allocations corrected to the measured value
+
+No output changes: `threads` and `mem_mb` are scheduler reservations, and
+neither is a Snakemake rerun trigger, so a built tree stays valid.
+
+No script in the pipeline reads `snakemake.threads`, and only
+`optimize_mat_tree` interpolates `{threads}` into a shell command, so every
+other allocation above 1 was reserving cores that idled -- at `threads: 4` a
+`-j 32` run schedules 8 concurrent jobs, not 32. Six rules measured
+single-threaded on the v12 gisaid tree (`cpu_time/wall`: `ntmut_fitness` 0.97
+over 31.5 h, `mat_clade_subset` 0.86 over 7.1 h, `window_subtree_counts` 0.98,
+`window_expected_counts` 1.00, `master_table` 0.48, `filter_mat_tree` 0.54) and
+are now 1. `chronumental` measured 1.25 and keeps 4; `optimize_mat_tree` keeps
+12. `ntmut_fitness` accounts for essentially the whole wall clock -- 31.54 h
+across 224 jobs at 8-way is 3.9 h against an observed 4h09m -- so this is
+roughly a 3x speedup of a full run, not a trim.
+
+All seven `matUtils extract` / `matUtils summary` calls now pass `-T {threads}`.
+matUtils' own default is 32, so raising concurrency without pinning it would
+multiply oversubscription instead of removing it. Verified output-neutral:
+`extract -o`, `-t` and `-S` are byte-identical at `-T 1`, `-T 32` and the
+default, and a full test-data rebuild byte-matches the previous tree.
+
 #### Counts and PCPs for clade subtrees at reduced sampling depth
 
 [#151](https://github.com/matsengrp/mat-pcp/issues/151). Additive by the

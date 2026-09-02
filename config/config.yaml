@@ -376,17 +376,31 @@ genes:
 # =============================================================================
 # Thread Configuration
 # =============================================================================
+# A rule's `threads` here is a *scheduler reservation*, not a speedup: no script
+# in this pipeline reads `snakemake.threads`, so for a single-threaded rule an
+# over-allocation simply divides concurrency. Measured cpu_time/wall on the v12
+# gisaid tree (`benchmarks/`): ntmut_fitness 0.97 over 31.5 h, mat_clade_subset
+# 0.86 over 7.1 h, window_subtree_counts 0.98, window_expected_counts 1.00,
+# master_table 0.48 -- all single-threaded, so all sit at 1. Two rules earn
+# more and keep it: optimize_mat_tree passes `{threads}` to matUtils, and
+# chronumental measured 1.25 (JAX threads internally).
+#
+# Every matUtils call passes `-T {threads}`, because matUtils' own default is
+# **32**: without it, N concurrent jobs spawn up to 32N threads on an N-core
+# box, which is latent oversubscription that only stays harmless while the
+# workload fails to parallelize. Output is byte-identical at `-T 1`, `-T 32`
+# and the default, verified for `extract -o`, `extract -t` and `extract -S`.
 threads:
   filter_metadata: 1
-  filter_mat_tree: 4
+  filter_mat_tree: 1
   optimize_mat_tree: 12
   chronumental: 4
   chronumental_qc: 1
-  window_subtree_counts: 4
-  window_expected_counts: 4
-  mat_clade_subset: 4
+  window_subtree_counts: 1
+  window_expected_counts: 1
+  mat_clade_subset: 1
   extract_pcps: 1
   count_mutations: 1
-  master_table: 4
-  ntmut_fitness: 4
+  master_table: 1
+  ntmut_fitness: 1
   default: 1

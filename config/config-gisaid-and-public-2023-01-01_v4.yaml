@@ -309,11 +309,11 @@ masking_gene: "S"
 # =============================================================================
 threads:
   filter_metadata: 1
-  filter_mat_tree: 4
+  filter_mat_tree: 1
   optimize_mat_tree: 12
-  mat_clade_subset: 4
+  mat_clade_subset: 1
   extract_pcps: 1
   count_mutations: 1
-  master_table: 4
-  ntmut_fitness: 4
+  master_table: 1
+  ntmut_fitness: 1
   default: 1

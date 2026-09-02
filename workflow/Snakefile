@@ -658,6 +658,7 @@ rule filter_mat_tree:
         (
             # First extraction: filter to valid strains
             matUtils extract \
+                -T {threads} \
                 -i {input.mat_tree} \
                 -s {log.valid_strains} \
                 -o {output.filtered_pb}
@@ -666,6 +667,7 @@ rule filter_mat_tree:
             # This addresses a known issue where double extraction is needed
             if [ -n "{params.mat_subset_kwargs}" ]; then
                 matUtils extract \
+                    -T {threads} \
                     -i {output.filtered_pb} \
                     {params.mat_subset_kwargs} \
                     -o {output.filtered_pb}
@@ -720,7 +722,7 @@ rule export_newick:
         "envs/usher.yml"
     shell:
         """
-        matUtils extract -i {input.tree} -t {output.nwk} \
+        matUtils extract -T {threads} -i {input.tree} -t {output.nwk} \
             > {log.stdout} 2> {log.stderr}
         """
 
@@ -1513,6 +1515,7 @@ rule mat_clade_subset:
 
         (
             matUtils extract \
+                -T {threads} \
                 -i {input.tree} \
                 -s {input.samples} \
                 -o {output.tree}
@@ -1873,6 +1876,7 @@ rule mat_clade_subset_upto:
 
         (
             matUtils extract \
+                -T {threads} \
                 -i {input.tree} \
                 -s {input.samples} \
                 -o {output.tree}
@@ -2307,6 +2311,7 @@ rule translate_mat:
         """
         echo "Translating mutations for clade {wildcards.clade}..." > {log}
         matUtils summary \
+            -T {threads} \
             -i {input.mat} \
             -g {input.ref_gtf} \
             -f {input.ref_fasta} \
@@ -2329,7 +2334,7 @@ rule mat_sample_paths:
     shell:
         """
         echo "Extracting sample paths for clade {wildcards.clade}..." > {log}
-        matUtils extract -i {input.mat} -S {output.tsv} 2>> {log}
+        matUtils extract -T {threads} -i {input.mat} -S {output.tsv} 2>> {log}
         echo "Output: $(wc -l < {output.tsv}) lines" >> {log}
         """
 
