@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Stage | Description | Key Rules |
 |-------|-------------|-----------|
 | 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `export_newick`, `chronumental`, `chronumental_qc` (tips **and** internal nodes, #139), `chronumental_rtt_plot` (#146), `window_subtree_counts`, `get_ref_fasta`, `ref_coding_sites` |
-| 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade`, `censor_table` (per-clade DASM censor table, #144) |
+| 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade`, `censor_table` (per-clade DASM censor table, #144), `masked_nt_sites` (clade-independent nucleotide mask, #153) |
 | 3b | Date-Cutoff PCPs (#149) | `get_clades_by_cutoff` (checkpoint), `cutoff_pcp_summary`, `samples_upto_cutoff`, `mat_clade_subset_upto`, `extract_pcps_by_clade_upto`, `aggregate_clade_pcps_upto`, `aggregate_filtered_branches_upto`, `curate_pcps_for_dasm_upto`, `curate_all_pcps_for_dasm_upto`, `dasm_ready_pcps_all_clades_upto` |
 | 3c | Subsampling Arms (#151) | `subsample_clade_samples`, `subsample_correlations`; everything else an arm rebuilds is an existing rule reached through the optional `{arm_dir}` prefix |
 | 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
@@ -115,7 +115,7 @@ by.
 ### Testing
 ```bash
 # Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
-# all fourteen, plus a `marimo check` on the analysis notebook, before the pipeline steps)
+# all fifteen, plus a `marimo check` on the analysis notebook, before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 pixi run python tests/test_clade_founder_guards.py
 pixi run python tests/test_founder_codon_background.py
@@ -130,6 +130,7 @@ pixi run python tests/test_date_parsing.py
 pixi run python tests/test_censor_table.py
 pixi run python tests/test_pcp_date_cutoffs.py
 pixi run python tests/test_clade_subsamples.py
+pixi run python tests/test_masked_nt_sites.py
 
 # Half B of the bte test needs the Snakemake-built bte env, so it runs after a
 # pipeline run; --require-bte makes a missing env a failure rather than a skip.
@@ -1313,6 +1314,99 @@ mat-pcp/
     rather than of the clade, and 101 benchmarks span 23.9-25.6 GB.
 
 
+17. **The nucleotide-level mask was already computed and thrown away, and the
+    file that replaces it cannot be a second output on the rule that computes
+    it.** `get_problematic_sites.py`'s `site_all_excluded` -- the sites excluded
+    in *every* clade, i.e. exactly the three clade-independent reasons -- is
+    widened to codons and only the codons are written, so one suspect nucleotide
+    takes its two innocent neighbours with it: 121 masked nucleotide sites become
+    345 masked nucleotides across the six v12 production genes, a **2.85x**
+    over-mask (121 is a sum over genes: ORF1a and ORF1b overlap by 39 nt and
+    share masked site 13476, so the six files hold 121 (gene, site) pairs
+    over 120 distinct sites -- and the per-gene sum is the right accounting,
+    since the two genes read 13476 at different codon offsets and each pays
+    the full three nucleotides), and #144 measured the cost downstream at 12,240 S PCPs and 5,523 N
+    PCPs recoverable on the v10 tree. `pcps/{gene}/masked_nt_sites.csv` emits it
+    (#153). Five things about the shape are load-bearing.
+
+    *Adding an output to `get_problematic_sites` is the smaller diff and the
+    wrong one.* Its `{gene}_codon_sites_to_mask.txt` has seven consumers, one of
+    them `curate_pcps_for_dasm`, so re-running that rule to produce a second file
+    rewrites the codon mask's mtime and restates the **470 GiB** of PCPs -- for a
+    file nothing yet reads. The new rule instead takes the codon file as an
+    *input*. That is also what makes the anti-drift check available: it raises
+    unless widening these nucleotide indices to codons reproduces the codon file
+    exactly, which is what will make retiring that file later a mechanical step
+    rather than a re-derivation. The check is **not** a tautology, and it must not
+    be made one by sharing the derivation: `get_problematic_sites.py` reads
+    `counts_all.csv`'s `codon_site` column for a GTF-carried gene and inverts CDS
+    blocks only for a `pcp_gene_cds_blocks` gene, while the new script inverts
+    blocks for both -- so for five of the six production genes the two sides share
+    no code at all. Verified with exact set equality on both v12 production trees
+    and the test tree before being specified as a check.
+
+    *The rows come from the config and the reasons come with them; the count table
+    is the independent cross-check, in both directions.* `reason` cannot be
+    recovered from `counts_all.csv` -- `masked_in_usher` is set by clade-specific
+    masks too -- so the emit path goes through
+    `masking.global_masked_site_reasons`, and `site_all_excluded` is used to
+    reconcile. The two derivations agree exactly on all three v12 trees (628
+    globally excluded sites genome-wide on each), and the two directions raise with
+    different messages because they mean different things: a site the count table
+    excludes in every clade but no global reason explains is masked
+    clade-specifically in *every* clade, which the reason vocabulary cannot
+    describe and which belongs in `censored_mutations.csv`; the reverse is
+    impossible by construction, since each global reason sets `exclude` on every
+    row at its site, so it means the count table was built against a different
+    config, VCF or `site_include_range`. A third failure -- a masked site the grid
+    does not mention at all -- is separated out first, because it makes both
+    comparisons meaningless rather than false.
+
+    *One row per `(nt_index, reason)`, not per `nt_index`.* 18 of the 121 sites
+    are in both the ProblematicSites VCF and the config `sites_to_exclude`, so the
+    six genes' 121 sites emit **139** rows and a consumer building a masked-position
+    set must take `set(nt_index)`. The alternative -- a `;`-joined `reason` cell --
+    is pattern 10's trap by construction, so the file is long-form and the
+    multiplicity is stated in `OUTPUT_SCHEMA.md` rather than left to be discovered.
+
+    *`site_include_range` is in the schema and in no shipped output.* Every config
+    bounds the genome at 266-29674 and no PCP gene has a nucleotide outside it, so
+    two of the three reason values appear in practice. That is why the column
+    exists rather than being assumed: a future config narrowing the range would
+    otherwise emit rows no consumer had ever seen.
+
+    *The CI run builds this file non-vacuously, which makes it easy to overrate
+    what the run proves.* 23 rows for S, 104 for ORF1ab, 39 for ORF1b and 1 for E
+    on the v12 test tree -- better than #144's censor table, which is empty in
+    every CI run -- and yet four things stay unreachable from any pipeline run. No
+    VCF or config entry falls on ORF1b's shared nucleotide 13468, so the one place
+    the genomic->index map is **one-to-many** cannot be exercised (the same
+    situation as #144, one file over); the `site_include_range` reason cannot;
+    every configured gene's mask is non-empty on every shipped tree, so the
+    legitimately **header-only** case cannot; and all three guards pass on both
+    production trees, which says nothing about whether they fire.
+    `tests/test_masked_nt_sites.py` covers all four, and mutation-tests each guard
+    against deliberately corrupted copies of the shipped script -- and, for the
+    reason vocabulary, of **`workflow/modules/masking.py`**, since that is where
+    the definition lives and patching the script would report the guard as covered
+    while the operator sat one file away. `validate_test.py::validate_masked_nt_sites`
+    is the end-to-end counterpart and deliberately checks only what a rule cannot:
+    the codon pair **as it sits on disk** (the rule checks the inputs it was
+    handed, so the codon file being refreshed alone is the failure a run can see),
+    and `nt_index` against the length of the gene's founder slices -- the
+    coordinate system the PCP sequences are actually in. It does not re-derive
+    which sites should be masked, which would be a second implementation of
+    `global_masked_site_reasons` agreeing with itself.
+
+    Two things are explicitly *not* done, both breaking. Changing
+    `curate_pcps_for_dasm.py`'s drop rule to nucleotide granularity: it assigns the
+    train/val split **after** filtering (`rng.random(len(pcp_df))`), so any change
+    to the row count reshuffles every row's assignment. And retiring
+    `{gene}_codon_sites_to_mask.txt`, which stays until a consumer reads the new
+    file and is validated.
+    See [#153](https://github.com/matsengrp/mat-pcp/issues/153).
+
+
 ### Configuration Sections
 
 The configuration (`config/config.yaml`) is organized into:
@@ -1401,7 +1495,7 @@ The configuration (`config/config.yaml`) is organized into:
 Results are stored per tree in `{output_root}/{label}_{version}/`:
 - `mat/`: Filtered trees, clade subtrees
 - `windows/`: Sliding-window subtree counts + founders (Phase 2) + per-window expected counts / `delta_fitness_ratio` trajectory (Phase 3)
-- `pcps/`: Curated parent-child pairs, plus each gene's `censored_mutations.csv` DASM training censor table and its `.clades.txt` roster (#144), each gene's `upto_{cutoff}/` date-truncated PCP families and the `cutoff_summary.csv` roster (#149), each gene's `{arm}/` reduced-depth PCP families (#151)
+- `pcps/`: Curated parent-child pairs, plus each gene's `censored_mutations.csv` DASM training censor table and its `.clades.txt` roster (#144), each gene's `masked_nt_sites.csv` clade-independent nucleotide mask (#153), each gene's `upto_{cutoff}/` date-truncated PCP families and the `cutoff_summary.csv` roster (#149), each gene's `{arm}/` reduced-depth PCP families (#151)
 - `correlation_summary.csv` (output root): arm-vs-full-depth fitness correlations, keyed to `n_mutations` and `count_fraction` (#151)
 - `notebooks/cap_arm_scatters.py`: the arm marimo notebook -- sequences per clade coloured by emergence date and the tree-level sequence and mutation totals, then per clade the count fraction, the count eCDFs and the ground-truth scatter (#151)
 - `ref/`: Reference genome, coding sites

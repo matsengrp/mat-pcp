@@ -99,6 +99,42 @@ Sorted by `(clade, nt_index, to_nt)`. The sort is required, not cosmetic: `maski
 
 **The roster sidecar is part of the deliverable.** A clade with nothing censored contributes zero rows, so in the CSV alone it is indistinguishable from a mistyped clade name. `censored_mutations.clades.txt` lists every clade the run processed, one per line, sorted; a consumer materializes `{clade: [] for clade in roster}` before filling from the CSV so that absence-from-roster (an error) and absence-from-rows (normal) stay distinguishable.
 
+### `pcps/{gene}/masked_nt_sites.csv` (v12+)
+
+Per-gene, per-nucleotide **clade-independent** mask for DASM training ([#153](https://github.com/matsengrp/mat-pcp/issues/153)). Additive: no existing output changed, and nothing in this repository reads it.
+
+The companion to `censored_mutations.csv` above, and the other half of the same coordinate contract. That file carries the two *clade-specific* reasons of `masking.compute_exclusions`' five; this one carries the three *clade-independent* ones, at nucleotide rather than codon granularity. Together the two give a consumer the complete nucleotide mask with **no codon widening anywhere**.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `nt_site` | int | 1-based genomic coordinate. |
+| `nt_index` | int | 0-based index into this gene's PCP nucleotide sequence, exactly as in `censored_mutations.csv`. |
+| `reason` | string | One of `sites_to_exclude` (the config's global site list), `vcf_masked_sites` (the ProblematicSites VCF), `site_include_range` (outside the configured genome bounds). A closed vocabulary, pinned in `masking.GLOBAL_MASK_REASONS`. |
+
+Sorted by `(nt_index, reason)`, which is a total order because a reason cannot repeat at one index. The sort is required, not cosmetic: `data-central` manifests pin `md5`/`xxh3` per file.
+
+**One row per `(nt_index, reason)`, not per `nt_index`.** A site can carry more than one reason — 18 of the 121 masked sites across the six v12 production genes are in both the VCF and the config list — so a consumer building a set of masked positions must take `set(nt_index)` rather than assume one row each. The file is long-form for this rather than `;`-joining the reasons into one cell.
+
+**`nt_index` is one-to-many, for the same reason as the censor table's.** Where two CDS blocks share a nucleotide at a −1 ribosomal frameshift, `slice_cds` reads it twice, so one `nt_site` yields two rows in different codons. No shipped config masks such a site, so this is exercised only in `tests/test_masked_nt_sites.py`.
+
+**Why this exists beside `{gene}_codon_sites_to_mask.txt`.** The codon file is the same mask widened to codons, so one suspect nucleotide takes its two innocent neighbours with it — measured 2.85× over-mask across the six v12 production genes (121 nucleotide sites become 345 masked nucleotides):
+
+| gene | nt sites masked | rows | codons in the codon file | nt covered at codon granularity |
+|---|---|---|---|---|
+| ORF1a | 53 | 66 | 52 | 156 |
+| ORF1b | 39 | 39 | 35 | 105 |
+| S | 18 | 23 | 17 | 51 |
+| N | 8 | 8 | 8 | 24 |
+| M | 2 | 2 | 2 | 6 |
+| E | 1 | 1 | 1 | 3 |
+| **total** | **121** | **139** | **115** | **345** |
+
+**Those totals are sums over genes, not distinct-site counts.** ORF1a (266–13480) and ORF1b (13442–21552) overlap by 39 nucleotides, and one masked site falls in the overlap — 13476, from the ProblematicSites VCF — so the six files carry 121 (gene, site) pairs over **120** distinct nucleotide sites. The per-gene sum is the right accounting for the over-mask: the two genes read 13476 at different codon offsets (1 in ORF1a, 2 in ORF1b), so widening to codons genuinely costs three nucleotides in each. A consumer unioning the six files gets 120.
+
+**The codon file is not retired, and the two are cross-checked.** `{gene}_codon_sites_to_mask.txt` still drives the DASM-ready PCP drop filter and the dashboards, and stays until a consumer reads this file and is validated. The producing rule reads it as an *input* and raises unless widening these nucleotide indices to codons reproduces it exactly — the anti-drift check that makes retiring it later mechanical. The two sides reach codons by different routes (the codon file from `counts_all.csv`'s `codon_site` column for a GTF-carried gene, this file by inverting CDS blocks for every gene), so the check is not a tautology.
+
+**The `site_include_range` reason is in the schema and in no shipped output.** Every config bounds the genome at 266–29674 and no PCP gene has a nucleotide outside that, so only two of the three values appear in practice. The column is worth having rather than assuming, and the third value is exercised on a fixture.
+
 ### `pcps/{gene}/upto_{cutoff}/…` — date-cutoff PCP subtrees (v12+)
 
 For each date in the per-tree config key `pcp_date_cutoffs`, the whole per-gene PCP family is rebuilt from the subtree of samples collected **at or before** that date, so a model can be trained on what was knowable then ([#149](https://github.com/matsengrp/mat-pcp/issues/149)). Additive: no existing output changed.

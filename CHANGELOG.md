@@ -20,6 +20,102 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ### Unreleased (no version bump)
 
+#### Added: the global mask at nucleotide granularity (`pcps/{gene}/masked_nt_sites.csv`)
+
+Per-gene, per-nucleotide **clade-independent** mask for DASM training
+([#153](https://github.com/matsengrp/mat-pcp/issues/153)). Additive -- a new
+file, reading no existing schema and read by no current consumer -- so the
+`CLAUDE.md` additive-output carve-out applies and it ships without a version
+bump.
+
+The other half of #144's coordinate contract. `censored_mutations.csv` carries
+the two *clade-specific* reasons of `masking.compute_exclusions`' five; this
+carries the three *clade-independent* ones (`sites_to_exclude`,
+`vcf_masked_sites`, `site_include_range`) with a `reason` column naming which,
+at nucleotide rather than codon granularity. Together the two give a consumer
+the complete nucleotide mask with no codon widening anywhere. Columns:
+`nt_site`, `nt_index`, `reason`, sorted by `(nt_index, reason)`.
+
+**What the codon widening costs.** `{gene}_codon_sites_to_mask.txt` is this
+same mask widened to codons, so one suspect nucleotide takes its two innocent
+neighbours with it: 121 masked nucleotide sites become 345 masked nucleotides
+across the six v12 production genes, a **2.85x** over-mask (ORF1a 53 -> 156,
+ORF1b 39 -> 105, S 18 -> 51, N 8 -> 24, M 2 -> 6, E 1 -> 3). Those totals are
+sums over genes: ORF1a and ORF1b overlap by 39 nt and share one masked site
+(13476), so the six files hold 121 (gene, site) pairs over **120** distinct
+sites -- and the per-gene sum is the right accounting for the over-mask, since
+the two genes read 13476 at different codon offsets and each pays the full
+three nucleotides. #144 measured the
+downstream effect: restricting the DASM-ready drop rule to masked *nucleotides*
+recovers 12,240 S PCPs and 5,523 N PCPs on the v10 tree.
+
+**One row per `(nt_index, reason)`, not per `nt_index`.** 18 of those 121 sites
+are in both the ProblematicSites VCF and the config list, so they emit two rows
+at one index and the six genes' 121 sites give 139 rows. The file is long-form
+rather than `;`-joining reasons into one cell -- `CLAUDE.md` pattern 10 records
+what positionally-paired joined cells cost a consumer that flattens them.
+
+**A separate rule, not a second output on `get_problematic_sites`.** That rule
+already computes this exact set (`site_all_excluded`) and throws it away after
+widening it, so adding the output there would have been the smaller diff. But
+its `{gene}_codon_sites_to_mask.txt` has seven consumers, one of them
+`curate_pcps_for_dasm`, and re-running it to add a file would restate the
+470 GiB of PCPs for a file nothing yet reads.
+
+**Nothing is retired.** `{gene}_codon_sites_to_mask.txt` still drives the
+DASM-ready drop filter and the dashboards, and stays until a consumer reads the
+new file and is validated. Changing that drop rule to nucleotide granularity is
+also deliberately out of scope: `curate_pcps_for_dasm.py` assigns the train/val
+split *after* filtering (`rng.random(len(pcp_df))`), so any change to the row
+count reshuffles every row's assignment.
+
+**Three guards, all of which pass today.** The new rule reads the codon file as
+an *input* and raises unless widening these nucleotide indices reproduces it
+exactly -- the anti-drift check that makes retiring the codon file later
+mechanical rather than a re-derivation. It is not a tautology: the two sides
+reach codons by different routes (`get_problematic_sites.py` reads
+`counts_all.csv`'s `codon_site` column for a GTF-carried gene and inverts CDS
+blocks for a `pcp_gene_cds_blocks` gene; this script inverts blocks for both),
+and it was verified to hold with exact set equality on both v12 production trees
+and the v12 test tree before being specified. The emitted site set also
+reconciles against `site_all_excluded` from `counts_all.csv` in **both**
+directions -- 628 globally excluded sites genome-wide, and the two derivations
+agree exactly on all three v12 trees -- with distinct messages, because the two
+failures mean different things: a site the count table excludes everywhere but
+no global reason explains is masked clade-specifically in every clade, which
+`reason` cannot describe, while the reverse means the count table was built
+against a different config or VCF. And `nt_index` round-trips as a *string*
+identity against the reference, which catches a blocks-vs-sequence mismatch that
+index arithmetic passes.
+
+**`site_include_range` is in the schema and in no shipped output.** Every config
+bounds the genome at 266-29674 and no PCP gene has a nucleotide outside that, so
+only two of the three reason values ever appear. The third is exercised on a
+fixture; assuming two would leave a future config's rows unhandled.
+
+**What no pipeline run can check.** The CI run builds this file non-vacuously
+(23 rows for S, 104 for ORF1ab, 39 for ORF1b, 1 for E on the test tree), which
+is more than #144's censor table manages -- but no VCF or config entry falls on
+ORF1b's shared nucleotide 13468, so the one place the genomic->index map is
+one-to-many is unreachable from any run; the `site_include_range` reason is
+likewise unreachable; every configured gene's mask is non-empty on every shipped
+tree, so the legitimate header-only case is too; and all three guards pass on
+both production trees, which says nothing about whether they fire.
+`tests/test_masked_nt_sites.py` covers all four on fixtures, and mutation-tests
+each guard against deliberately corrupted copies of the shipped script -- and,
+for the reason vocabulary, of `workflow/modules/masking.py`, where the
+definition actually lives.
+`validate_test.py::validate_masked_nt_sites` is the end-to-end counterpart: it
+re-checks the codon pair *as it sits on disk* (the rule checks the inputs it was
+handed, so refreshing the codon file alone is the failure a run can see), and
+checks `nt_index` against the length of the gene's founder slices -- the
+coordinate system the PCP sequences are actually in, which no single rule
+compares against.
+
+`masking.global_masked_sites` now delegates to a new reason-bearing
+`global_masked_site_reasons`, so the three membership tests are written once.
+The set it returns is unchanged, pinned by test.
+
 #### Thread and memory allocations corrected to their measured values
 
 No output changes. `threads` and `mem_mb` are scheduler reservations and

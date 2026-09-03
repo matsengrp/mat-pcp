@@ -2106,6 +2106,240 @@ def validate_subsample_arms(output_dir):
     return diffs, note
 
 
+def validate_masked_nt_sites(output_dir):
+    """Every PCP gene's clade-independent nucleotide mask agrees with its codon file.
+
+    The other half of #144's coordinate contract (#153). Unlike the censor
+    table, this one is **non-empty on the test data** -- 23 rows for S, 104 for
+    ORF1ab, 39 for ORF1b, 1 for E on the v12 test tree -- so a run can check the
+    rows themselves rather than only the wrapper.
+
+    Three things here are not restatements of the script's own guards, because
+    they are properties of the output *tree* rather than of one rule's inputs:
+
+    * The pair on disk is consistent. The script checks the codon widening
+      against the codon file it was handed; this checks the files as they now
+      sit, so rebuilding one without the other is caught. ``masked_nt_sites``
+      declares the codon mask as an input, so Snakemake makes that hard --
+      but the codon file is also the older of the two and the one seven other
+      rules read, so its being refreshed alone is the realistic direction.
+    * ``nt_index`` is in range for the sequence the consumer actually gets.
+      Checked against the length of this gene's founder slices, which is the
+      coordinate system the PCP columns are in -- a file whose indices were
+      right for a *different* gene's CDS would pass every check inside the rule
+      and be unusable.
+    * The two mask files share one coordinate space. Their ``nt_index`` columns
+      have to mean the same thing, since a training run applies both, so every
+      ``nt_site`` the two files share must get the same ``nt_index`` set from
+      each -- the bound check alone would pass two files built from different
+      CDS blocks for one gene. The sites themselves are *not* asserted disjoint
+      (see ``validate_censor_table``). Vacuous on the test data, where the
+      censor table is empty for every gene, and reported as such rather than as
+      a clean intersection.
+
+    Deliberately does **not** re-derive which sites should be masked. That would
+    be a second implementation of ``masking.global_masked_site_reasons``
+    agreeing with itself; the independent derivation already runs inside the
+    rule, against ``counts_all.csv``.
+    """
+    import pandas as pd
+
+    pcps_root = os.path.join(output_dir, "pcps")
+    if not os.path.isdir(pcps_root):
+        return [], f"SKIPPED: no {pcps_root}, so no nucleotide masks to validate"
+
+    genes = sorted(
+        name for name in os.listdir(pcps_root)
+        if os.path.isdir(os.path.join(pcps_root, name))
+    )
+    if not genes:
+        return [], f"SKIPPED: no per-gene PCP directories under {pcps_root}"
+
+    valid_reasons = {"sites_to_exclude", "vcf_masked_sites", "site_include_range"}
+    expected_columns = ["nt_site", "nt_index", "reason"]
+
+    def founder_slice_length(gene):
+        """Length of this gene's founder slices, or None if unavailable.
+
+        Also reports a disagreement *between* slices, which would mean the
+        founders themselves are inconsistent -- worth catching here since this
+        is the only place the mask and the founders are compared.
+        """
+        gene_founders = os.path.join(output_dir, "clade_founders", gene)
+        if not os.path.isdir(gene_founders):
+            return None, None
+        lengths = set()
+        for name in sorted(os.listdir(gene_founders)):
+            if not name.endswith(".fa"):
+                continue
+            with open(os.path.join(gene_founders, name)) as f:
+                sequence = "".join(
+                    line.strip() for line in f if not line.startswith(">")
+                )
+            lengths.add(len(sequence))
+        if not lengths:
+            return None, None
+        if len(lengths) > 1:
+            return None, sorted(lengths)
+        return lengths.pop(), None
+
+    differences = []
+    per_gene = []
+    total_masked_nt = 0
+    total_codon_nt = 0
+    for gene in genes:
+        table_path = os.path.join(pcps_root, gene, "masked_nt_sites.csv")
+        codon_mask = os.path.join(output_dir, f"{gene}_codon_sites_to_mask.txt")
+
+        if not os.path.isfile(table_path):
+            differences.append(f"nucleotide mask missing for {gene}: {table_path}")
+            continue
+
+        table = pd.read_csv(table_path)
+        if list(table.columns) != expected_columns:
+            differences.append(
+                f"{gene} nucleotide mask columns are {list(table.columns)}, "
+                f"expected {expected_columns}"
+            )
+            continue
+
+        unknown = set(table["reason"]) - valid_reasons
+        if unknown:
+            differences.append(
+                f"{gene} nucleotide mask has reasons outside the closed "
+                f"vocabulary {sorted(valid_reasons)}: {sorted(unknown)}"
+            )
+
+        total_masked_nt += int(table["nt_index"].nunique())
+        total_codon_nt += 3 * len({int(index) // 3 + 1 for index in table["nt_index"]})
+
+        keys = list(zip(table["nt_index"], table["reason"]))
+        if keys != sorted(keys):
+            differences.append(
+                f"{gene} nucleotide mask is not sorted by (nt_index, reason); "
+                f"the sort is what makes the file byte-reproducible"
+            )
+        if len(set(keys)) != len(keys):
+            differences.append(
+                f"{gene} nucleotide mask repeats an (nt_index, reason) pair, so "
+                f"its sort key is not a total order"
+            )
+
+        # The pair on disk, checked as it now sits.
+        if not os.path.isfile(codon_mask):
+            differences.append(
+                f"{gene} has a nucleotide mask but no {codon_mask}. Both ship "
+                f"until a consumer reads the new file and is validated, and the "
+                f"rule cross-checks one against the other."
+            )
+        else:
+            codon_sites = {
+                int(value) for value in open(codon_mask).read().split()
+            }
+            widened = {int(index) // 3 + 1 for index in table["nt_index"]}
+            if widened != codon_sites:
+                differences.append(
+                    f"{gene}: widening masked_nt_sites.csv to codons gives "
+                    f"{len(widened)} codons but {codon_mask} has "
+                    f"{len(codon_sites)}; only here "
+                    f"{sorted(widened - codon_sites)[:10]}, only there "
+                    f"{sorted(codon_sites - widened)[:10]}. The two files "
+                    f"describe one mask at two granularities."
+                )
+
+        # nt_index must index the sequence the consumer is handed.
+        slice_length, mixed = founder_slice_length(gene)
+        if mixed is not None:
+            differences.append(
+                f"{gene}'s founder slices have differing lengths {mixed}, so the "
+                f"nucleotide mask's index range cannot be checked against them"
+            )
+        elif slice_length is None:
+            differences.append(
+                f"{gene} has a nucleotide mask but no clade_founders/{gene}/*.fa, "
+                f"so its nt_index range cannot be checked against the sequence "
+                f"a consumer indexes into"
+            )
+        elif len(table) and (
+            table["nt_index"].min() < 0 or table["nt_index"].max() >= slice_length
+        ):
+            differences.append(
+                f"{gene} nucleotide mask has nt_index outside "
+                f"[0, {slice_length}) -- the length of its founder slices, which "
+                f"is the coordinate system the PCP sequences use: min "
+                f"{table['nt_index'].min()}, max {table['nt_index'].max()}"
+            )
+
+        # One coordinate space across the two mask files. Two checks, because
+        # the bound alone is a weak proxy: it would pass two files whose
+        # nt_index columns were computed from *different* CDS blocks for the
+        # same gene, which is the realistic staleness (rebuilding one rule
+        # after a `pcp_gene_cds_blocks` change and not the other). So for every
+        # nt_site the two files share, their nt_index sets must be equal --
+        # both invert the same blocks, and the censor table repeats a site per
+        # clade with the same indices.
+        censor_path = os.path.join(pcps_root, gene, "censored_mutations.csv")
+        censor_note = ""
+        if os.path.isfile(censor_path):
+            censored = pd.read_csv(censor_path, keep_default_na=False)
+            if not len(censored):
+                # Legitimate and the CI case: the test clades carry no UShER
+                # yaml block, so the censor table is empty for every gene and
+                # the agreement below compares nothing. Said out loud rather
+                # than reported as "0 shared", which reads like a checked
+                # disagreement-free intersection.
+                censor_note = "/censor empty"
+            else:
+                if slice_length is not None and (
+                    censored["nt_index"].max() >= slice_length
+                ):
+                    differences.append(
+                        f"{gene}'s censor table has nt_index beyond its founder "
+                        f"slice length {slice_length}; the two mask files must "
+                        f"be in one coordinate space"
+                    )
+                shared = sorted(set(censored["nt_site"]) & set(table["nt_site"]))
+                censor_note = f"/{len(shared)} shared"
+                here = table.groupby("nt_site")["nt_index"].apply(
+                    lambda s: frozenset(int(i) for i in s)
+                )
+                there = censored.groupby("nt_site")["nt_index"].apply(
+                    lambda s: frozenset(int(i) for i in s)
+                )
+                disagree = [
+                    (site, sorted(here[site]), sorted(there[site]))
+                    for site in shared
+                    if here[site] != there[site]
+                ]
+                if disagree:
+                    differences.append(
+                        f"{gene}: {len(disagree)} nt_site(s) get different "
+                        f"nt_index values in masked_nt_sites.csv and "
+                        f"censored_mutations.csv, so the two mask files are "
+                        f"not in one coordinate space: {disagree[:5]}"
+                    )
+
+        per_gene.append(
+            f"{gene} {len(table)}r/{table['nt_site'].nunique()}s" + censor_note
+        )
+
+    # Reported as masked *positions* against the codon file's 3x span, because
+    # that difference is the whole point of the file -- and because a row count
+    # would overstate it: a site carrying two reasons is two rows and one
+    # position.
+    over_mask = (total_codon_nt / total_masked_nt) if total_masked_nt else float("nan")
+    return differences, (
+        f"Nucleotide masks: {len(genes)} gene(s), "
+        + ", ".join(per_gene)
+        + (
+            f"; {total_masked_nt} masked nt against {total_codon_nt} at codon "
+            f"granularity ({over_mask:.2f}x over-mask avoided)"
+            if total_masked_nt
+            else "; empty for every gene"
+        )
+    )
+
+
 def validate_censor_table(output_dir, yaml_path="data/usher_masked_sites.yaml"):
     """Every PCP gene's censor table is well formed and its roster is complete.
 
@@ -2365,13 +2599,15 @@ def main():
     codon_bg_diffs, codon_bg_summary = validate_founder_codon_background(output_dir)
     era_diffs, era_summary = validate_era_rate_tables(output_dir)
     censor_diffs, censor_summary = validate_censor_table(output_dir)
+    nt_mask_diffs, nt_mask_summary = validate_masked_nt_sites(output_dir)
     rtt_diffs, rtt_summary = validate_root_to_tip_cloud(output_dir)
     cutoff_diffs, cutoff_summary = validate_cutoff_pcps(output_dir)
     arm_diffs, arm_summary = validate_subsample_arms(output_dir)
     differences += (
         site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
         + orf1ab_diffs + orf1b_diffs + glm_syn_diffs + codon_bg_diffs + era_diffs
-        + censor_diffs + rtt_diffs + cutoff_diffs + arm_diffs
+        + censor_diffs + nt_mask_diffs + rtt_diffs + cutoff_diffs
+        + arm_diffs
     )
 
     if differences:
@@ -2414,6 +2650,8 @@ def main():
             print(f"  - Era rate tables: {era_summary}")
         if censor_summary:
             print(f"  - {censor_summary}")
+        if nt_mask_summary:
+            print(f"  - {nt_mask_summary}")
         if rtt_summary:
             print(f"  - {rtt_summary}")
         if cutoff_summary:
