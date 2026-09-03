@@ -368,7 +368,7 @@ Snakemake merges multiple `--configfile` values in order:
 pixi run snakemake -j 16 --use-conda \
   results/gisaid-and-public_2026-08-06_v12/aamut_fitness/cap_50000_0/all_aamut_fitness.csv \
   --rerun-triggers mtime \
-  --configfile config/config-2026-08-06-six-genes.yaml config/overlay-subsample-cap.yaml
+  --configfile config/config.yaml config/overlay-subsample-cap.yaml
 ```
 
 `config/overlay-subsample-cap.yaml` is the shipped ladder (caps of 50,000 /
@@ -695,7 +695,7 @@ mat-pcp/
 │   ├── README.md                # Archive documentation (tracked)
 │   └── ...                      # Historical runs
 └── config/
-    ├── config.yaml              # Default config (all public/GISAID trees)
+    ├── config.yaml              # THE production config (2026-08-06 trees, six genes)
     ├── config_test_data.yaml    # Test config (trees: test_data)
     └── config_test_data_multitree.yaml  # Multi-tree smoke-test config
 ```

@@ -2,8 +2,8 @@
 #
 # Layered on top of a production config rather than edited into it:
 #
-#   pixi run snakemake --configfile config/config-2026-08-06-six-genes.yaml \
-#                                   config/overlay-subsample-cap.yaml ...
+#   pixi run snakemake --configfile config/config.yaml \
+#                       config/overlay-subsample-cap.yaml ...
 #
 # Snakemake merges multiple --configfile values in order, so this adds the arms
 # without touching the config that built the released tree. Every shipped

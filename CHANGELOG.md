@@ -545,6 +545,40 @@ are not trimmed to fit: one is degenerate (the byte-identity check), one
 truncates, and one thins a clade below `min_clade_size` so it drops out of the
 grid, and no other arm covers any of the three.
 
+#### Housekeeping: `config/` slimmed from 14 files to 4, production renamed to `config.yaml`
+
+No output changes. `config-2026-08-06-six-genes.yaml` is renamed to
+`config/config.yaml` and ten stale configs are deleted, leaving production plus
+the two test configs plus `overlay-subsample-cap.yaml`.
+
+**Nine of the ten could not have run.** Four (`config-2026-04-22-gisaid-and-public.yaml`,
+`config-gisaid-and-public-2023-01-01_v4.yaml`, `config-gisaid-and-public-2023-03-01_v4.yaml`,
+`config-gisaid-and-public-2026-04-22_v4.yaml`) plus three ad-hoc copies under
+`config/_ermine_adhoc_backup/` carry the retired scalar `output_dir` / `mat` /
+`metadata` schema that the `trees` mapping replaced, so they fail immediately
+against the current Snakefile. That is invisible from a filename, which is how
+they accumulated. The other two were current-schema but superseded:
+`config-2026-04-22-gisaid-and-public-six-genes.yaml` (the released v10 tree) and
+`config-gisaid-and-public-BA2-JN1-XFG.yaml` (three trees, none built).
+
+**Deleting a config does not destroy it.** The config that built any tagged tree
+is recoverable with `git show <tag>:config/<file>`, so provenance rides on the
+tag rather than on a file kept in `HEAD`. That is what makes deleting the v10
+config affordable.
+
+**Three consequences worth stating.** `config/config.yaml` has now meant three
+different things -- production, then a 2022/2023 `pcp_genes: [S]` config that
+CLAUDE.md carried a paragraph warning was *not* production, and now production
+again -- so any stale reference to it should be distrusted rather than trusted.
+Its line ending changed from **CRLF to LF**, because the ending travels with the
+file's contents and not with the path; the CRLF list in CLAUDE.md says so
+explicitly. And CI's `Validate config schema` step opens `config/config.yaml` by
+name, so it now validates the production config, where before it validated one
+nobody ran -- verified passing, as is
+`test_glm_reference_equivalence.py::check_configs_use_reference_boundaries`,
+which globs `config/*.yaml` and reports all 4 remaining configs carrying the
+reference light-switch boundaries.
+
 #### Changed: the DASM-ready drop filter is nucleotide-granular; the codon mask is retired
 
 **This is the one post-tag change that moves data.** See the note under "Landed
