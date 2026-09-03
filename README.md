@@ -368,7 +368,7 @@ Snakemake merges multiple `--configfile` values in order:
 pixi run snakemake -j 16 --use-conda \
   results/gisaid-and-public_2026-08-06_v12/aamut_fitness/cap_50000_0/all_aamut_fitness.csv \
   --rerun-triggers mtime \
-  --configfile config/config-2026-08-06-six-genes.yaml config/overlay-subsample-cap.yaml
+  --configfile config/config.yaml config/overlay-subsample-cap.yaml
 ```
 
 `config/overlay-subsample-cap.yaml` is the shipped ladder (caps of 50,000 /
@@ -387,7 +387,7 @@ a `pcps/{gene}/{arm}/` path.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `clade_subsamples` | List of `{max_samples: [int, ...], seed: int}` entries ([#151](https://github.com/matsengrp/mat-pcp/issues/151)), each expanding to one **arm** per cap, named `cap_{max_samples}_{seed}`. An arm thins **every clade above the cap** down to exactly it and leaves smaller ones untouched, so one arm spans a wide range of effective depths and the untouched clades are byte-identical controls by construction. Its unit is *derived* from the tree's clade sizes rather than named — membership is **strictly** above the cap, since a clade of exactly `cap` samples is already at the target — which is why it cannot be written in the config at all. A cap at or above every clade's size thins nothing: that is the **degenerate arm**, whose every output must byte-equal the full tree's. A thinned clade falling below `min_clade_size` is excluded from the arm, and since the arms ship no roster file that exclusion is not recorded in any output — `tests/test_clade_subsamples.py` is its only coverage; a cap below 1 is a hard failure, since `matUtils extract -s` on an empty list is undefined. `sampling_fractions` and `unit` belonged to the fraction arms removed in #151 and are rejected by name. Empty in every production config — arms are launched by naming their paths, since a full-size arm costs ~8 CPU-hours | `[]` |
+| `clade_subsamples` | List of `{max_samples: [int, ...], seed: int}` entries ([#151](https://github.com/matsengrp/mat-pcp/issues/151)), each expanding to one **arm** per cap, named `cap_{max_samples}_{seed}`. An arm thins **every clade above the cap** down to exactly it and leaves smaller ones untouched, so one arm spans a wide range of effective depths and the untouched clades are byte-identical controls by construction. Its unit is *derived* from the tree's clade sizes rather than named — membership is **strictly** above the cap, since a clade of exactly `cap` samples is already at the target — which is why it cannot be written in the config at all. A cap at or above every clade's size thins nothing: that is the **degenerate arm**, whose every output must byte-equal the full tree's. A thinned clade falling below `min_clade_size` is excluded from the arm, and since the arms ship no roster file that exclusion is not recorded in any output — `tests/test_clade_subsamples.py` is its only coverage; a cap below 1 is a hard failure, since `matUtils extract -s` on an empty list is undefined. `sampling_fractions` and `unit` belonged to the fraction arms removed in #151 and are rejected by name. **Must be empty in every production config**, because `rule all` requests every arm's targets whenever this key is non-empty — measured 1,123 → 4,067 jobs on the two 2026-08-06 trees, at ~8 CPU-hours per full-size arm. Naming an arm's path is one way to build one, not the only way; the shipped ladder therefore lives in `config/overlay-subsample-cap.yaml` and is layered with a second `--configfile` | `[]` |
 
 The GLM neutral fit, the clade founders and each gene's codon mask and censor table are **not** recomputed per arm. The shared fit is deliberate and conservative (it can only make the counts estimator look better than genuinely thin sampling would); the shared mask is a no-op rather than a leak, since it is derived from config, the ProblematicSites VCF, `usher_masked_sites.yaml` and the founder grid, never from a count column.
 
@@ -695,7 +695,7 @@ mat-pcp/
 │   ├── README.md                # Archive documentation (tracked)
 │   └── ...                      # Historical runs
 └── config/
-    ├── config.yaml              # Default config (all public/GISAID trees)
+    ├── config.yaml              # THE production config (2026-08-06 trees, six genes)
     ├── config_test_data.yaml    # Test config (trees: test_data)
     └── config_test_data_multitree.yaml  # Multi-tree smoke-test config
 ```

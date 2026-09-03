@@ -73,39 +73,48 @@ When making changes that will affect outputs:
 Every run requires exactly one explicit `--configfile` (there is no default
 `configfile:` directive; see the Snakefile header for why).
 
-**The production config is `config/config-2026-08-06-six-genes.yaml`**, which
-carries **two** trees -- `gisaid-and-public_2026-08-06` and
-`public_2026-08-06` -- over the six non-accessory genes. The
-GISAID-and-public one needs restricted GISAID-derived inputs; the public one
-does not. These are the trees the released v12 outputs come from, and the
-only ones any current work should target. A bare `rule all` run builds both;
-to build one, target its per-tree output path.
+**The production config is `config/config.yaml`**, which carries **two**
+trees -- `gisaid-and-public_2026-08-06` and `public_2026-08-06` -- over the
+six non-accessory genes. The GISAID-and-public one needs restricted
+GISAID-derived inputs; the public one does not. These are the trees the
+released v12 outputs come from, and the only ones any current work should
+target. A bare `rule all` run builds both; to build one, target its per-tree
+output path.
 
-`config/config.yaml` is **not** the production config despite the name. Its
-four trees are 2022/2023-vintage (`public_2022-04-02`, `public_2022-06-01`,
-`public_2023-01-01`, `gisaid-and-public_2023-01-01`) with `pcp_genes: [S]`
-only, and none has been built since v4 -- no `results/*_v12` directory exists
-for any of them. It is kept for reproducing those older trees, so do not read
-its tree list as "the production trees" (an earlier version of this file
-said exactly that, and the four *directories* of the two production trees at
-two versions make the mistake easy to repeat).
+`config/` holds exactly four files, and that is deliberate: `config.yaml`
+(production), the two test configs, and `overlay-subsample-cap.yaml` (a
+one-key `clade_subsamples` overlay layered on top of a config with a second
+`--configfile`, never edited into one).
+
+> **`config/config.yaml` has meant three different things, so distrust any
+> stale reference to it.** It was the production config; then it became a
+> 2022/2023-vintage `pcp_genes: [S]` config while production moved to
+> `config-2026-08-06-six-genes.yaml`, and CLAUDE.md carried a paragraph
+> warning that the name was *not* production; and it is now production again,
+> that file having been renamed onto the name and the ten stale configs
+> deleted. Nine of those ten could not have run at all -- four plus three
+> ad-hoc backups used the retired `output_dir` schema, which the Snakefile
+> replaced with `trees` -- but that is invisible from the filename, which is
+> why they accumulated. A config for any released tree is still recoverable
+> from its tag (`git show v10:config/...`), so provenance rides on the tag,
+> not on keeping the file in `HEAD`.
 
 ```bash
 # Run with pixi (recommended) -- both production trees
 pixi run snakemake -j 32 --use-conda \
-  --configfile config/config-2026-08-06-six-genes.yaml
+  --configfile config/config.yaml
 
 # Dry run
-pixi run snakemake -n --configfile config/config-2026-08-06-six-genes.yaml
+pixi run snakemake -n --configfile config/config.yaml
 
 # Run specific target (per-tree output path; VERSION is currently v12)
 pixi run snakemake -j 32 --use-conda \
-  --configfile config/config-2026-08-06-six-genes.yaml \
+  --configfile config/config.yaml \
   results/public_2026-08-06_v12/aamut_fitness/all_aamut_fitness.csv
 
 # Clean all outputs
 pixi run snakemake --delete-all-output \
-  --configfile config/config-2026-08-06-six-genes.yaml
+  --configfile config/config.yaml
 ```
 
 `-j 32` rather than `-j 4`: every rule that measured single-threaded now
@@ -145,11 +154,13 @@ pixi run snakemake -j 2 --use-conda \
 pixi run python workflow/scripts/validate_test.py
 ```
 
-> **`CLAUDE.md`, `CHANGELOG.md`, `workflow/Snakefile`, `config/config.yaml`,
-> `config/config_test_data.yaml` and
-> `config/config-gisaid-and-public-BA2-JN1-XFG.yaml` use CRLF line endings** (the
+> **`CLAUDE.md`, `CHANGELOG.md`, `workflow/Snakefile` and
+> `config/config_test_data.yaml` use CRLF line endings** (the
 > other configs are LF, so a scripted edit across `config/*.yaml` must read each
-> file's ending rather than assume one). Edit them in place. A
+> file's ending rather than assume one). Note that `config/config.yaml` moved
+> from CRLF to **LF** when the production config was renamed onto that name:
+> the ending travels with the file's contents, not with the path, so a rule of
+> thumb keyed to the filename is now wrong. Edit them in place. A
 > Python `read_text()` / `write_text()` round-trip normalizes them to LF, which
 > rewrites every line and buries a three-line content edit in a ~2,200-line
 > whitespace diff. Nothing errors and the rendered text is identical, so it is only
@@ -182,9 +193,10 @@ pixi run snakemake -j 2 --use-conda \
 ```
 mat-pcp/
 ├── config/
-│   ├── config.yaml                  # Default config (all public/GISAID trees)
+│   ├── config.yaml                  # THE production config (2026-08-06 trees, six genes)
 │   ├── config_test_data.yaml        # Test data configuration
-│   └── config_test_data_multitree.yaml # Multi-tree smoke-test configuration
+│   ├── config_test_data_multitree.yaml # Multi-tree smoke-test configuration
+│   └── overlay-subsample-cap.yaml   # clade_subsamples overlay (#151), layered via a 2nd --configfile
 ├── workflow/
 │   ├── Snakefile            # Main workflow definition
 │   ├── envs/                # Conda environments
@@ -1645,8 +1657,18 @@ The configuration (`config/config.yaml`) is organized into:
    `{max_samples, seed}` entries, each expanding to one **arm** per cap. An arm
    thins every clade above the cap down to it and leaves smaller clades
    untouched, so its membership is derived from the tree's clade sizes rather
-   than named. Empty in every production config; arms are launched by naming
-   their paths. `sampling_fractions` / `unit` belonged to the removed fraction
+   than named. **Empty in every production config, and that emptiness is the
+   only thing keeping arms out of a production run**: `rule all` includes
+   `arm_targets()`, so a non-empty `clade_subsamples` puts every arm's PCP,
+   fitness and correlation targets into a bare run -- measured, 1,123 jobs ->
+   **4,067** on the two 2026-08-06 trees, at ~8 CPU-hours per full-size arm.
+   Naming an arm's path is one way to build one, not the only way, which is why
+   the ladder ships as `config/overlay-subsample-cap.yaml` and is layered with a
+   second `--configfile` rather than folded in. An earlier wording here and in
+   `arm_targets()`' own docstring said arms "are launched by naming their
+   paths", which reads as though `rule all` did not request them and makes
+   folding the overlay in look free.
+   `sampling_fractions` / `unit` belonged to the removed fraction
    arms and are rejected by name. See pattern 15.
 7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources),
    `roemer_nextstrain_to_pango` (Nextstrain clade → Pango lineage, for clades not

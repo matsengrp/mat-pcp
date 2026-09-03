@@ -239,9 +239,11 @@ def _(mo, os, output_dir):
     mo.stop(
         not cap_arms,
         mo.md(
-            f"**No `cap_*` arm directories under `{aa_dir}`.** Arms are "
-            "launched by naming their paths; see "
-            "`config/overlay-subsample-cap.yaml`."
+            f"**No `cap_*` arm directories under `{aa_dir}`.** Build one by "
+            "naming its path, or by layering "
+            "`config/overlay-subsample-cap.yaml` onto the production config "
+            "with a second `--configfile` (which puts all three arms in "
+            "`rule all` -- ~8 CPU-hours each)."
         ),
     )
 
