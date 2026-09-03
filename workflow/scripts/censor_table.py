@@ -8,13 +8,16 @@ distinction is why this is a table of coordinates for the loss rather than an
 ``N`` written into the PCP sequence: an ``N`` would tokenize the whole codon to
 ``AA_AMBIG_IDX`` and throw away a state we actually know (#144).
 
-The pipeline's existing masking output, ``{gene}_codon_sites_to_mask.txt``, is
-unusable for this purpose in three independent ways: it never reaches the loss
-(only the PCP drop filter and the dashboards read it), it is codon-granular (one
-suspect nucleotide takes its two innocent neighbours with it), and it is
-clade-independent by construction -- ``get_problematic_sites.py`` keeps only the
+The pipeline's masking output at the time, ``{gene}_codon_sites_to_mask.txt``,
+was unusable for this purpose in three independent ways: it never reached the
+loss (only the PCP drop filter and the dashboards read it), it was codon-granular
+(one suspect nucleotide took its two innocent neighbours with it), and it was
+clade-independent by construction -- ``get_problematic_sites.py`` kept only the
 reasons that hold in *every* clade, so the entire clade-specific half of
-``data/usher_masked_sites.yaml`` is invisible to training.
+``data/usher_masked_sites.yaml`` was invisible to training. #153 emitted the
+clade-independent half at nucleotide granularity and #158 retired the codon file,
+so the second and third points are now history; the first is why this table
+exists at all.
 
 This table carries exactly the two clade-specific reasons of
 ``masking.compute_exclusions``' five:
@@ -23,8 +26,9 @@ This table carries exactly the two clade-specific reasons of
   * ``usher_clade_mutations`` -- directional masks, both populated
 
 The other three (ProblematicSites VCF, config ``sites_to_exclude``, outside
-``site_include_range``) remain in ``{gene}_codon_sites_to_mask.txt`` at codon
-granularity, and founder->reference reversions are deliberately in neither: they
+``site_include_range``) are in ``pcps/{gene}/masked_nt_sites.csv``, at the same
+nucleotide granularity since #153, and founder->reference reversions are
+deliberately in neither: they
 are a selection filter, not an artifact mask. **A training run must apply both
 files**, which is why the guards below report the overlap rather than assuming
 the two files partition the space.
@@ -328,23 +332,28 @@ if directional:
         )
 
 # ---------------------------------------------------------------------------
-# Guard 4: overlap with the codon mask is reported, not forbidden
+# Guard 4: overlap with the global mask is reported, not forbidden
 # ---------------------------------------------------------------------------
 #
-# #144 specified this as a disjointness assertion, on the reasoning that
-# `{gene}_codon_sites_to_mask.txt` carries only clade-independent reasons and
-# this table only clade-specific ones. The two reason sets are disjoint but the
-# *sites* are not: a site can be both clade-masked in the yaml and in the
-# ProblematicSites VCF. On the v11 gisaid-and-public tree 32 (clade, nt_site)
-# pairs are both -- sites 3037, 24378 and 28253 -- so the assertion would fail on
-# real data. The consumer's actual requirement is that it applies BOTH files, and
-# for that it needs to know the two overlap rather than partition.
-codon_sites_in_table = sorted({row[2] // 3 + 1 for row in rows})
+# #144 specified this as a disjointness assertion, on the reasoning that the
+# clade-independent mask carries only clade-independent reasons and this table
+# only clade-specific ones. The two reason sets are disjoint but the *sites* are
+# not: a site can be both clade-masked in the yaml and in the ProblematicSites
+# VCF. On the v11 gisaid-and-public tree 32 (clade, nt_site) pairs are both --
+# sites 3037, 24378 and 28253 -- so the assertion would fail on real data. The
+# consumer's actual requirement is that it applies BOTH files, and for that it
+# needs to know the two overlap rather than partition.
+#
+# Reported as nucleotide positions since #158: through v12 the counterparty was
+# codon-granular, so the overlap had to be stated in codons to be comparable at
+# all, which understated it by conflating three positions into one.
+masked_positions_in_table = sorted({row[2] for row in rows})
 log(
-    f"{len(codon_sites_in_table)} distinct codon sites of {gene} are touched by "
-    f"this table; they may also appear in {gene}_codon_sites_to_mask.txt, which "
-    f"is expected -- the two files carry different reasons, not different sites, "
-    f"and a training run must apply both."
+    f"{len(masked_positions_in_table)} distinct nt positions of {gene} are "
+    f"touched by this table; they may also appear in "
+    f"pcps/{gene}/masked_nt_sites.csv, which is expected -- the two files carry "
+    f"different reasons, not different sites, and a training run must apply "
+    f"both."
 )
 
 # ---------------------------------------------------------------------------

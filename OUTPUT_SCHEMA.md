@@ -42,7 +42,7 @@ DASM-training-ready sibling of `*_pcps.csv.gz`. Same row schema as the parent fi
 3. Length not divisible by 3 (non-codon-aligned)
 4. Ambiguous nucleotides (`N`) in either sequence
 5. Stop codons (`TAA`, `TAG`, `TGA`) in parent or child
-6. Every codon-level mutation falls in a codon position listed in `<gene>_codon_sites_to_mask.txt` (no-signal PCP)
+6. Every nucleotide-level mutation falls at an `nt_index` listed in `pcps/{gene}/masked_nt_sites.csv` (no-signal PCP). Take `set(nt_index)` — the file is long-form, one row per `(nt_index, reason)`. Through v12 this filter read `<gene>_codon_sites_to_mask.txt`, the same clade-independent mask widened to codons, and so discarded a PCP whose only mutation sat at an *unmasked* nucleotide of a masked codon — signal the loss, which censors at nucleotide granularity, would have seen. [#158](https://github.com/matsengrp/mat-pcp/issues/158) retired the codon file, so the drop rule and the loss now apply one mask at one granularity
 
 **Seed convention**:
 
@@ -95,13 +95,13 @@ Sorted by `(clade, nt_index, to_nt)`. The sort is required, not cosmetic: `maski
 
 **`nt_index` is one-to-many.** Coordinates are gene-local because the consumer has no CDS knowledge — the PCP sequence *is* the gene. Where two CDS blocks share a nucleotide at a −1 ribosomal frameshift, `slice_cds` reads it twice, so one `nt_site` yields **two rows**. ORF1b's blocks `[[13442, 13468], [13468, 21552]]` put genomic 13468 at both index 26 and index 27, in different codons. A masked site outside the gene is dropped silently and counted in the per-gene log.
 
-**This table does not replace `{gene}_codon_sites_to_mask.txt`.** It carries two of `masking.compute_exclusions`' five reasons — `usher_clade_sites` and `usher_clade_mutations`, the clade-specific ones. The ProblematicSites VCF, the config `sites_to_exclude` and the `site_include_range` bound remain in the codon mask at codon granularity, and founder→reference reversions are in neither (they are a selection filter, not an artifact mask). A training run must apply **both** files. The two are *not* disjoint by site: a site can be both clade-masked in the yaml and in the VCF (32 such `(clade, nt_site)` pairs on the v11 gisaid-and-public tree).
+**This table is one of two, and a training run must apply both.** It carries two of `masking.compute_exclusions`' five reasons — `usher_clade_sites` and `usher_clade_mutations`, the clade-specific ones. The ProblematicSites VCF, the config `sites_to_exclude` and the `site_include_range` bound are in `pcps/{gene}/masked_nt_sites.csv` below, at the same nucleotide granularity since [#158](https://github.com/matsengrp/mat-pcp/issues/158) retired `{gene}_codon_sites_to_mask.txt`; founder→reference reversions are in neither (they are a selection filter, not an artifact mask). The two are *not* disjoint by site: a site can be both clade-masked in the yaml and in the VCF (32 such `(clade, nt_site)` pairs on the v11 gisaid-and-public tree).
 
 **The roster sidecar is part of the deliverable.** A clade with nothing censored contributes zero rows, so in the CSV alone it is indistinguishable from a mistyped clade name. `censored_mutations.clades.txt` lists every clade the run processed, one per line, sorted; a consumer materializes `{clade: [] for clade in roster}` before filling from the CSV so that absence-from-roster (an error) and absence-from-rows (normal) stay distinguishable.
 
 ### `pcps/{gene}/masked_nt_sites.csv` (v12+)
 
-Per-gene, per-nucleotide **clade-independent** mask for DASM training ([#153](https://github.com/matsengrp/mat-pcp/issues/153)). Additive: no existing output changed, and nothing in this repository reads it.
+Per-gene, per-nucleotide **clade-independent** mask for DASM training ([#153](https://github.com/matsengrp/mat-pcp/issues/153)). Since [#158](https://github.com/matsengrp/mat-pcp/issues/158) it is also what the DASM-ready PCP drop filter reads (filter 6 above), replacing `{gene}_codon_sites_to_mask.txt`.
 
 The companion to `censored_mutations.csv` above, and the other half of the same coordinate contract. That file carries the two *clade-specific* reasons of `masking.compute_exclusions`' five; this one carries the three *clade-independent* ones, at nucleotide rather than codon granularity. Together the two give a consumer the complete nucleotide mask with **no codon widening anywhere**.
 
@@ -117,9 +117,9 @@ Sorted by `(nt_index, reason)`, which is a total order because a reason cannot r
 
 **`nt_index` is one-to-many, for the same reason as the censor table's.** Where two CDS blocks share a nucleotide at a −1 ribosomal frameshift, `slice_cds` reads it twice, so one `nt_site` yields two rows in different codons. No shipped config masks such a site, so this is exercised only in `tests/test_masked_nt_sites.py`.
 
-**Why this exists beside `{gene}_codon_sites_to_mask.txt`.** The codon file is the same mask widened to codons, so one suspect nucleotide takes its two innocent neighbours with it — measured 2.85× over-mask across the six v12 production genes (121 nucleotide sites become 345 masked nucleotides):
+**What the retired codon file cost.** `{gene}_codon_sites_to_mask.txt` was this same mask widened to codons, so one suspect nucleotide took its two innocent neighbours with it — measured 2.85× over-mask across the six v12 production genes (121 nucleotide sites became 345 masked nucleotides):
 
-| gene | nt sites masked | rows | codons in the codon file | nt covered at codon granularity |
+| gene | nt sites masked | rows | codons widened to | nt covered at codon granularity |
 |---|---|---|---|---|
 | ORF1a | 53 | 66 | 52 | 156 |
 | ORF1b | 39 | 39 | 35 | 105 |
@@ -131,7 +131,9 @@ Sorted by `(nt_index, reason)`, which is a total order because a reason cannot r
 
 **Those totals are sums over genes, not distinct-site counts.** ORF1a (266–13480) and ORF1b (13442–21552) overlap by 39 nucleotides, and one masked site falls in the overlap — 13476, from the ProblematicSites VCF — so the six files carry 121 (gene, site) pairs over **120** distinct nucleotide sites. The per-gene sum is the right accounting for the over-mask: the two genes read 13476 at different codon offsets (1 in ORF1a, 2 in ORF1b), so widening to codons genuinely costs three nucleotides in each. A consumer unioning the six files gets 120.
 
-**The codon file is not retired, and the two are cross-checked.** `{gene}_codon_sites_to_mask.txt` still drives the DASM-ready PCP drop filter and the dashboards, and stays until a consumer reads this file and is validated. The producing rule reads it as an *input* and raises unless widening these nucleotide indices to codons reproduces it exactly — the anti-drift check that makes retiring it later mechanical. The two sides reach codons by different routes (the codon file from `counts_all.csv`'s `codon_site` column for a GTF-carried gene, this file by inverting CDS blocks for every gene), so the check is not a tautology.
+**The codon file is gone, and so is the cross-check that retired it.** Through v12 the producing rule read `{gene}_codon_sites_to_mask.txt` as an *input* and raised unless widening these nucleotide indices to codons reproduced it exactly — an anti-drift check that was not a tautology, since the two sides reached codons by different routes (the codon file from `counts_all.csv`'s `codon_site` column for a GTF-carried gene, this file by inverting CDS blocks for every gene). It passed with exact set equality for every configured gene on both v12 production trees and the test tree, which is the one-time evidence that the retirement in [#158](https://github.com/matsengrp/mat-pcp/issues/158) was a substitution rather than a change of mask. `tests/test_masked_nt_sites.py` is now the sole coverage of the CDS-block inversion.
+
+**A surviving `{gene}_codon_sites_to_mask.txt` is a stale artifact.** No rule produces or reads one as of #158, so a copy left in an output tree by an older run is not kept in step with this file; `validate_test.py::validate_masked_nt_sites` reports its presence as a failure rather than letting it reassure anybody who lists the directory.
 
 **The `site_include_range` reason is in the schema and in no shipped output.** Every config bounds the genome at 266–29674 and no PCP gene has a nucleotide outside that, so only two of the three values appear in practice. The column is worth having rather than assuming, and the third value is exercised on a fixture.
 
@@ -159,7 +161,7 @@ Supporting outputs: `mat/cutoffs/upto_{cutoff}/{clade}_samples.txt` (the sample 
 
 **A cutoff equal to the tree's `max_leaf_date` is byte-identical to the full tree.** It selects every sample, and the sample list preserves the full clade list's order, so `upto_{cutoff}/all_pcps.csv.gz` equals `all_pcps.csv.gz` byte-for-byte (`pcpio.PCP_CSV_COMPRESSION` pins `mtime=0`, so byte-equality is available at all). That degenerate arm is what makes "the cutoff machinery did not perturb the ordinary path" a measurement rather than an inspection; `config_test_data.yaml` carries it and `validate_test.py::validate_cutoff_pcps` checks it.
 
-**Not recomputed per cutoff — a known, bounded leak.** `{gene}_codon_sites_to_mask.txt` and `pcps/{gene}/censored_mutations.csv` come from the full tree's count table and from `data/usher_masked_sites.yaml`, so a cutoff's DASM-ready files are filtered with a mask that saw post-cutoff data. A strict holdout would rebuild the mask from pre-cutoff data only, which means re-running the whole counting and GLM path per cutoff. The leak is confined to which sites are flagged as *sequencing artifacts* — not to any fitness signal — and the censor table is keyed by clade, so extra post-cutoff clades in it are inert for a consumer that looks masks up per clade. Clade founders are likewise shared: a clade's founder is a property of its defining mutations, not of which of its samples have been collected yet.
+**Not recomputed per cutoff — a known, bounded leak.** `pcps/{gene}/masked_nt_sites.csv` and `pcps/{gene}/censored_mutations.csv` come from the full tree's count table and from `data/usher_masked_sites.yaml`, so a cutoff's DASM-ready files are filtered with a mask that saw post-cutoff data. A strict holdout would rebuild the mask from pre-cutoff data only, which means re-running the whole counting and GLM path per cutoff. The leak is confined to which sites are flagged as *sequencing artifacts* — not to any fitness signal — and the censor table is keyed by clade, so extra post-cutoff clades in it are inert for a consumer that looks masks up per clade. Clade founders are likewise shared: a clade's founder is a property of its defining mutations, not of which of its samples have been collected yet.
 
 ### `pcps/cutoff_summary.csv` (v12+)
 
@@ -218,7 +220,7 @@ A `frac_{unit}_{seed}_{fraction}bp` kind, which thinned an explicitly *named* un
 
 **The neutral model is not refit — deliberately.** An arm reads the full tree's `glm/curated_counts*.csv`, `glm/master_table*.csv` and `rates_table*.csv` unchanged; only `glm/{arm}/annotated_counts.csv` is rebuilt, because it is count-bearing. This hands the counts arm full-tree neutral information it would not have if the clade were genuinely this thinly sampled, which is conservative for the hypothesis the arms exist to test — it can only make the counts estimator look better. The **per-clade `evol_time` normalization does** track the subsample, which is the intended effect: it is what makes an arm's expected counts fall with the cap.
 
-**Also not recomputed, and here it is a no-op rather than a leak.** Clade founders, `{gene}_codon_sites_to_mask.txt` and `pcps/{gene}/censored_mutations.csv` are shared with the full tree. Unlike the temporal carve-out for `upto_{cutoff}/` above, these are *invariant to sampling depth by construction*: a founder is a property of the clade's defining mutations, and `masking.compute_exclusions` derives `exclude` from config, the ProblematicSites VCF, `usher_masked_sites.yaml` and the founder grid — never from a count column.
+**Also not recomputed, and here it is a no-op rather than a leak.** Clade founders, `pcps/{gene}/masked_nt_sites.csv` and `pcps/{gene}/censored_mutations.csv` are shared with the full tree. Unlike the temporal carve-out for `upto_{cutoff}/` above, these are *invariant to sampling depth by construction*: a founder is a property of the clade's defining mutations, and `masking.compute_exclusions` derives `exclude` from config, the ProblematicSites VCF, `usher_masked_sites.yaml` and the founder grid — never from a count column.
 
 ### `correlation_summary.csv` (output root, #151)
 

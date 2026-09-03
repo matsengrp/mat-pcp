@@ -14,26 +14,28 @@ Founder->reference reversions are deliberately in neither: they are a selection
 filter, not an artifact mask. Together the two files give a consumer the
 complete nucleotide mask with no codon widening anywhere.
 
-**Why this is not a second output on ``get_problematic_sites``.** The
-nucleotide-level answer already exists there --
+**Why this file exists, and what replaced.** The nucleotide-level answer used
+to be computed and thrown away by ``get_problematic_sites.py``:
 ``site_all_excluded = excluded.groupby(nt_site).transform("all")`` is exactly
-this set -- and the script then widens it to codons and writes only that, so one
-suspect nucleotide takes its two innocent neighbours with it (2.85x over-mask
-across the six v12 production genes: 121 nt sites become 345 masked nt). But
-``{gene}_codon_sites_to_mask.txt`` has seven consumers, one of which is
-``curate_pcps_for_dasm``; rewriting it would restate the 470 GiB of PCPs for a
-file nothing yet reads. A separate rule leaves the codon file's mtime alone
-(#153).
+this set, and that script widened it to codons and wrote only the codons, so one
+suspect nucleotide took its two innocent neighbours with it -- a 2.85x over-mask
+across the six v12 production genes (121 nt sites became 345 masked nt). #153
+emitted this file as a separate rule rather than a second output there, because
+``{gene}_codon_sites_to_mask.txt`` had seven consumers, one of them
+``curate_pcps_for_dasm``, and rewriting it would have restated every PCP for a
+file nothing yet read.
 
-**The codon file is checked against this one rather than derived from it.** Guard
-2 below asserts that widening these nucleotide indices to codons reproduces
-``{gene}_codon_sites_to_mask.txt`` exactly. Sharing a derivation would make that
-check a tautology; the value is that the two sides reach codons by *different*
-routes -- ``get_problematic_sites.py`` reads ``counts_all.csv``'s ``codon_site``
-column for a GTF-carried gene and inverts CDS blocks for a
-``pcp_gene_cds_blocks`` gene, while this script inverts blocks for both. It is
-specified as a check that passes today: verified on both v12 production trees
-and the v12 test tree, for every configured gene, with exact set equality.
+#158 then retired the codon file: ``curate_pcps_for_dasm`` reads this one, so
+the drop filter and DASM's loss apply one mask at one granularity. Two
+consequences. This is now the sole producer of the clade-independent mask, so
+guard 1's reconciliation against ``counts_all.csv`` -- which reaches ``exclude``
+through ``compute_exclusions`` rather than through
+``global_masked_site_reasons`` -- is the only independent derivation left.
+And the codon cross-check that made the retirement mechanical (guard 2 in #153:
+widening these indices reproduced the codon file exactly, verified for every
+configured gene on both v12 production trees and the test tree, with exact set
+equality) is gone with the file it compared against; ``tests/test_masked_nt_sites.py``
+is now the sole coverage of the CDS-block inversion.
 
 Coordinates match ``censored_mutations.csv``: ``nt_site`` is the 1-based genomic
 coordinate and ``nt_index`` is a 0-based index into this gene's PCP nucleotide
@@ -71,7 +73,6 @@ masking = load_workflow_module("masking")
 sequences = load_workflow_module("sequences")
 
 counts_csv = snakemake.input.counts
-codon_mask_path = snakemake.input.codon_mask
 site_mask_csv = snakemake.input.site_mask
 gtf_path = snakemake.input.gtf
 ref_fasta = snakemake.input.ref_fasta
@@ -201,9 +202,7 @@ log(
 
 # A masked site the grid does not mention at all is a third failure mode, and it
 # has to be separated out first: it makes the set comparison below meaningless
-# in the "missing from the count table" direction, and it would break guard 2
-# for a GTF-carried gene (whose codon file is built from the count table's own
-# rows, so a site absent from the grid can contribute no codon there).
+# in the "missing from the count table" direction.
 off_grid = sorted(set(site_reasons) - grid_sites)
 if off_grid:
     # min/max only when the grid is non-empty. A wholly empty count table is one
@@ -234,9 +233,10 @@ if missing_here:
     # possible in principle and true of nothing on any shipped tree (628
     # globally excluded sites genome-wide on both v12 production trees and the
     # test tree, and the two derivations agree exactly). It raises rather than
-    # being logged because `reason` has no value that would describe such a site
-    # honestly, and because the codon file *does* contain it -- so guard 2 would
-    # fail next anyway, with a message about codons rather than about reasons.
+    # being logged because `reason` has no value that would describe such a
+    # site honestly, and because the DASM-ready drop filter reads this file --
+    # so a site the count table excludes everywhere and this file omits is a
+    # position trained on as live.
     raise ValueError(
         f"{len(missing_here)} sites of {gene} are excluded in every clade of "
         f"counts_all.csv but match none of "
@@ -293,37 +293,23 @@ if not rows:
     )
 
 # ---------------------------------------------------------------------------
-# Guard 2: the codon file is exactly this file's codon-widening
+# What codon granularity would have cost
 # ---------------------------------------------------------------------------
 #
-# The anti-drift check that makes retiring {gene}_codon_sites_to_mask.txt a
-# mechanical step later rather than a re-derivation. Not a tautology: the two
-# sides reach codons by different routes (see the module docstring), and for a
-# GTF-carried gene the other side never touches this gene's CDS blocks at all.
-with open(codon_mask_path) as f:
-    codon_text = f.read().split()
-codon_file_sites = {int(value) for value in codon_text}
-codon_widened = {nt_index // 3 + 1 for _, nt_index, _ in rows}
-if codon_widened != codon_file_sites:
-    only_here = sorted(codon_widened - codon_file_sites)
-    only_there = sorted(codon_file_sites - codon_widened)
-    raise ValueError(
-        f"widening {gene}'s masked nucleotides to codons gives "
-        f"{len(codon_widened)} codons, which is not the "
-        f"{len(codon_file_sites)} in {codon_mask_path}: "
-        f"{len(only_here)} only here ({only_here[:10]}), "
-        f"{len(only_there)} only there ({only_there[:10]}). The two files must "
-        f"describe the same mask at two granularities, or a consumer switching "
-        f"from one to the other silently changes which sites it drops."
-    )
-# The over-mask factor compares distinct masked *positions*, not rows: a
-# two-reason site contributes two rows and one position, so dividing by the row
-# count would understate the widening.
+# Reported, not checked: the counterparty is gone. Through v12 this was guard 2,
+# an equality against {gene}_codon_sites_to_mask.txt reached by a different
+# route, and it is what made #158's retirement of that file mechanical. The
+# widening factor is still worth logging, because it is the size of the effect
+# the DASM-ready drop filter no longer pays.
+#
+# It compares distinct masked *positions*, not rows: a two-reason site
+# contributes two rows and one position, so dividing by the row count would
+# understate the widening.
 masked_indices = {nt_index for _, nt_index, _ in rows}
+codon_widened = {nt_index // 3 + 1 for nt_index in masked_indices}
 log(
-    f"Codon cross-check: {len(masked_indices)} masked nt positions widen to "
-    f"{len(codon_widened)} codons ({3 * len(codon_widened)} nt), matching "
-    f"{codon_mask_path} exactly"
+    f"Granularity: {len(masked_indices)} masked nt positions would widen to "
+    f"{len(codon_widened)} codons ({3 * len(codon_widened)} nt)"
     + (
         f" -- a {3 * len(codon_widened) / len(masked_indices):.2f}x over-mask "
         f"this file avoids"
@@ -335,6 +321,10 @@ log(
 # ---------------------------------------------------------------------------
 # Guard 3: nt_index round-trips as a string identity
 # ---------------------------------------------------------------------------
+#
+# Still numbered 3 with 2 retired above, deliberately: renumbering would make
+# "guard 2" mean the codon cross-check in #153 and this check in #158, across
+# ``tests/test_masked_nt_sites.py``, CLAUDE.md pattern 17 and both issues.
 #
 # Stated as a *sequence* identity rather than index arithmetic, so it also
 # catches a blocks-vs-sequence mismatch (the wrong gene's blocks) that

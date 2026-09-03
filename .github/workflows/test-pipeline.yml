@@ -277,14 +277,32 @@ jobs:
     # one-to-many index is synthetic; every config bounds the genome at
     # 266-29674 with no PCP gene outside it, so the `site_include_range` reason
     # is never emitted; every configured gene's mask is non-empty on every
-    # shipped tree, so the legitimately header-only case is unreachable; and all
-    # three guards pass on both production trees, which says nothing about
+    # shipped tree, so the legitimately header-only case is unreachable; and
+    # every guard passes on both production trees, which says nothing about
     # whether they fire. Each guard is mutation-tested against a corrupted copy
     # of the shipped script -- and the reason vocabulary against a corrupted
-    # `workflow/modules/masking.py`, where the definition lives.
+    # `workflow/modules/masking.py`, where the definition lives. Since #158
+    # retired `{gene}_codon_sites_to_mask.txt` this file is also the only
+    # coverage of the CDS-block inversion, the codon cross-check having gone
+    # with the file it compared against.
     - name: Verify the global nucleotide mask coordinates and guards
       run: |
         pixi run python tests/test_masked_nt_sites.py
+
+    # The DASM-ready drop filter's nucleotide predicate (#158). Here the run
+    # proves *nothing*: applying the retired codon rule and the new nucleotide
+    # rule to the test tree's PCPs gives identical row sets for every gene
+    # (S 8/8, ORF1ab 23/23, ORF1b 13/13, E 1/1), because no test-data PCP
+    # mutates an unmasked nucleotide inside a masked codon. So a green pipeline
+    # run is compatible with the filter being nucleotide-granular,
+    # codon-granular, or shifted by one, and the superset invariant is VACUOUS
+    # in CI. This file is the only thing that can tell those apart: it drives
+    # the real script against a stub `snakemake`, and mutation-tests the reader
+    # by corrupting `workflow/modules/masking.py`, where
+    # `read_masked_nt_indices` lives.
+    - name: Verify the DASM-ready nucleotide drop filter
+      run: |
+        pixi run python tests/test_dasm_ready_nt_filter.py
 
     # The steps above name each test file so a failure points at a readable log.
     # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]
@@ -292,6 +310,45 @@ jobs:
     # the same invisibility this suite exists to fight. This sweep is the
     # backstop; it re-runs the files above (seconds, all fixture-only) and fails
     # on any that is not wired up individually.
+    # A `pixi run python -c "..."` block is a double-quoted SHELL string, so a
+    # plain double quote inside it -- even inside a python comment -- closes the
+    # string early. Python then receives a truncated program, which for a
+    # comment-heavy block means a comment-only program: it prints nothing and
+    # exits 0, so the step passes while checking nothing. That is exactly what
+    # happened to `Verify ORF1b PCPs came from the config coordinate override`,
+    # silently, from the day it was written until #158. This sweep is the
+    # tripwire, and it runs FIRST so a broken block is reported before the
+    # 20-minute pipeline step rather than after it.
+    - name: Verify no python -c block is broken by an unescaped double quote
+      run: |
+        pixi run python -c '
+        import sys, yaml
+        wf = yaml.safe_load(open(".github/workflows/test-pipeline.yml"))
+        broken = []
+        for job in wf["jobs"].values():
+            for step in job.get("steps", []):
+                for chunk in step.get("run", "").split("python -c \"")[1:]:
+                    body = chunk.split("\n\"", 1)[0]
+                    if "\"" in body.replace("\\\"", ""):
+                        offenders = [
+                            line.strip()
+                            for line in body.splitlines()
+                            if "\"" in line.replace("\\\"", "")
+                        ]
+                        broken.append((step.get("name", "<unnamed>"), offenders))
+        for name, offenders in broken:
+            print(f"BROKEN: {name}")
+            for line in offenders:
+                print(f"    {line}")
+        if broken:
+            sys.exit(
+                f"{len(broken)} python -c block(s) contain an unescaped double "
+                f"quote, so bash truncates the program and the step passes "
+                f"without running it. Use single quotes for quoted prose."
+            )
+        print("every python -c block is shell-safe")
+        '
+
     - name: Verify every tests/test_*.py file actually runs
       run: |
         # GitHub runs `run:` steps as `bash -e {0}`, so errexit is ALREADY ON and
@@ -1023,15 +1080,35 @@ jobs:
         print(f'Unique motifs: {rates[\"motif\"].nunique()}')
         "
 
-    - name: Verify problematic sites
+    # #158 retired {gene}_codon_sites_to_mask.txt in favour of the
+    # nucleotide-granular pcps/{gene}/masked_nt_sites.csv, which the DASM-ready
+    # drop filter now reads. The absence assertion is the load-bearing half: no
+    # rule owns the codon file any more, so a copy surviving in an output tree
+    # is a stale artifact that nothing keeps in step with the mask actually
+    # applied.
+    - name: Verify the global nucleotide mask is present and the codon mask is gone
       run: |
-        test -f $OUTPUT_DIR/S_codon_sites_to_mask.txt
+        test -f $OUTPUT_DIR/pcps/S/masked_nt_sites.csv
+        if ls $OUTPUT_DIR/*_codon_sites_to_mask.txt >/dev/null 2>&1; then
+          echo "a retired {gene}_codon_sites_to_mask.txt survives in the output"
+          ls $OUTPUT_DIR/*_codon_sites_to_mask.txt
+          exit 1
+        fi
         pixi run python -c "
-        with open('${OUTPUT_DIR}/S_codon_sites_to_mask.txt') as f:
-            sites = [line.strip() for line in f if line.strip()]
-        print(f'Problematic Spike codon sites: {len(sites)}')
-        if sites:
-            print(f'First 10 sites: {sites[:10]}')
+        import pandas as pd, sys
+        mask = pd.read_csv('${OUTPUT_DIR}/pcps/S/masked_nt_sites.csv')
+        if list(mask.columns) != ['nt_site', 'nt_index', 'reason']:
+            sys.exit(f'unexpected columns: {list(mask.columns)}')
+        # Long-form: one row per (nt_index, reason), so a consumer must take
+        # set(nt_index). Non-empty is asserted because S has 18 masked sites on
+        # the test tree and an empty mask is the #133 silent-failure shape.
+        indices = set(mask['nt_index'])
+        if not indices:
+            sys.exit('S masked_nt_sites.csv is empty; S has masked sites on this '
+                     'tree, so an empty mask means nothing was matched')
+        print(f'Spike global nt mask: {len(mask)} rows over {len(indices)} '
+              f'distinct nt_index, {mask[\"nt_site\"].nunique()} nt_site')
+        print(f'First 10 indices: {sorted(indices)[:10]}')
         "
 
     - name: Verify probfit module
@@ -1239,16 +1316,22 @@ jobs:
         cds_nt = sum(end - start + 1 for start, end in blocks)
         # divmod, not //: a future block edit that breaks codon alignment would
         # otherwise truncate to a plausible n_codons, shift the last codon, and
-        # report "the mask is in the wrong codon numbering" instead of the real
+        # report 'the mask is in the wrong codon numbering' instead of the real
         # cause. gtf.validate_cds_blocks catches this inside the pipeline, but
         # this step reads the config directly and bypasses it.
         #
-        # NB: this whole block is a double-quoted shell string, so backticks and
-        # dollar-paren command substitution are expanded by bash BEFORE python
-        # sees the source -- even inside a python comment. A stray pair of
-        # backticks here spliced the output of last(1) into the middle of this
-        # script; writing the dollar-paren form out literally then did the same
-        # thing again. Use neither form anywhere in this block, prose included.
+        # NB: this whole block is a double-quoted shell string, so backticks,
+        # dollar-paren command substitution AND PLAIN DOUBLE QUOTES are handled
+        # by bash BEFORE python sees the source -- even inside a python comment.
+        # A stray pair of backticks here spliced the output of last(1) into the
+        # middle of this script; writing the dollar-paren form out literally
+        # then did the same thing again. Worse, this very comment once carried a
+        # double-quoted phrase, which CLOSED the shell string: python received
+        # only the source above it -- a comment-only program -- so it printed
+        # nothing, exited 0, and this whole cross-check was silently vacuous in
+        # every CI run from the day it was written until #158. Use single quotes
+        # for quoted prose here, and none of the three forms anywhere in this
+        # block. The sweep below is the tripwire.
         n_codons, remainder = divmod(cds_nt, 3)
         if remainder:
             sys.exit(f'pcp_gene_cds_blocks ORF1b totals {cds_nt} nt, not a whole '
@@ -1293,32 +1376,65 @@ jobs:
             sys.exit('no validation reports found to check for vacuity')
         print(f'{checked} validation reports are non-vacuous')
 
-        def read_mask(gene):
-            path = f'${OUTPUT_DIR}/{gene}_codon_sites_to_mask.txt'
-            return {int(line) for line in open(path) if line.strip()}
+        # Two derivations of one thing, and #158 changed where each comes from.
+        # ORF1b: nt_index in its own masked_nt_sites.csv, widened to codons --
+        # inverted from nt_site through pcp_gene_cds_blocks.
+        # ORF1ab: the count table's own codon_site column, which is GTF-derived
+        # and never touches ORF1b's blocks.
+        # Reading BOTH sides from masked_nt_sites.csv would compare one
+        # derivation with itself, since that script inverts CDS blocks for every
+        # gene -- the tautology CLAUDE.md pattern 17 warns about. So the ORF1ab
+        # side is rebuilt from counts_all.csv here, which is what the retired
+        # {fitness_gene}_codon_sites_to_mask.txt used to hold.
+        def read_nt_mask_as_codons(gene):
+            path = f'${OUTPUT_DIR}/pcps/{gene}/masked_nt_sites.csv'
+            mask = pd.read_csv(path)
+            return {int(i) // 3 + 1 for i in mask['nt_index']}
 
-        orf1b_mask, orf1ab_mask = read_mask('ORF1b'), read_mask(fitness_gene)
+        counts = pd.read_csv('${OUTPUT_DIR}/counts_all.csv',
+                             usecols=['nt_site', 'gene', 'codon_site', 'exclude'])
+        all_excluded = (counts['exclude'] == True).groupby(
+            counts['nt_site'].astype(int)).transform('all')
+        codon_sites = set()
+        for genes_cell, sites_cell in zip(counts.loc[all_excluded, 'gene'],
+                                          counts.loc[all_excluded, 'codon_site']):
+            # gene and codon_site are POSITIONALLY PAIRED semicolon-joined
+            # cells at an overlap site, so they must be zipped, never flattened
+            # -- flattening files another gene codon number under this one, and
+            # the numbers are all in range so no bound check sees it (#133).
+            names = str(genes_cell).split(';')
+            numbers = str(sites_cell).split(';')
+            if len(names) != len(numbers):
+                sys.exit(f'gene {genes_cell!r} and codon_site {sites_cell!r} have '
+                         f'different component counts; they are positionally '
+                         f'paired and cannot be zipped')
+            for name, number in zip(names, numbers):
+                if name.strip() == fitness_gene and number.strip().isdigit():
+                    codon_sites.add(int(number.strip()))
+
+        orf1b_mask, orf1ab_mask = read_nt_mask_as_codons('ORF1b'), codon_sites
         if not orf1b_mask:
-            sys.exit('ORF1b_codon_sites_to_mask.txt is empty. ORF1b resolves its '
+            sys.exit('pcps/ORF1b/masked_nt_sites.csv is empty. ORF1b resolves its '
                      'coordinates from pcp_gene_cds_blocks and never appears in '
                      'counts_all.csv gene column, so a name-based match silently '
                      'masks nothing and its DASM-ready PCPs keep every '
                      'problematic site (#133)')
+        if not orf1ab_mask:
+            sys.exit(f'no all-clades-excluded {fitness_gene} codon site found in '
+                     f'counts_all.csv, so the comparison below is vacuous')
         if max(orf1b_mask) > n_codons or min(orf1b_mask) < 1:
             sys.exit(f'ORF1b codon sites must fall in 1..{n_codons}; got '
                      f'{min(orf1b_mask)}..{max(orf1b_mask)} -- the mask is in the '
                      f'wrong codon numbering')
-        # Two derivations of one thing: ORF1b's mask comes from nt_site via its
-        # CDS blocks, ORF1ab's from the count table's own codon_site column, so
-        # equality here means the two coordinate systems agree.
         first, last = offset + 1, offset + n_codons
         shifted = {c - offset for c in orf1ab_mask if first <= c <= last}
         if orf1b_mask != shifted:
             sys.exit(f'ORF1b mask disagrees with {fitness_gene} shifted by '
                      f'{offset}: only in ORF1b {sorted(orf1b_mask - shifted)}, '
                      f'only in shifted {sorted(shifted - orf1b_mask)}')
-        print(f'ORF1b masks {len(orf1b_mask)} codon sites == '
-              f'{fitness_gene}[{first}:{last}] - {offset}')
+        print(f'ORF1b masks {len(orf1b_mask)} codon sites (from nt_index) == '
+              f'{fitness_gene}[{first}:{last}] - {offset} (from counts_all.csv '
+              f'codon_site, {len(orf1ab_mask)} sites before the shift)')
         "
 
     - name: Check validation results

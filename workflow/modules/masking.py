@@ -113,6 +113,48 @@ def global_masked_site_reasons(
     return reasons
 
 
+MASKED_NT_INDEX_COLUMN = "nt_index"
+
+
+def read_masked_nt_indices(path):
+    """Read ``pcps/{gene}/masked_nt_sites.csv`` into a sorted list of indices.
+
+    The reader for the DASM-ready drop filter's mask, and the reason it lives
+    here rather than in ``curate_pcps_for_dasm.py``: the guard below has to be
+    mutation-testable in the module, since patching a script's text reports a
+    guard as covered while the operator implementing it sits one file away
+    (CLAUDE.md patterns 14 and 15).
+
+    Two properties of the file the caller must not rediscover:
+
+    * ``nt_index`` is **0-based** into the gene's PCP nucleotide sequence and is
+      used as-is. The retired ``{gene}_codon_sites_to_mask.txt`` was 1-based
+      codon positions and its reader subtracted one; carrying that subtraction
+      over here would shift the whole mask by one nucleotide, which is the
+      failure class patterns 10 and 12 exist for (#158).
+    * The file is **long-form**, one row per ``(nt_index, reason)``: 18 of the
+      121 masked sites on the six v12 production genes carry both a VCF and a
+      config reason, so 121 sites emit 139 rows. Distinct indices are what the
+      filter and ``num_masked_sites`` mean, hence the de-duplication here.
+
+    A missing ``nt_index`` column raises with the path named rather than
+    surfacing pandas' ``KeyError``. Every guard in ``masked_nt_sites.py`` exists
+    because an empty mask silently unmasks a gene, and a mask that fails to
+    *parse* is the same outcome reached one step earlier. A header-only file is
+    legitimate and returns ``[]`` (``masked_nt_sites.py`` declares that case
+    legal for a gene with no globally masked site).
+    """
+    mask_df = pd.read_csv(path)
+    if MASKED_NT_INDEX_COLUMN not in mask_df.columns:
+        raise ValueError(
+            f"{path} has no {MASKED_NT_INDEX_COLUMN!r} column (found "
+            f"{list(mask_df.columns)}), so the nucleotide mask cannot be read. "
+            f"Refusing to fall back to an empty mask: that would silently train "
+            f"on every masked position rather than fail."
+        )
+    return sorted({int(value) for value in mask_df[MASKED_NT_INDEX_COLUMN]})
+
+
 def global_masked_sites(
     *,
     sites_to_exclude,

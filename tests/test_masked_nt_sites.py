@@ -18,8 +18,15 @@ that makes the coordinates right:
   tree, so the header-only case -- legitimate for a short gene, and the
   observable symptom of #133's silent-empty defect one file over -- is only
   reachable on a fixture.
-* **Whether the guards fire at all.** All three pass on both v12 production
+* **Whether the guards fire at all.** Every one passes on both v12 production
   trees, which says nothing about what they do when something is wrong.
+
+**This file is now the sole coverage of the CDS-block inversion.** Through v12
+the script also carried guard 2, an equality against
+``{gene}_codon_sites_to_mask.txt`` reached by a different route, and #153
+specified it as the thing that would make retiring that file mechanical. #158
+retired it, so that cross-check and its test are gone; the junction and
+flat-offset checks below are what remain.
 
 Runs the real ``workflow/scripts/masked_nt_sites.py`` against a stub
 ``snakemake`` global, never a re-implementation of it, and the mutation tests
@@ -162,7 +169,6 @@ def run_masked_nt_sites(
     grid_sites=None,
     all_excluded=None,
     partly_excluded=(),
-    codon_sites=None,
     genome=None,
     workflow_root=None,
 ):
@@ -211,28 +217,12 @@ def run_masked_nt_sites(
         for site in sorted(set(int(s) for s in vcf_sites)):
             writer.writerow([site])
 
-    # The codon file is an *input*, so the default is the answer the shipped
-    # get_problematic_sites.py produces for this fixture: widen each masked
-    # nucleotide's index to its codon. Derived with the real ``sequences``
-    # module, not with a copy of the script's arithmetic.
-    if codon_sites is None:
-        codon_sites = sorted(
-            {
-                index // 3 + 1
-                for site in reasons
-                for index in sequences.genomic_to_pcp_indices(blocks, site)
-            }
-        )
-    codon_path = tmpdir / f"{gene}_codon_sites_to_mask.txt"
-    codon_path.write_text("\n".join(str(c) for c in codon_sites))
-
     out_table = tmpdir / "masked_nt_sites.csv"
     log_path = tmpdir / f"{gene}.log"
 
     stub = _Namespace(
         input=_Namespace(
             counts=str(counts_path),
-            codon_mask=str(codon_path),
             site_mask=str(tmpdir / "site_mask.csv"),
             gtf=str(gtf_path),
             ref_fasta=str(ref_path),
@@ -295,7 +285,6 @@ def check_single_block_known_answer():
             S_BLOCKS,
             config_sites=S_CONFIG_SITES,
             vcf_sites=S_VCF_SITES,
-            codon_sites=S_EXPECTED_CODONS,
         )
         got = _triples(rows)
         if got != S_EXPECTED:
@@ -345,7 +334,6 @@ def check_multi_reason_site_emits_one_row_per_reason():
             S_BLOCKS,
             config_sites=S_CONFIG_SITES,
             vcf_sites=S_VCF_SITES,
-            codon_sites=S_EXPECTED_CODONS,
         )
         at_1437 = [r for r in rows if int(r["nt_index"]) == 1437]
         if len(at_1437) != 2:
@@ -408,8 +396,8 @@ def check_frameshift_junction_emits_two_rows():
         if codons != [9, 10]:
             failures.append(
                 f"the junction's two indices must fall in codons 9 and 10, got "
-                f"{codons} -- if they shared a codon, dropping one would be "
-                f"invisible to the codon cross-check"
+                f"{codons} -- if they shared a codon, dropping one would leave "
+                f"the same codon masked and the loss would never notice"
             )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -453,8 +441,7 @@ def check_flat_offset_is_caught():
         except ValueError as exc:
             # Named, so the check cannot pass on an unrelated failure: the
             # offset emits three rows where four are due, which is the row-count
-            # reconciliation's business rather than the codon or round-trip
-            # guard's.
+            # reconciliation's business rather than the round-trip guard's.
             if "frameshift index" not in str(exc):
                 failures.append(f"wrong error for a flat offset: {exc}")
     finally:
@@ -466,10 +453,11 @@ def check_round_trip_is_a_sequence_identity():
     """Guard 3 catches a blocks-vs-sequence mismatch index arithmetic passes.
 
     Mutated so the reference is sliced with the *wrong* coordinates while the
-    indices stay right. Every index is still in range and every codon still
-    matches the codon file, so guards 1 and 2 pass -- only the string identity
-    sees it. That is why the check is written against the sequence rather than
-    as ``0 <= nt_index < len(positions)``.
+    indices stay right. Every index is still in range and every masked site
+    still reconciles against the count table, so guard 1 and the row-count
+    check pass -- only the string identity sees it. That is why the check is
+    written against the sequence rather than as
+    ``0 <= nt_index < len(positions)``.
     """
     failures = []
     tmp = tempfile.mkdtemp()
@@ -491,7 +479,6 @@ def check_round_trip_is_a_sequence_identity():
                 S_BLOCKS,
                 config_sites=S_CONFIG_SITES,
                 vcf_sites=S_VCF_SITES,
-                codon_sites=S_EXPECTED_CODONS,
                 workflow_root=root,
             )
             failures.append(
@@ -513,66 +500,9 @@ def check_round_trip_is_a_sequence_identity():
             S_BLOCKS,
             config_sites=S_CONFIG_SITES,
             vcf_sites=S_VCF_SITES,
-            codon_sites=S_EXPECTED_CODONS,
         )
     except Exception as exc:
         failures.append(f"the correct fixture raised: {exc}")
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
-    return failures
-
-
-# ---------------------------------------------------------------------------
-# Guard 2 -- the codon file is exactly this file's codon-widening
-# ---------------------------------------------------------------------------
-
-
-def check_codon_cross_check_fires_both_ways():
-    """A codon file that is not this mask's widening raises, either direction.
-
-    This is the check that makes retiring ``{gene}_codon_sites_to_mask.txt``
-    later a mechanical step rather than a re-derivation, so it has to fail on a
-    stale file. Driven from the *input* rather than by corrupting the script,
-    because a stale codon file is the realistic failure: the two rules read the
-    same count table but reach codons by different routes.
-    """
-    failures = []
-    cases = {
-        "codon file missing a codon": [1, 243],
-        "codon file with an extra codon": [1, 243, 480, 999],
-        "codon file off by one": [2, 244, 481],
-    }
-    for label, codon_sites in cases.items():
-        tmpdir = tempfile.mkdtemp()
-        try:
-            try:
-                run_masked_nt_sites(
-                    tmpdir,
-                    "S",
-                    S_BLOCKS,
-                    config_sites=S_CONFIG_SITES,
-                    vcf_sites=S_VCF_SITES,
-                    codon_sites=codon_sites,
-                )
-                failures.append(f"{label}: did not raise")
-            except ValueError as exc:
-                if "same mask at two granularities" not in str(exc):
-                    failures.append(f"{label}: wrong error: {exc}")
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-
-    tmpdir = tempfile.mkdtemp()
-    try:
-        _, log_text = run_masked_nt_sites(
-            tmpdir,
-            "S",
-            S_BLOCKS,
-            config_sites=S_CONFIG_SITES,
-            vcf_sites=S_VCF_SITES,
-            codon_sites=S_EXPECTED_CODONS,
-        )
-        if "Codon cross-check" not in log_text:
-            failures.append("the codon cross-check is missing from the log")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     return failures
@@ -607,7 +537,6 @@ def check_reconciliation_catches_a_count_table_disagreement():
                 S_BLOCKS,
                 config_sites=S_CONFIG_SITES,
                 vcf_sites=S_VCF_SITES,
-                codon_sites=S_EXPECTED_CODONS,
                 all_excluded=set(S_CONFIG_SITES) | {21563, 22290, 23000, 24000},
             )
             failures.append(
@@ -632,7 +561,6 @@ def check_reconciliation_catches_a_count_table_disagreement():
                 S_BLOCKS,
                 config_sites=S_CONFIG_SITES,
                 vcf_sites=S_VCF_SITES,
-                codon_sites=S_EXPECTED_CODONS,
                 all_excluded={21563, 22290, 22289, 22291},
                 partly_excluded={23000},
             )
@@ -648,8 +576,8 @@ def check_reconciliation_catches_a_count_table_disagreement():
 
     # Direction 3: a masked site the grid does not mention at all. Separated
     # from the two above because it makes both of them meaningless rather than
-    # false, and because for a GTF-carried gene it would also break the codon
-    # cross-check (that file is built from the count table's own rows).
+    # false: the count table and the gene's CDS blocks disagree about which
+    # coordinates exist, so neither direction of the comparison means anything.
     tmpdir = tempfile.mkdtemp()
     try:
         try:
@@ -659,7 +587,6 @@ def check_reconciliation_catches_a_count_table_disagreement():
                 S_BLOCKS,
                 config_sites=S_CONFIG_SITES,
                 vcf_sites=S_VCF_SITES,
-                codon_sites=S_EXPECTED_CODONS,
                 grid_sites=set(range(21563, 22000)),
             )
             failures.append("a masked site absent from the count grid did NOT raise")
@@ -700,7 +627,6 @@ def check_dropping_a_reason_in_the_module_is_caught():
                 S_BLOCKS,
                 config_sites=S_CONFIG_SITES,
                 vcf_sites=S_VCF_SITES,
-                codon_sites=S_EXPECTED_CODONS,
                 workflow_root=root,
             )
             failures.append(
@@ -799,7 +725,6 @@ def check_csv_contract_and_reproducibility():
                 S_BLOCKS,
                 config_sites=S_CONFIG_SITES,
                 vcf_sites=S_VCF_SITES,
-                codon_sites=S_EXPECTED_CODONS,
             )
         a = (Path(first) / "masked_nt_sites.csv").read_bytes()
         b = (Path(second) / "masked_nt_sites.csv").read_bytes()
@@ -867,7 +792,6 @@ CHECKS = [
     ("T2 frameshift junction is one-to-many", check_frameshift_junction_emits_two_rows),
     ("T2 mutation test: flat offset is caught", check_flat_offset_is_caught),
     ("T3 round-trip is a sequence identity", check_round_trip_is_a_sequence_identity),
-    ("guard 2: codon cross-check fires", check_codon_cross_check_fires_both_ways),
     ("guard 1: count-table reconciliation", check_reconciliation_catches_a_count_table_disagreement),
     ("guard 1 mutation test: a dropped reason is caught", check_dropping_a_reason_in_the_module_is_caught),
     ("site_include_range reason is emitted", check_site_include_range_reason_is_emitted),
