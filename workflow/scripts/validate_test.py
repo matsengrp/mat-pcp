@@ -2106,6 +2106,70 @@ def validate_subsample_arms(output_dir):
     return diffs, note
 
 
+def validate_gzip_reproducibility(output_dir):
+    """Every gzip this pipeline *writes* carries mtime=0, not mtime=now.
+
+    pandas' default gzip output embeds the wall-clock time, so an unchanged
+    re-run yields different bytes -- and `data-central` manifests pin md5/xxh3
+    per file, so that reads as a data change. `modules/pcpio.py` defines the
+    policy; this checks the artifacts rather than the writers, which is the
+    whole point: it covers any future writer that forgets, including one added
+    to a rule nobody thought of as a compression call site.
+
+    That is not a hypothetical failure mode. v12 shipped
+    `mat/filtered_metadata.tsv.gz` with mtime=now baked in -- the released
+    public tree's copy reads 1787704712 -- because the policy lived at the PCP
+    call sites and this one writer never adopted it. Nothing could see it: the
+    payload is correct, every consumer reads the decompressed stream, and no
+    output-level check compared bytes across runs.
+
+    **Symlinks are skipped, and that exclusion is load-bearing.** `link_inputs`
+    symlinks the upstream MAT and its metadata into `mat/` as `.pb.gz` /
+    `.tsv.gz`; those are external inputs whose headers this pipeline does not
+    control, so asserting on them would fail for reasons no change here could
+    fix. Only regular files -- the ones a rule actually wrote -- are checked.
+    """
+    import datetime
+    import struct
+
+    differences = []
+    checked = 0
+    skipped_links = 0
+    for path in sorted(Path(output_dir).rglob("*.gz")):
+        if path.is_symlink():
+            skipped_links += 1
+            continue
+        if not path.is_file():
+            continue
+        with open(path, "rb") as handle:
+            header = handle.read(8)
+        if len(header) < 8 or header[:2] != b"\x1f\x8b":
+            differences.append(
+                f"{path.relative_to(output_dir)} ends in .gz but has no gzip "
+                f"magic, so it is not the file its name claims"
+            )
+            continue
+        checked += 1
+        mtime = struct.unpack("<I", header[4:8])[0]
+        if mtime != 0:
+            stamp = datetime.datetime.utcfromtimestamp(mtime)
+            differences.append(
+                f"{path.relative_to(output_dir)} embeds gzip mtime={mtime} "
+                f"({stamp} UTC) rather than 0, so an unchanged re-run of the "
+                f"rule that wrote it produces a different md5; it needs "
+                f"compression=pcpio.REPRODUCIBLE_GZIP"
+            )
+
+    summary = (
+        f"Gzip reproducibility: {checked} written .gz file(s) all carry "
+        f"mtime=0"
+        + (f", {skipped_links} symlinked input(s) skipped" if skipped_links else "")
+        if checked
+        else "Gzip reproducibility: no written .gz files found (VACUOUS)"
+    )
+    return differences, summary
+
+
 def validate_masked_nt_sites(output_dir):
     """Every PCP gene's clade-independent nucleotide mask agrees with its codon file.
 
@@ -2600,13 +2664,14 @@ def main():
     era_diffs, era_summary = validate_era_rate_tables(output_dir)
     censor_diffs, censor_summary = validate_censor_table(output_dir)
     nt_mask_diffs, nt_mask_summary = validate_masked_nt_sites(output_dir)
+    gzip_diffs, gzip_summary = validate_gzip_reproducibility(output_dir)
     rtt_diffs, rtt_summary = validate_root_to_tip_cloud(output_dir)
     cutoff_diffs, cutoff_summary = validate_cutoff_pcps(output_dir)
     arm_diffs, arm_summary = validate_subsample_arms(output_dir)
     differences += (
         site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
         + orf1ab_diffs + orf1b_diffs + glm_syn_diffs + codon_bg_diffs + era_diffs
-        + censor_diffs + nt_mask_diffs + rtt_diffs + cutoff_diffs
+        + censor_diffs + nt_mask_diffs + gzip_diffs + rtt_diffs + cutoff_diffs
         + arm_diffs
     )
 
@@ -2652,6 +2717,8 @@ def main():
             print(f"  - {censor_summary}")
         if nt_mask_summary:
             print(f"  - {nt_mask_summary}")
+        if gzip_summary:
+            print(f"  - {gzip_summary}")
         if rtt_summary:
             print(f"  - {rtt_summary}")
         if cutoff_summary:

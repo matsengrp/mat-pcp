@@ -20,6 +20,36 @@ This file tracks changes to the mat-pcp pipeline outputs and schema that affect 
 
 ### Unreleased (no version bump)
 
+#### Fixed: `mat/filtered_metadata.tsv.gz` is now byte-reproducible
+
+`filter_metadata.py` was the one gzip writer in the pipeline still on bare
+`compression="gzip"`, so pandas embedded `mtime=now` and an unchanged re-run
+produced a different md5. v12 shipped that way -- the released public tree's
+copy reads `mtime=1787704712` (2026-08-26 00:38 UTC) -- which matters because
+`data-central` manifests pin `md5`/`xxh3` per file, so a re-run reads as a data
+change. It now takes the shared policy from `modules/pcpio.py`.
+
+**Payload-only.** Verified on the test tree: the decompressed md5 is unchanged
+(`fb209217e33ad6e4182f2549a2d380a7` before and after), only the gzip header
+moved, and a forced re-run is now byte-identical. The nine rules that read this
+file therefore produce identical output; every byte-equality check in
+`validate_test.py` (degenerate cutoff arms, degenerate cap arm) still passes
+after a full 273-job test-data rebuild.
+
+`pcpio.REPRODUCIBLE_GZIP` is the policy's new, non-PCP-specific name;
+`PCP_CSV_COMPRESSION` remains as an alias so no PCP script's body changes --
+editing one is a `code` rerun trigger and would restate the 470 GiB of PCPs per
+tree to produce byte-identical output.
+
+**Guarded by a sweep, not a unit test.** `validate_test.py::validate_gzip_reproducibility`
+walks every `.gz` the pipeline *wrote* and asserts `mtime == 0` (113 files on
+the test tree; the 2 symlinked upstream inputs are skipped, since their headers
+are not ours to set). That covers any future writer that forgets, which a test
+aimed at this one call site would not, and it is the check whose absence let
+this ship: the payload was always correct, every consumer reads the decompressed
+stream, and nothing compared bytes across runs. It was confirmed to fail on the
+pre-fix tree before the fix was applied.
+
 #### Added: the global mask at nucleotide granularity (`pcps/{gene}/masked_nt_sites.csv`)
 
 Per-gene, per-nucleotide **clade-independent** mask for DASM training

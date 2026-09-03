@@ -1,9 +1,28 @@
 #!/usr/bin/env python3
 """Filter metadata based on QC criteria (dates, hosts, genome length)."""
 
+import os
+from importlib import util as importlib_util
+
 import pandas as pd
 from datetime import datetime
 from enum import Enum, auto
+
+# The by-path module loader is defined once in
+# workflow/modules/workflow_loader.py. Because that loader is itself the
+# mechanism for importing shared workflow code, it cannot be imported via
+# itself -- it is wired up here by absolute path (#111).
+_loader_spec = importlib_util.spec_from_file_location(
+    "workflow_loader",
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "modules",
+        "workflow_loader.py",
+    ),
+)
+workflow_loader = importlib_util.module_from_spec(_loader_spec)
+_loader_spec.loader.exec_module(workflow_loader)
+pcpio = workflow_loader.load_workflow_module("pcpio")
 
 
 class DateResolution(Enum):
@@ -215,9 +234,19 @@ def main():
     # Save outputs
     print(f"Final dataset size: {len(meta_df)}")
 
-    # Ensure output is gzipped
+    # Ensure output is gzipped. The compression policy comes from pcpio rather
+    # than being spelled here: pandas' default embeds mtime=now, so an unchanged
+    # re-run produces a different md5, and `data-central` manifests pin md5/xxh3
+    # per file. That is not hypothetical for this file -- v12 shipped it with
+    # mtime=now baked in (#134's policy, applied to the one writer that missed
+    # it).
     if FILTERED_META_OUT.endswith(".gz"):
-        meta_df.to_csv(FILTERED_META_OUT, sep="\t", index=False, compression="gzip")
+        meta_df.to_csv(
+            FILTERED_META_OUT,
+            sep="\t",
+            index=False,
+            compression=pcpio.REPRODUCIBLE_GZIP,
+        )
     else:
         meta_df.to_csv(FILTERED_META_OUT, sep="\t", index=False)
 
