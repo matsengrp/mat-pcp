@@ -115,7 +115,7 @@ by.
 ### Testing
 ```bash
 # Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
-# all fourteen, plus a `marimo check` on the analysis notebook, before the pipeline steps)
+# all fifteen, plus a `marimo check` on the analysis notebook, before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 pixi run python tests/test_clade_founder_guards.py
 pixi run python tests/test_founder_codon_background.py
@@ -1321,7 +1321,11 @@ mat-pcp/
     widened to codons and only the codons are written, so one suspect nucleotide
     takes its two innocent neighbours with it: 121 masked nucleotide sites become
     345 masked nucleotides across the six v12 production genes, a **2.85x**
-    over-mask, and #144 measured the cost downstream at 12,240 S PCPs and 5,523 N
+    over-mask (121 is a sum over genes: ORF1a and ORF1b overlap by 39 nt and
+    share masked site 13476, so the six files hold 121 (gene, site) pairs
+    over 120 distinct sites -- and the per-gene sum is the right accounting,
+    since the two genes read 13476 at different codon offsets and each pays
+    the full three nucleotides), and #144 measured the cost downstream at 12,240 S PCPs and 5,523 N
     PCPs recoverable on the v10 tree. `pcps/{gene}/masked_nt_sites.csv` emits it
     (#153). Five things about the shape are load-bearing.
 

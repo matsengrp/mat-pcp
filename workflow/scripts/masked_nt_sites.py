@@ -206,10 +206,19 @@ log(
 # rows, so a site absent from the grid can contribute no codon there).
 off_grid = sorted(set(site_reasons) - grid_sites)
 if off_grid:
+    # min/max only when the grid is non-empty. A wholly empty count table is one
+    # of the upstream failures this guard exists to name, and computing a range
+    # over it would replace the diagnostic with a bare "min() arg is an empty
+    # sequence" traceback pointing at this f-string.
+    span = (
+        f"the grid spans {min(grid_sites)}-{max(grid_sites)}"
+        if grid_sites
+        else "the grid is empty"
+    )
     raise ValueError(
         f"{len(off_grid)} globally masked sites of {gene} are absent from "
-        f"counts_all.csv's nt_site grid ({off_grid[:10]}...): the grid spans "
-        f"{min(grid_sites)}-{max(grid_sites)}. The count table and this gene's "
+        f"counts_all.csv's nt_site grid ({off_grid[:10]}...): {span}. "
+        f"The count table and this gene's "
         f"CDS blocks {cds_blocks} disagree about which coordinates exist, so "
         f"neither the reconciliation below nor the codon cross-check means "
         f"anything."
@@ -291,7 +300,8 @@ if not rows:
 # mechanical step later rather than a re-derivation. Not a tautology: the two
 # sides reach codons by different routes (see the module docstring), and for a
 # GTF-carried gene the other side never touches this gene's CDS blocks at all.
-codon_text = open(codon_mask_path).read().split()
+with open(codon_mask_path) as f:
+    codon_text = f.read().split()
 codon_file_sites = {int(value) for value in codon_text}
 codon_widened = {nt_index // 3 + 1 for _, nt_index, _ in rows}
 if codon_widened != codon_file_sites:

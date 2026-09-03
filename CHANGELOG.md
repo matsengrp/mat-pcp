@@ -40,7 +40,12 @@ the complete nucleotide mask with no codon widening anywhere. Columns:
 same mask widened to codons, so one suspect nucleotide takes its two innocent
 neighbours with it: 121 masked nucleotide sites become 345 masked nucleotides
 across the six v12 production genes, a **2.85x** over-mask (ORF1a 53 -> 156,
-ORF1b 39 -> 105, S 18 -> 51, N 8 -> 24, M 2 -> 6, E 1 -> 3). #144 measured the
+ORF1b 39 -> 105, S 18 -> 51, N 8 -> 24, M 2 -> 6, E 1 -> 3). Those totals are
+sums over genes: ORF1a and ORF1b overlap by 39 nt and share one masked site
+(13476), so the six files hold 121 (gene, site) pairs over **120** distinct
+sites -- and the per-gene sum is the right accounting for the over-mask, since
+the two genes read 13476 at different codon offsets and each pays the full
+three nucleotides. #144 measured the
 downstream effect: restricting the DASM-ready drop rule to masked *nucleotides*
 recovers 12,240 S PCPs and 5,523 N PCPs on the v10 tree.
 

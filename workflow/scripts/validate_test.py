@@ -2129,8 +2129,13 @@ def validate_masked_nt_sites(output_dir):
       right for a *different* gene's CDS would pass every check inside the rule
       and be unusable.
     * The two mask files share one coordinate space. Their ``nt_index`` columns
-      have to mean the same thing, since a training run applies both; the sites
-      themselves are *not* asserted disjoint (see ``validate_censor_table``).
+      have to mean the same thing, since a training run applies both, so every
+      ``nt_site`` the two files share must get the same ``nt_index`` set from
+      each -- the bound check alone would pass two files built from different
+      CDS blocks for one gene. The sites themselves are *not* asserted disjoint
+      (see ``validate_censor_table``). Vacuous on the test data, where the
+      censor table is empty for every gene, and reported as such rather than as
+      a clean intersection.
 
     Deliberately does **not** re-derive which sites should be masked. That would
     be a second implementation of ``masking.global_masked_site_reasons``
@@ -2265,26 +2270,57 @@ def validate_masked_nt_sites(output_dir):
                 f"{table['nt_index'].min()}, max {table['nt_index'].max()}"
             )
 
-        # One coordinate space across the two mask files.
+        # One coordinate space across the two mask files. Two checks, because
+        # the bound alone is a weak proxy: it would pass two files whose
+        # nt_index columns were computed from *different* CDS blocks for the
+        # same gene, which is the realistic staleness (rebuilding one rule
+        # after a `pcp_gene_cds_blocks` change and not the other). So for every
+        # nt_site the two files share, their nt_index sets must be equal --
+        # both invert the same blocks, and the censor table repeats a site per
+        # clade with the same indices.
         censor_path = os.path.join(pcps_root, gene, "censored_mutations.csv")
-        shared_sites = 0
+        censor_note = ""
         if os.path.isfile(censor_path):
             censored = pd.read_csv(censor_path, keep_default_na=False)
-            if len(censored) and slice_length is not None:
-                if censored["nt_index"].max() >= slice_length:
+            if not len(censored):
+                # Legitimate and the CI case: the test clades carry no UShER
+                # yaml block, so the censor table is empty for every gene and
+                # the agreement below compares nothing. Said out loud rather
+                # than reported as "0 shared", which reads like a checked
+                # disagreement-free intersection.
+                censor_note = "/censor empty"
+            else:
+                if slice_length is not None and (
+                    censored["nt_index"].max() >= slice_length
+                ):
                     differences.append(
                         f"{gene}'s censor table has nt_index beyond its founder "
                         f"slice length {slice_length}; the two mask files must "
                         f"be in one coordinate space"
                     )
-            if len(censored):
-                shared_sites = len(
-                    set(censored["nt_site"]) & set(table["nt_site"])
+                shared = sorted(set(censored["nt_site"]) & set(table["nt_site"]))
+                censor_note = f"/{len(shared)} shared"
+                here = table.groupby("nt_site")["nt_index"].apply(
+                    lambda s: frozenset(int(i) for i in s)
                 )
+                there = censored.groupby("nt_site")["nt_index"].apply(
+                    lambda s: frozenset(int(i) for i in s)
+                )
+                disagree = [
+                    (site, sorted(here[site]), sorted(there[site]))
+                    for site in shared
+                    if here[site] != there[site]
+                ]
+                if disagree:
+                    differences.append(
+                        f"{gene}: {len(disagree)} nt_site(s) get different "
+                        f"nt_index values in masked_nt_sites.csv and "
+                        f"censored_mutations.csv, so the two mask files are "
+                        f"not in one coordinate space: {disagree[:5]}"
+                    )
 
         per_gene.append(
-            f"{gene} {len(table)}r/{table['nt_site'].nunique()}s"
-            + (f"/{shared_sites} shared" if shared_sites else "")
+            f"{gene} {len(table)}r/{table['nt_site'].nunique()}s" + censor_note
         )
 
     # Reported as masked *positions* against the codon file's 3x span, because

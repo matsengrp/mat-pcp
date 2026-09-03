@@ -129,6 +129,8 @@ Sorted by `(nt_index, reason)`, which is a total order because a reason cannot r
 | E | 1 | 1 | 1 | 3 |
 | **total** | **121** | **139** | **115** | **345** |
 
+**Those totals are sums over genes, not distinct-site counts.** ORF1a (266–13480) and ORF1b (13442–21552) overlap by 39 nucleotides, and one masked site falls in the overlap — 13476, from the ProblematicSites VCF — so the six files carry 121 (gene, site) pairs over **120** distinct nucleotide sites. The per-gene sum is the right accounting for the over-mask: the two genes read 13476 at different codon offsets (1 in ORF1a, 2 in ORF1b), so widening to codons genuinely costs three nucleotides in each. A consumer unioning the six files gets 120.
+
 **The codon file is not retired, and the two are cross-checked.** `{gene}_codon_sites_to_mask.txt` still drives the DASM-ready PCP drop filter and the dashboards, and stays until a consumer reads this file and is validated. The producing rule reads it as an *input* and raises unless widening these nucleotide indices to codons reproduces it exactly — the anti-drift check that makes retiring it later mechanical. The two sides reach codons by different routes (the codon file from `counts_all.csv`'s `codon_site` column for a GTF-carried gene, this file by inverting CDS blocks for every gene), so the check is not a tautology.
 
 **The `site_include_range` reason is in the schema and in no shipped output.** Every config bounds the genome at 266–29674 and no PCP gene has a nucleotide outside that, so only two of the three values appear in practice. The column is worth having rather than assuming, and the third value is exercised on a fixture.

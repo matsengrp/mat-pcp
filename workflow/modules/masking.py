@@ -64,8 +64,11 @@ def load_usher_masks(path):
 
 
 # The three clade-independent reasons of :func:`compute_exclusions`' five, in
-# the order that function applies them. Named so a consumer can validate a
-# ``reason`` cell against a closed vocabulary instead of a string literal.
+# the order this module's docstring lists them. Deliberately *not* that
+# function's evaluation order (``out_of_range | in_config | masked_in_usher``),
+# which differs and has no meaning here: the tuple is consumed as a closed
+# vocabulary, so only its membership is load-bearing. Named so a consumer can
+# validate a ``reason`` cell against it instead of a string literal.
 GLOBAL_MASK_REASONS = ("sites_to_exclude", "vcf_masked_sites", "site_include_range")
 
 

@@ -2885,6 +2885,8 @@ rule masked_nt_sites:
         # the measurement, per pattern 16's rule that the number record what the
         # rule costs.
         mem_mb=1000
+    benchmark:
+        os.path.join(OUTDIR, "benchmarks/masked_nt_sites_{gene}.tsv")
     log:
         os.path.join(OUTDIR, "log/masked_nt_sites_{gene}.log")
     conda:
