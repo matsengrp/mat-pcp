@@ -60,6 +60,16 @@ writer that quietly omitted ``mtime=0`` would break reproducibility for that one
 file only, which no output-level check would attribute correctly.
 """
 
+# The policy itself. Named for what it *is* rather than for its first caller,
+# because it is not PCP-specific: ``filter_metadata`` writes
+# ``mat/filtered_metadata.tsv.gz`` and needs exactly this, and shipped v12
+# without it (that file carries ``mtime=1787704712`` on the released public
+# tree, so no re-run reproduces its md5).
+REPRODUCIBLE_GZIP = {"method": "gzip", "mtime": 0}
+
 # Passed as ``to_csv(..., compression=PCP_CSV_COMPRESSION)`` by every rule that
-# writes one of the four PCP families.
-PCP_CSV_COMPRESSION = {"method": "gzip", "mtime": 0}
+# writes one of the four PCP families. Kept as an alias rather than renamed at
+# those call sites on purpose: editing a PCP script's body is a ``code`` rerun
+# trigger, which would restate the 470 GiB of PCPs per tree to produce
+# byte-identical output.
+PCP_CSV_COMPRESSION = REPRODUCIBLE_GZIP
