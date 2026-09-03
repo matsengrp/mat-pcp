@@ -269,6 +269,23 @@ jobs:
       run: |
         pixi run python tests/test_clade_subsamples.py
 
+    # The clade-independent nucleotide mask (#153). The CI pipeline run DOES
+    # build this file non-vacuously -- 23 rows for S, 104 for ORF1ab, 39 for
+    # ORF1b, 1 for E -- unlike the censor table above, which makes it easy to
+    # overrate what the run proves. Four things stay unreachable from any run:
+    # no VCF or config entry falls on ORF1b's shared nucleotide 13468, so the
+    # one-to-many index is synthetic; every config bounds the genome at
+    # 266-29674 with no PCP gene outside it, so the `site_include_range` reason
+    # is never emitted; every configured gene's mask is non-empty on every
+    # shipped tree, so the legitimately header-only case is unreachable; and all
+    # three guards pass on both production trees, which says nothing about
+    # whether they fire. Each guard is mutation-tested against a corrupted copy
+    # of the shipped script -- and the reason vocabulary against a corrupted
+    # `workflow/modules/masking.py`, where the definition lives.
+    - name: Verify the global nucleotide mask coordinates and guards
+      run: |
+        pixi run python tests/test_masked_nt_sites.py
+
     # The steps above name each test file so a failure points at a readable log.
     # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]
     # is empty, so a *new* tests/test_*.py runs zero times and CI stays green --

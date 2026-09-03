@@ -555,6 +555,14 @@ rule all:
             tree=TREE_LABELS,
             gene=PCP_GENES,
         ),
+        # Per-gene clade-independent nucleotide masks (tree x gene), the other
+        # half of the same coordinate contract (#153). Also unread inside this
+        # repo, so it needs the same explicit wiring.
+        expand(
+            os.path.join(OUTDIR, "pcps/{gene}/masked_nt_sites.csv"),
+            tree=TREE_LABELS,
+            gene=PCP_GENES,
+        ),
         # Per-gene DASM-ready PCPs (tree x gene): aggregate file + per-clade sentinel.
         expand(
             os.path.join(OUTDIR, "pcps/{gene}/all_pcps_dasm_ready.csv.gz"),
@@ -2825,6 +2833,64 @@ def _gene_founder_slice_map(wildcards):
         )
         for clade in clades_w_adequate_counts(wildcards)
     }
+
+
+rule masked_nt_sites:
+    """Emit one gene's clade-independent nucleotide mask for DASM training.
+
+    The companion to ``censor_table``: that rule carries the two clade-specific
+    reasons of ``masking.compute_exclusions``' five, this one the three
+    clade-independent ones (ProblematicSites VCF, config ``sites_to_exclude``,
+    outside ``site_include_range``) at **nucleotide** granularity. Together they
+    give a consumer the complete nucleotide mask with no codon widening
+    anywhere (#153).
+
+    A separate rule rather than a second output on ``get_problematic_sites``,
+    which already computes this set and throws it away: that rule's
+    ``{gene}_codon_sites_to_mask.txt`` has seven consumers, one of them
+    ``curate_pcps_for_dasm``, so re-running it to add an output would restate
+    the 470 GiB of PCPs for a file nothing yet reads.
+
+    Reads the codon mask as an *input* so the two granularities are cross-checked
+    against each other (guard 2 in the script). Additive output -- no existing
+    schema is read and no current consumer reads it -- so the CLAUDE.md carve-out
+    applies and it ships no-bump.
+
+    Cheap: a pure function of the config, the VCF, the edited GTF, the reference
+    and one pass over ``counts_all.csv``'s two reconciliation columns.
+    """
+    input:
+        # Full tree, not the arm's, for the same reason get_problematic_sites
+        # reads the full tree: the global mask is invariant to sampling depth by
+        # construction (it never reads a count column, only `exclude`).
+        counts=os.path.join(OUTDIR, "counts_all.csv"),
+        codon_mask=rules.get_problematic_sites.output.sites_to_mask,
+        site_mask=rules.get_site_mask.output.csv,
+        gtf=rules.edit_ref_gtf.output.gtf,
+        ref_fasta=rules.get_ref_fasta.output.ref_fasta
+    output:
+        table=os.path.join(OUTDIR, "pcps/{gene}/masked_nt_sites.csv")
+    params:
+        sites_to_exclude=config.get("sites_to_exclude", []),
+        site_include_range=config.get(
+            "site_include_range", {"start": 266, "end": 29674}
+        ),
+        pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
+    resources:
+        # Measured on the v12 gisaid tree, whose counts_all.csv is the largest
+        # this pipeline has produced (564 MB, 5.0 M rows): 237 MB peak RSS for
+        # the first gene and 449 MB cumulative across all six run in one
+        # process, so no single job exceeds ~320 MB. The cost is the two-column
+        # parse and is flat in the gene. Declared with headroom rather than at
+        # the measurement, per pattern 16's rule that the number record what the
+        # rule costs.
+        mem_mb=1000
+    log:
+        os.path.join(OUTDIR, "log/masked_nt_sites_{gene}.log")
+    conda:
+        "envs/default.yml"
+    script:
+        "scripts/masked_nt_sites.py"
 
 
 rule censor_table:

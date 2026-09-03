@@ -63,6 +63,53 @@ def load_usher_masks(path):
     return clade_sites, clade_mutations
 
 
+# The three clade-independent reasons of :func:`compute_exclusions`' five, in
+# the order that function applies them. Named so a consumer can validate a
+# ``reason`` cell against a closed vocabulary instead of a string literal.
+GLOBAL_MASK_REASONS = ("sites_to_exclude", "vcf_masked_sites", "site_include_range")
+
+
+def global_masked_site_reasons(
+    sites,
+    *,
+    sites_to_exclude,
+    vcf_masked_sites,
+    site_include_range,
+):
+    """``{site: [reason, ...]}`` for each of ``sites`` that is globally masked.
+
+    The reason-bearing primitive behind :func:`global_masked_sites`, and the
+    single definition of the three clade-independent reasons. ``sites`` is any
+    iterable of 1-based coordinates; a site with no reason is absent from the
+    result rather than present with an empty list, so the mapping doubles as the
+    masked set (``set(global_masked_site_reasons(...))``).
+
+    A site can carry **more than one** reason -- 13 of ORF1a's 53 globally
+    masked sites and 5 of S's 18 are in both the ProblematicSites VCF and the
+    config ``sites_to_exclude`` on the v12 production trees -- so callers that
+    emit one row per reason must not assume one row per site (#153). Reasons
+    come back in ``GLOBAL_MASK_REASONS`` order.
+    """
+    start = site_include_range.get("start", 266)
+    end = site_include_range.get("end", 29674)
+    config_sites = {int(s) for s in (sites_to_exclude or [])}
+    vcf_sites = {int(s) for s in (vcf_masked_sites or [])}
+
+    reasons = {}
+    for site in sites:
+        site = int(site)
+        found = []
+        if site in config_sites:
+            found.append("sites_to_exclude")
+        if site in vcf_sites:
+            found.append("vcf_masked_sites")
+        if site < start or site > end:
+            found.append("site_include_range")
+        if found:
+            reasons[site] = found
+    return reasons
+
+
 def global_masked_sites(
     *,
     sites_to_exclude,
@@ -84,12 +131,23 @@ def global_masked_sites(
     ``in_vcf`` separable to build ``masked_in_usher``); this helper is the shared
     definition of the global set for callers that need it as a plain site list
     (currently the windowed expected-count path). Sites are 1-based.
+
+    Delegates to :func:`global_masked_site_reasons` so the membership tests are
+    written once. The two ``update`` calls afterwards are not redundant: a config
+    or VCF coordinate **beyond** ``genome_len`` is outside the enumerated range
+    and would otherwise be dropped, which would silently narrow this function's
+    long-standing behaviour.
     """
-    start = site_include_range.get("start", 266)
-    end = site_include_range.get("end", 29674)
-    masked = {int(s) for s in (sites_to_exclude or [])}
+    masked = set(
+        global_masked_site_reasons(
+            range(1, genome_len + 1),
+            sites_to_exclude=sites_to_exclude,
+            vcf_masked_sites=vcf_masked_sites,
+            site_include_range=site_include_range,
+        )
+    )
+    masked.update(int(s) for s in (sites_to_exclude or []))
     masked.update(int(s) for s in (vcf_masked_sites or []))
-    masked.update(s for s in range(1, genome_len + 1) if s < start or s > end)
     return masked
 
 
