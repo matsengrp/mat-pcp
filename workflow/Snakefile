@@ -463,8 +463,16 @@ def arm_targets():
     """Every subsampling-arm target across all trees, for ``rule all`` (#151).
 
     Empty for every config that sets no ``clade_subsamples``, which is all of
-    them today except the test config: the production arms are launched by
-    naming their paths, because a full-size arm costs ~8 CPU-hours.
+    them today except the test config -- and that emptiness, not a convention
+    about how arms get requested, is what keeps them out of a production run.
+    Naming an arm's path is *one* way to build it; a bare ``rule all`` under a
+    config that sets ``clade_subsamples`` is the other, because this function
+    is in ``rule all``'s input list. So the config key is the switch, and no
+    production config may set it: measured on the two 2026-08-06 trees,
+    layering ``config/overlay-subsample-cap.yaml`` on the production config
+    takes a ``--rerun-triggers mtime`` dry run from **1,123 jobs to 4,067**
+    (+528 ``extract_pcps_by_clade``, +1,248 ``curate_pcps_for_dasm``, and a
+    full re-aggregation per arm), at ~8 CPU-hours per full-size arm.
     """
     if not SUBSAMPLE_ARMS:
         return []
@@ -582,8 +590,11 @@ rule all:
         # every config that does not set it.
         cutoff_targets(),
         # Clade-subsampling arms (#151). Empty unless the config sets
-        # ``clade_subsamples``; production arms are launched by naming their
-        # paths, since a full-size arm costs ~8 CPU-hours.
+        # ``clade_subsamples`` -- and because they are requested *here*, that
+        # config key is the switch: no production config may set it, or every
+        # bare run builds the arms (measured 1,123 -> 4,067 jobs on the two
+        # 2026-08-06 trees, at ~8 CPU-hours per full-size arm). Naming an arm's
+        # path is one way to build one, not the only way.
         arm_targets()
 
 

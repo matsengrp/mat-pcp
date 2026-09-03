@@ -6,9 +6,17 @@
 #                       config/overlay-subsample-cap.yaml ...
 #
 # Snakemake merges multiple --configfile values in order, so this adds the arms
-# without touching the config that built the released tree. Every shipped
-# production config is required to leave `clade_subsamples` empty, because a
-# full-size arm costs ~8 CPU-hours and arms are launched by naming their paths.
+# without touching the config that built the released tree.
+#
+# WHY THIS IS NOT JUST FOLDED INTO config.yaml. `rule all` includes
+# `arm_targets()` (Snakefile), which returns every arm's PCP, fitness and
+# correlation targets as soon as `clade_subsamples` is non-empty -- so the
+# config key *is* the switch, and setting it in a production config makes every
+# bare run build the arms. Measured on the two 2026-08-06 trees, adding this
+# overlay takes a `--rerun-triggers mtime` dry run from **1,123 jobs to 4,067**,
+# at ~8 CPU-hours per full-size arm. Naming an arm's path is one way to build
+# one; a bare `rule all` is the other. Every shipped production config must
+# therefore leave `clade_subsamples` empty.
 #
 # An arm thins every clade with more than `max_samples` samples down to exactly
 # that many and leaves smaller clades untouched, so it intervenes on the

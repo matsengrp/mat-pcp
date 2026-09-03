@@ -1657,8 +1657,18 @@ The configuration (`config/config.yaml`) is organized into:
    `{max_samples, seed}` entries, each expanding to one **arm** per cap. An arm
    thins every clade above the cap down to it and leaves smaller clades
    untouched, so its membership is derived from the tree's clade sizes rather
-   than named. Empty in every production config; arms are launched by naming
-   their paths. `sampling_fractions` / `unit` belonged to the removed fraction
+   than named. **Empty in every production config, and that emptiness is the
+   only thing keeping arms out of a production run**: `rule all` includes
+   `arm_targets()`, so a non-empty `clade_subsamples` puts every arm's PCP,
+   fitness and correlation targets into a bare run -- measured, 1,123 jobs ->
+   **4,067** on the two 2026-08-06 trees, at ~8 CPU-hours per full-size arm.
+   Naming an arm's path is one way to build one, not the only way, which is why
+   the ladder ships as `config/overlay-subsample-cap.yaml` and is layered with a
+   second `--configfile` rather than folded in. An earlier wording here and in
+   `arm_targets()`' own docstring said arms "are launched by naming their
+   paths", which reads as though `rule all` did not request them and makes
+   folding the overlay in look free.
+   `sampling_fractions` / `unit` belonged to the removed fraction
    arms and are rejected by name. See pattern 15.
 7. **Clade Founders**: `clade_founders` (Neher and Roemer JSON sources),
    `roemer_nextstrain_to_pango` (Nextstrain clade → Pango lineage, for clades not

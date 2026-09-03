@@ -579,6 +579,22 @@ nobody ran -- verified passing, as is
 which globs `config/*.yaml` and reports all 4 remaining configs carrying the
 reference light-switch boundaries.
 
+**Corrected while answering "why isn't the overlay just part of `config.yaml`?":
+`clade_subsamples` is a switch, not a preference.** `rule all` includes
+`arm_targets()`, so a non-empty `clade_subsamples` puts every arm's PCP,
+fitness and correlation targets into a bare run. Measured on the two
+2026-08-06 trees, layering `config/overlay-subsample-cap.yaml` onto the
+production config takes a `--rerun-triggers mtime` dry run from **1,123 jobs
+to 4,067** -- +528 `extract_pcps_by_clade`, +1,248 `curate_pcps_for_dasm`,
++88 each of `mat_clade_subset` / `translate_mat` / `mat_sample_paths` /
+`subsample_clade_samples`, and a full re-aggregation per arm -- at ~8
+CPU-hours per full-size arm. Five places (`arm_targets()`' own docstring, the
+`rule all` comment beside the call, the overlay header, `README.md`'s config
+table, CLAUDE.md pattern 15, and the arms notebook's empty-state message) said
+the arms "are launched by naming their paths", which reads as though `rule all`
+did not request them and makes folding the overlay in look free. The #151 entry
+below still carries the original wording; this is the correction.
+
 #### Changed: the DASM-ready drop filter is nucleotide-granular; the codon mask is retired
 
 **This is the one post-tag change that moves data.** See the note under "Landed
