@@ -1498,6 +1498,29 @@ mat-pcp/
     the pairing holds structurally rather than by assertion. `masked_nt_sites.py`
     reads only `("nt_site", "exclude")` and never touches those cells.
 
+    *A `python -c "..."` step in CI is a double-quoted **shell** string, and a
+    plain double quote inside it -- even inside a Python comment -- closes it
+    early.* Python then gets a truncated program; for a comment-heavy block that
+    means a **comment-only program**, which prints nothing and exits 0, so the
+    step passes while checking nothing. `Verify ORF1b PCPs came from the config
+    coordinate override` was in exactly that state from the day it was written
+    until #158 found it: its own NB comment warned about backticks and
+    `$(...)` -- both of which had bitten it before -- while the line just above
+    that comment carried a double-quoted phrase which silently disabled the
+    whole check. Nothing could see it, because GitHub echoes a step's source in
+    colour before running it, so a log grep for `ORF1b masks ...` matches the
+    **echo** and reads as output. This is pattern 10's vacuity in the CI layer,
+    so it gets pattern 10's remedy: `Verify no python -c block is broken by an
+    unescaped double quote` sweeps every block, runs *before* the 20-minute
+    pipeline step, and is mutation-tested by re-introducing the quote. Use
+    single quotes for quoted prose in these blocks. Note what was dead is the
+    ORF1b **mask** cross-check; `validate_orf1b_founder_slice` covers the
+    founder slice and was unaffected. Restoring it also had to keep the two
+    sides independent: ORF1b's codons come from `nt_index` in its own
+    `masked_nt_sites.csv`, ORF1ab's are rebuilt from `counts_all.csv`'s
+    GTF-derived `codon_site` column, since reading both from
+    `masked_nt_sites.csv` would compare one derivation with itself.
+
     *Only the four curate rules are downstream of the mask, so the rebuild is
     small -- but only under `mtime` triggers.* A production dry run with
     `--rerun-triggers mtime` schedules **1,123 jobs across both trees, every one
