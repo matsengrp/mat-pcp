@@ -189,7 +189,8 @@ reproduces the full tree byte-for-byte only when the filter removes nothing;
 byte-inequality accordingly rather than assuming either. At the shipped bound the
 filter removes nothing on the test data, so CI outputs do not move.
 
-**Known leakage, stated rather than hidden.** `{gene}_codon_sites_to_mask.txt` and
+**Known leakage, stated rather than hidden.** `pcps/{gene}/masked_nt_sites.csv`
+(`{gene}_codon_sites_to_mask.txt` until #158, below) and
 `pcps/{gene}/censored_mutations.csv` are *not* recomputed per cutoff; they come
 from the full tree's count table and from `data/usher_masked_sites.yaml`. A strict
 holdout would rebuild the mask from pre-cutoff data only, which means re-running
@@ -203,13 +204,23 @@ defining mutations, not of which of its samples have been collected yet.
 
 #### Landed after the initial v12 tagging (the tag was moved)
 
-The four items below were merged onto `main` after `v12` was first tagged at
-`d0fa417`. None of them is a schema break -- two are additive files, one is a
+The items below were merged onto `main` after `v12` was first tagged at
+`d0fa417`, and the `v12` tag was moved forward to include them rather than
+bumping to v13: v12 has no downstream consumers yet -- no model has been trained
+on its PCPs and they are not registered in `data-central` -- so a bump would
+create a version whose only distinction is a v12 nobody used.
+
+**The first four changed no data.** Two are additive files, one is a
 payload-neutral gzip-header fix, and one changes only `threads`/`mem_mb` and log
-lines -- so rather than bump to v13 the `v12` tag was moved forward to include
-them. A tree built from `d0fa417` and one built from the moved tag carry the same
-data; the later one additionally carries `pcps/{gene}/masked_nt_sites.csv` and a
-reproducible `mat/filtered_metadata.tsv.gz`.
+lines. **The fifth does.** #158 changes which PCPs survive the DASM-ready drop
+filter, so a tree built from `d0fa417` and one built from the final moved tag do
+*not* carry the same `*_pcps_dasm_ready.csv.gz` -- any v12 output copied or
+hashed before that re-run is stale. Every *other* v12 output is unaffected: only
+the four `curate_pcps_for_dasm*` rules are downstream of the mask, so the
+rebuild is those rules and their collectors (1,123 jobs across both trees) and
+nothing else -- not node dating, not the count table, not the GLM, not fitness,
+and not PCP generation itself, since `all_pcps.csv.gz` is *upstream* of the
+filter.
 
 #### Fixed: `mat/filtered_metadata.tsv.gz` is now byte-reproducible
 
@@ -283,12 +294,13 @@ its `{gene}_codon_sites_to_mask.txt` has seven consumers, one of them
 `curate_pcps_for_dasm`, and re-running it to add a file would restate the
 470 GiB of PCPs for a file nothing yet reads.
 
-**Nothing is retired.** `{gene}_codon_sites_to_mask.txt` still drives the
-DASM-ready drop filter and the dashboards, and stays until a consumer reads the
-new file and is validated. Changing that drop rule to nucleotide granularity is
-also deliberately out of scope: `curate_pcps_for_dasm.py` assigns the train/val
-split *after* filtering (`rng.random(len(pcp_df))`), so any change to the row
-count reshuffles every row's assignment.
+**Nothing was retired in #153, and both deferrals were then taken up by #158
+below.** As shipped in #153, `{gene}_codon_sites_to_mask.txt` still drove the
+DASM-ready drop filter, and changing that drop rule to nucleotide granularity
+was out of scope because `curate_pcps_for_dasm.py` assigns the train/val split
+*after* filtering (`rng.random(len(pcp_df))`), so any change to the row count
+reshuffles every row's assignment. #158 accepted that reshuffle -- no model had
+been trained on the v12 PCPs -- retired the codon file, and rebuilt both trees.
 
 **Three guards, all of which pass today.** The new rule reads the codon file as
 an *input* and raises unless widening these nucleotide indices reproduces it
@@ -326,12 +338,12 @@ both production trees, which says nothing about whether they fire.
 each guard against deliberately corrupted copies of the shipped script -- and,
 for the reason vocabulary, of `workflow/modules/masking.py`, where the
 definition actually lives.
-`validate_test.py::validate_masked_nt_sites` is the end-to-end counterpart: it
-re-checks the codon pair *as it sits on disk* (the rule checks the inputs it was
-handed, so refreshing the codon file alone is the failure a run can see), and
-checks `nt_index` against the length of the gene's founder slices -- the
-coordinate system the PCP sequences are actually in, which no single rule
-compares against.
+`validate_test.py::validate_masked_nt_sites` is the end-to-end counterpart: as
+shipped in #153 it re-checked the codon pair *as it sits on disk* (the rule
+checks the inputs it was handed, so refreshing the codon file alone is the
+failure a run can see) -- #158 removed that half with the file -- and it checks
+`nt_index` against the length of the gene's founder slices, the coordinate
+system the PCP sequences are actually in, which no single rule compares against.
 
 `masking.global_masked_sites` now delegates to a new reason-bearing
 `global_masked_site_reasons`, so the three membership tests are written once.
@@ -519,6 +531,116 @@ min of it), so CI's `Run test pipeline` timeout moves 30 -> 45 minutes. The arms
 are not trimmed to fit: one is degenerate (the byte-identity check), one
 truncates, and one thins a clade below `min_clade_size` so it drops out of the
 grid, and no other arm covers any of the three.
+
+#### Changed: the DASM-ready drop filter is nucleotide-granular; the codon mask is retired
+
+**This is the one post-tag change that moves data.** See the note under "Landed
+after the initial v12 tagging" above.
+
+`curate_pcps_for_dasm.py`'s filter 6 now drops a PCP only when every
+nucleotide-level mutation sits at an `nt_index` listed in
+`pcps/{gene}/masked_nt_sites.csv`. Through v12 it dropped a PCP whose every
+mutation fell in a masked *codon*, while DASM's loss censors at nucleotide
+granularity from `censored_mutations.csv` (#144) and `masked_nt_sites.csv`
+(#153) -- so a PCP was discarded here as carrying no signal outside masked
+codons while the loss it would have fed *would* have seen signal, at an unmasked
+nucleotide inside one of those codons. One mask now serves both ([#158](https://github.com/matsengrp/mat-pcp/issues/158)).
+
+**Removed:** `rule get_problematic_sites`, `workflow/scripts/get_problematic_sites.py`
+and the `{gene}_codon_sites_to_mask.txt` outputs. A copy surviving in an output
+tree from an older run is a stale artifact -- no rule reads it or keeps it in
+step -- and `validate_test.py::validate_masked_nt_sites` reports its presence as
+a failure.
+
+**What the codon widening was costing.** 121 masked nucleotide sites occupied
+115 codons covering 345 nucleotides across the six v12 production genes, a
+**2.85x** over-mask. Per gene: S 18 -> 17 codons -> 51 nt, ORF1a 53 -> 52 ->
+156, ORF1b 39 -> 35 -> 105, M 2 -> 2 -> 6, N 8 -> 8 -> 24, E 1 -> 1 -> 3. The
+ratio is not a uniform 3x because masked sites share codons. (Measurement trap:
+none of those files ended in a newline, so a `wc -l` census undercounted each by
+one and reported E's one-codon mask as 0. `grep -c ''`.)
+
+**The new rule keeps a superset, weakly, and strictly wherever a codon is
+masked.** #153's guard 2 asserted that widening `masked_nt_sites.csv`'s indices
+reproduced the codon file exactly, so every masked nucleotide lies in a masked
+codon, so an unmasked codon holds no masked nucleotide -- hence any difference
+the old rule found is also a difference at an unmasked index. That guard passed
+with exact set equality for every configured gene on both v12 production trees
+and the test tree, which is the one-time evidence that this was a substitution
+rather than a change of mask; it is deleted along with the file it compared
+against, and `tests/test_masked_nt_sites.py` is now the sole coverage of the
+CDS-block inversion.
+
+**Coordinate change, and the trap in it.** `{gene}_codon_sites_to_mask.txt` held
+1-based codon positions and its reader subtracted one; `nt_index` is 0-based
+into the gene's PCP sequence and is read as-is. The `mask_zero_indexed` param
+was removed rather than set `True`, so no call site can reintroduce the
+subtraction. The file is long-form -- one row per `(nt_index, reason)`, 139 rows
+over 121 pairs -- so the filter and `num_masked_sites` take `set(nt_index)`.
+
+**`*_dasm_filter_stats.json` changes meaning**: `num_masked_sites` now counts
+distinct masked `nt_index` values (121 / 18 on the production genes) rather than
+codon sites.
+
+**No pipeline run can see this change.** Applying both predicates to the v12
+test tree's PCPs gives identical row sets for every gene -- S 8/8, ORF1ab 23/23,
+ORF1b 13/13, E 1/1 -- because no test-data PCP mutates an unmasked nucleotide
+inside a masked codon. So CI is green whether the filter is nucleotide-granular,
+codon-granular, or shifted by one; `data/test_data/expected_summary.json` needs
+no regeneration and no md5 moves. `validate_test.py::validate_nt_filter_superset`
+reports **VACUOUS** rather than success on such a tree, and the new
+`tests/test_dasm_ready_nt_filter.py` is the only non-vacuous coverage: it execs
+the real script against a stub `snakemake`, checks the off-by-one in both
+directions, covers the ORF1b frameshift junction (unreachable from any run), and
+mutation-tests the reader by corrupting `workflow/modules/masking.py`, where
+`masking.read_masked_nt_indices` now lives.
+
+**`DASM_READY_ALL_SENTINEL_MD5` is unchanged, and its claim is narrowed in
+writing** to filters 1-5 plus the train/val RNG. dasm2's own masking is still
+codon-granular, so the two implementations now deliberately disagree wherever a
+masked codon holds an unmasked mutated nucleotide. The value does not move
+because the sentinel never exercised filter 6 in either implementation:
+`summarize_dasm_ready_pcps` runs only on `pcps/S/`, where the codon filter
+dropped 0 of 8 valid PCPs.
+
+`validate_test.py::validate_spike_mask_all_clades` becomes
+`validate_global_mask_all_clades`, fanned over every PCP gene rather than
+hardcoded to S, and reconciles `masked_nt_sites.csv` against `counts_all.csv`'s
+`site_all_excluded` in genomic coordinates. One direction -- every emitted site
+is all-clades-excluded -- holds for any gene; the converse needs the count
+table's GTF-derived `gene` column, which a `pcp_gene_cds_blocks`-only gene
+(ORF1b) never appears in, so genes where it could not run are named in the
+summary rather than passing on an empty expectation. That silent-empty shape is
+exactly how #133 happened.
+
+**Rebuild scope, measured rather than assumed.** A dry run against the
+production config with `--rerun-triggers mtime` schedules **1,123 jobs across
+both trees, all of them `curate_pcps_for_dasm*` or their collectors**
+(`curate_pcps_for_dasm` 672, `_upto` 402, `curate_all_pcps_for_dasm` 12, its
+`_upto` 12, the two collectors 12 each). The two shared mask files need no
+rebuild and were verified not to want one: all six `masked_nt_sites.csv` are
+**byte-identical** under the new code (the edited script re-run against the
+released public tree's own inputs, md5-compared per gene), and `censor_table.py`
+changed only a log line, so `censored_mutations.csv` is unchanged by
+construction.
+
+The `mtime` trigger is **required**, for a reason predating this change: `main`
+already carries a `filter_metadata` code edit from #156, which under snakemake's
+default `code` trigger cascades from the DAG root. A default-trigger dry run
+reports 199 jobs, but that is an *underestimate* rather than a smaller cascade --
+`get_clades` re-runs, so the per-clade fan-out stays hidden behind an unresolved
+checkpoint. Both prior post-tag changes were established payload-neutral
+(#156's gzip fix differs in exactly the 4 MTIME bytes; #154's `-T {threads}`
+insertions were byte-compared at `-T 1`, `-T 32` and the default), so a
+`mtime`-scoped rebuild and a from-scratch one produce the same data.
+
+The retired `{gene}_codon_sites_to_mask.txt` files must be **deleted by hand**
+from any pre-existing output tree: no rule owns them once #158 lands, so nothing
+will clean them up, and `validate_test.py::validate_masked_nt_sites` reports a
+survivor as a failure.
+
+All four `curate_pcps_for_dasm*` rules gained a `benchmark:`; none had one, so
+the cost of the rules this change touches was unrecorded.
 
 ### v11
 

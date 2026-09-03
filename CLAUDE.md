@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Stage | Description | Key Rules |
 |-------|-------------|-----------|
 | 1-2 | Input Processing & Reference | `filter_metadata`, `filter_mat_tree`, `export_newick`, `chronumental`, `chronumental_qc` (tips **and** internal nodes, #139), `chronumental_rtt_plot` (#146), `window_subtree_counts`, `get_ref_fasta`, `ref_coding_sites` |
-| 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade`, `censor_table` (per-clade DASM censor table, #144), `masked_nt_sites` (clade-independent nucleotide mask, #153) |
+| 3 | Clade Processing & PCPs | `get_clades` (checkpoint), `mat_clade_subset`, `extract_pcps_by_clade`, `censor_table` (per-clade DASM censor table, #144), `masked_nt_sites` (clade-independent nucleotide mask, #153; the DASM-ready drop filter's mask since #158), `curate_pcps_for_dasm` |
 | 3b | Date-Cutoff PCPs (#149) | `get_clades_by_cutoff` (checkpoint), `cutoff_pcp_summary`, `samples_upto_cutoff`, `mat_clade_subset_upto`, `extract_pcps_by_clade_upto`, `aggregate_clade_pcps_upto`, `aggregate_filtered_branches_upto`, `curate_pcps_for_dasm_upto`, `curate_all_pcps_for_dasm_upto`, `dasm_ready_pcps_all_clades_upto` |
 | 3c | Subsampling Arms (#151) | `subsample_clade_samples`, `subsample_correlations`; everything else an arm rebuilds is an existing rule reached through the optional `{arm_dir}` prefix |
 | 4 | Mutation Counting | `count_mutations_clade`, `aggregate_mutation_counts` |
@@ -115,7 +115,7 @@ by.
 ### Testing
 ```bash
 # Unit tests over frozen/synthetic fixtures (no pipeline run needed; CI runs
-# all fifteen, plus a `marimo check` on the analysis notebook, before the pipeline steps)
+# all sixteen, plus a `marimo check` on the analysis notebook, before the pipeline steps)
 pixi run python tests/test_glm_reference_equivalence.py
 pixi run python tests/test_clade_founder_guards.py
 pixi run python tests/test_founder_codon_background.py
@@ -131,6 +131,7 @@ pixi run python tests/test_censor_table.py
 pixi run python tests/test_pcp_date_cutoffs.py
 pixi run python tests/test_clade_subsamples.py
 pixi run python tests/test_masked_nt_sites.py
+pixi run python tests/test_dasm_ready_nt_filter.py
 
 # Half B of the bte test needs the Snakemake-built bte env, so it runs after a
 # pipeline run; --require-bte makes a missing env a failure rather than a skip.
@@ -154,11 +155,10 @@ pixi run python workflow/scripts/validate_test.py
 > whitespace diff. Nothing errors and the rendered text is identical, so it is only
 > visible in `git diff --stat`. Check with `file CLAUDE.md` after scripted edits.
 >
-> **The `.py` files are mixed too, so never assume.** 29 of the tracked Python
+> **The `.py` files are mixed too, so never assume.** 28 of the tracked Python
 > files are CRLF, including `workflow/scripts/count_mutations.py`,
-> `annotate_counts.py`, `expected_counts_by_clade.py`,
-> `get_problematic_sites.py` and `workflow/modules/{glm,rates,load,aamutfit,
-> probfit}.py`; the rest — including `pcp_from_tree.py`, `validate_test.py` and
+> `annotate_counts.py`, `expected_counts_by_clade.py` and
+> `workflow/modules/{glm,rates,load,aamutfit,probfit}.py`; the rest — including `pcp_from_tree.py`, `validate_test.py` and
 > everything under `tests/` — are LF. There is no rule that predicts which, so a
 > scripted edit must read each file's ending:
 > `raw = path.read_bytes(); crlf = b"\r\n" in raw` → edit the decoded,
@@ -406,16 +406,22 @@ mat-pcp/
     concealed the v8 gap. Every report now also prints the compared row counts on
     both sides, so "agreed" is distinguishable from "never compared".
 
-    *A PCP gene's codon mask has its own two coordinate systems.* A gene reaching
+    *A PCP gene's mask has its own two coordinate systems.* A gene reaching
     `pcp_genes` only through `pcp_gene_cds_blocks` never appears in
     `counts_all.csv`'s GTF-derived `gene` column, so `get_problematic_sites.py`
     matched zero rows and wrote an **empty** mask at exit 0 — ORF1b's DASM-ready
     PCPs kept every problematic codon site that every other gene had removed. Its
-    codons are now derived from `nt_site` via its own CDS blocks, and which
-    derivation applies is read from the *config* (does the gene have an override),
-    never from whether the count table happens to mention the gene: branching on
-    the data lets a gene defined in both places silently ignore its override and
-    bypass `resolve_cds_blocks`' add-only guard.
+    codons were then derived from `nt_site` via its own CDS blocks, and which
+    derivation applied was read from the *config* (does the gene have an
+    override), never from whether the count table happens to mention the gene:
+    branching on the data lets a gene defined in both places silently ignore its
+    override and bypass `resolve_cds_blocks`' add-only guard. #158 retired that
+    script; the same trap now lives in `masked_nt_sites.py`, which inverts CDS
+    blocks for every gene and so has one derivation rather than two — and in
+    `validate_test.py::validate_global_mask_all_clades`, which checks the
+    converse direction *only* for a gene the count table mentions and names the
+    genes it could not check, rather than reading an empty expectation as
+    agreement.
     Two further traps here. `gene` and `codon_site` are **positionally paired**
     `;`-joined cells (`"N;ORF9b"` with `"4;1"`), so they must be zipped and
     filtered, never flattened — flattening files ORF9b's codon 1 as a codon of N,
@@ -427,10 +433,7 @@ mat-pcp/
     `[[1, 3], [3, 5], [5, 7]]` is in frame at both and translates cleanly.
 
     Guarded by `tests/test_pcp_gene_coordinates.py` (unit; every failure mode
-    mutation-tested, and it **execs the real `get_problematic_sites.py`** against a
-    stub `snakemake` — an earlier version re-implemented the script's
-    nt_site→codon inversion and asserted against its own copy, so three separate
-    breaks of the shipped script left it green) and
+    mutation-tested) and
     `validate_test.py::validate_orf1b_founder_slice`, which
     checks every clade's ORF1b founder byte-equals `ORF1ab[13176:21288]` — two
     coordinate sets, one slicer, so a frame error moves one and not the other.
@@ -515,11 +518,14 @@ mat-pcp/
     representing the mask in the sequence — an `N` tokenizes its whole codon to
     `AA_AMBIG_IDX` and would throw away a state we have — so the correction
     belongs in the observation model, and mat-pcp's job is to emit coordinates.
-    `{gene}_codon_sites_to_mask.txt` cannot serve: it never reaches the loss
-    (only the PCP drop filter and the dashboards read it), it is codon-granular,
-    and `get_problematic_sites.py`'s `site_all_excluded` keeps by construction
+    `{gene}_codon_sites_to_mask.txt` could not serve: it never reached the loss
+    (only the PCP drop filter and the dashboards read it), it was codon-granular,
+    and `get_problematic_sites.py`'s `site_all_excluded` kept by construction
     only the reasons holding in *every* clade, so the entire clade-specific half
-    of the yaml is invisible to training. The two files carry disjoint *reasons*
+    of the yaml was invisible to training. #153 emitted the clade-independent
+    half at nucleotide granularity as `masked_nt_sites.csv` and #158 retired the
+    codon file, so that is now the counterparty. The two files carry disjoint
+    *reasons*
     (two of `compute_exclusions`' five here, three there) but **not** disjoint
     sites — a site can be both clade-masked in the yaml and in the
     ProblematicSites VCF, 32 such `(clade, nt_site)` pairs on the v11
@@ -879,7 +885,7 @@ mat-pcp/
     by editing **`modules/cutoffs.py`**, not the script text.
 
     *The masks are shared across cutoffs, which is a real leak, bounded and
-    stated.* `{gene}_codon_sites_to_mask.txt` and `censored_mutations.csv` come from
+    stated.* `masked_nt_sites.csv` and `censored_mutations.csv` come from
     the full tree, so a cutoff's DASM-ready files are filtered with a mask that saw
     post-cutoff data. Recomputing them per cutoff means re-running the whole
     counting and GLM path per cutoff. The leak is confined to which sites are
@@ -1011,7 +1017,7 @@ mat-pcp/
     `glm/curated_counts.csv` is the GLM's *training set* and is not. But the
     chain `count_mutations_clade → ... → annotate_counts → curate_counts →
     master_table → rates_table.csv` makes refitting the **default**, so
-    `curate_counts`, `curate_counts_era` and `get_problematic_sites` are pinned
+    `curate_counts`, `curate_counts_era` and `masked_nt_sites` are pinned
     to literal full-tree paths rather than `rules.annotate_counts.output` /
     `rules.build_count_table.output` — those references now carry `{arm_dir}`
     and would drag the whole GLM into every arm. A refit arm would still produce
@@ -1317,9 +1323,9 @@ mat-pcp/
 17. **The nucleotide-level mask was already computed and thrown away, and the
     file that replaces it cannot be a second output on the rule that computes
     it.** `get_problematic_sites.py`'s `site_all_excluded` -- the sites excluded
-    in *every* clade, i.e. exactly the three clade-independent reasons -- is
-    widened to codons and only the codons are written, so one suspect nucleotide
-    takes its two innocent neighbours with it: 121 masked nucleotide sites become
+    in *every* clade, i.e. exactly the three clade-independent reasons -- was
+    widened to codons and only the codons were written, so one suspect nucleotide
+    took its two innocent neighbours with it: 121 masked nucleotide sites become
     345 masked nucleotides across the six v12 production genes, a **2.85x**
     over-mask (121 is a sum over genes: ORF1a and ORF1b overlap by 39 nt and
     share masked site 13476, so the six files hold 121 (gene, site) pairs
@@ -1329,21 +1335,22 @@ mat-pcp/
     PCPs recoverable on the v10 tree. `pcps/{gene}/masked_nt_sites.csv` emits it
     (#153). Five things about the shape are load-bearing.
 
-    *Adding an output to `get_problematic_sites` is the smaller diff and the
-    wrong one.* Its `{gene}_codon_sites_to_mask.txt` has seven consumers, one of
+    *Adding an output to `get_problematic_sites` was the smaller diff and the
+    wrong one.* Its `{gene}_codon_sites_to_mask.txt` had seven consumers, one of
     them `curate_pcps_for_dasm`, so re-running that rule to produce a second file
-    rewrites the codon mask's mtime and restates the **470 GiB** of PCPs -- for a
-    file nothing yet reads. The new rule instead takes the codon file as an
-    *input*. That is also what makes the anti-drift check available: it raises
-    unless widening these nucleotide indices to codons reproduces the codon file
-    exactly, which is what will make retiring that file later a mechanical step
-    rather than a re-derivation. The check is **not** a tautology, and it must not
-    be made one by sharing the derivation: `get_problematic_sites.py` reads
-    `counts_all.csv`'s `codon_site` column for a GTF-carried gene and inverts CDS
-    blocks only for a `pcp_gene_cds_blocks` gene, while the new script inverts
-    blocks for both -- so for five of the six production genes the two sides share
-    no code at all. Verified with exact set equality on both v12 production trees
-    and the test tree before being specified as a check.
+    would rewrite the codon mask's mtime and restate every PCP -- for a file
+    nothing yet read. The new rule instead took the codon file as an *input*,
+    which is what made the anti-drift check available: it raised unless widening
+    these nucleotide indices to codons reproduced the codon file exactly. That
+    check was **not** a tautology, and the reason matters for what it licensed:
+    `get_problematic_sites.py` read `counts_all.csv`'s `codon_site` column for a
+    GTF-carried gene and inverted CDS blocks only for a `pcp_gene_cds_blocks`
+    gene, while the new script inverts blocks for both -- so for five of the six
+    production genes the two sides shared no code at all. It passed with exact
+    set equality on both v12 production trees and the test tree, which is
+    **the one-time evidence** that #158's retirement of the codon file was a
+    substitution rather than a change of mask. The check is gone with the file it
+    compared against; see pattern 18.
 
     *The rows come from the config and the reasons come with them; the count table
     is the independent cross-check, in both directions.* `reason` cannot be
@@ -1398,13 +1405,126 @@ mat-pcp/
     which sites should be masked, which would be a second implementation of
     `global_masked_site_reasons` agreeing with itself.
 
-    Two things are explicitly *not* done, both breaking. Changing
-    `curate_pcps_for_dasm.py`'s drop rule to nucleotide granularity: it assigns the
-    train/val split **after** filtering (`rng.random(len(pcp_df))`), so any change
-    to the row count reshuffles every row's assignment. And retiring
-    `{gene}_codon_sites_to_mask.txt`, which stays until a consumer reads the new
-    file and is validated.
+    Two things were explicitly *not* done in #153, both breaking, and #158 did
+    both: changing `curate_pcps_for_dasm.py`'s drop rule to nucleotide
+    granularity, and retiring `{gene}_codon_sites_to_mask.txt`. See pattern 18.
     See [#153](https://github.com/matsengrp/mat-pcp/issues/153).
+
+
+18. **The drop filter and the loss disagreed about granularity, and the file
+    that made the fix mechanical is consumed by making it.** Through v12
+    `curate_pcps_for_dasm.py`'s filter 6 dropped a PCP whose every mutation fell
+    in a masked *codon*, while DASM's loss censors at nucleotide granularity from
+    `censored_mutations.csv` (#144) and `masked_nt_sites.csv` (#153). So a PCP
+    was discarded here as carrying no signal outside masked codons while the loss
+    it would have fed *would* have seen signal, at an unmasked nucleotide inside
+    one of those codons. #158 points filter 6 at `masked_nt_sites.csv` and
+    deletes `rule get_problematic_sites`, its script and its output. Six things
+    about the shape are load-bearing.
+
+    *The two files' coordinate conventions differ, and the conversion lived in
+    the reader.* `{gene}_codon_sites_to_mask.txt` held **1-based** codon
+    positions and `_parse_problematic_sites` subtracted one (`mask_zero_indexed`
+    defaulted `False` and the Snakefile never set it); `masked_nt_sites.csv`'s
+    `nt_index` is **0-based** into the gene's PCP sequence and is used as-is.
+    Verified against real output: S's first *two* rows are both `nt_index=12`
+    (site 21575, carrying both a config and a VCF reason) and `12 // 3 + 1 = 5`
+    is the first line of `S_codon_sites_to_mask.txt`. The `mask_zero_indexed`
+    param was **removed** rather than set `True`, so no call site can reintroduce
+    the subtraction. The file is also long-form -- one row per
+    `(nt_index, reason)`, 139 rows over 121 pairs -- so the filter and
+    `num_masked_sites` both take `set(nt_index)`; a reader counting rows would
+    report 139 masked positions where there are 121.
+
+    *The new filter keeps a superset, and the warrant for that is the check this
+    change deletes.* Because #153's guard 2 asserted
+    `{i//3+1 : i ∈ masked_nt} == codon_file`, every masked nucleotide lies in a
+    masked codon, so an unmasked codon contains no masked nucleotide, so any
+    difference the old rule found is also a difference at an unmasked index. The
+    containment is therefore weak in general and **strict whenever any codon is
+    masked**. Two consequences: the unit test must construct the codon set as
+    `widen(nt set)` rather than assert the two independently (the counterparty is
+    gone), and the on-disk equality is recorded as one-time evidence in pattern
+    17 rather than as a standing check.
+
+    *No pipeline run can see this change.* Applying both predicates to the v12
+    test tree's PCPs gives **identical** row sets for every gene -- S 8/8,
+    ORF1ab 23/23, ORF1b 13/13, E 1/1 -- because no test-data PCP mutates an
+    unmasked nucleotide inside a masked codon. So a full `config_test_data.yaml`
+    run plus `validate_test.py` is green whether the filter is nucleotide-
+    granular, codon-granular, or shifted by one; `expected_summary.json` needs no
+    regeneration and no md5 moves. `validate_test.py::validate_nt_filter_superset`
+    therefore reports **VACUOUS** rather than success, and
+    `tests/test_dasm_ready_nt_filter.py` is the only non-vacuous coverage: it
+    execs the real script against a stub `snakemake`, checks the off-by-one in
+    **both** directions (a fixture row differing one index before the mask, so a
+    reader keeping the `- 1` inverts two rows rather than moving one), and
+    mutation-tests the reader by editing **`workflow/modules/masking.py`** --
+    which is why `read_masked_nt_indices` lives there rather than in the script.
+
+    *`DASM_READY_ALL_SENTINEL_MD5` does not move, and that is a fact about the
+    sentinel rather than about the change.* It is a cross-implementation check
+    against `dasm2 preprocess`, whose own masking is still codon-granular, so the
+    two implementations now deliberately disagree wherever a masked codon holds
+    an unmasked mutated nucleotide. The claim is narrowed in writing to filters
+    1-5 plus the train/val RNG. The value is unchanged because the sentinel
+    **never exercised filter 6 in either implementation**:
+    `summarize_dasm_ready_pcps` runs only on `pcps/S/`, where the codon filter
+    dropped 0 of 8 valid PCPs. Do not re-baseline it on the strength of #158 -- a
+    moved value would mean something else changed.
+
+    *Two behaviours in the script are preserved deliberately.* The
+    `if after_valid > 0 and num_masked_sites > 0:` gate skips filter 6 for an
+    empty mask, which is legitimate (`masked_nt_sites.py` declares a header-only
+    mask legal for a gene with no globally masked site). The two arms disagree
+    about a zero-mutation PCP -- the skip keeps it, the predicate drops it -- so
+    collapsing them would change behaviour in a case that is unreachable today
+    only because `pcp_from_tree.py` drops `parent == child` rows before writing.
+    And the reader raises with the path named on a missing `nt_index` column
+    rather than letting pandas throw `KeyError`: a mask that fails to parse and a
+    mask that is empty have the same observable outcome, every masked position
+    trained on as live, which is what every guard in `masked_nt_sites.py` exists
+    to prevent.
+
+    *What the retirement costs in coverage, stated rather than absorbed.*
+    `tests/test_pcp_gene_coordinates.py` lost two checks that drove the real
+    `get_problematic_sites.py`. The CDS-block inversion is still covered, by
+    `tests/test_masked_nt_sites.py`'s junction and flat-offset checks;
+    `resolve_cds_blocks`' add-only guard by `check_override_is_add_only`. The
+    positionally-paired `;`-joined `gene`/`codon_site` trap has **no test left**,
+    because it had no other *filtering* consumer: `aamut_fitness.py`,
+    `clade_founder_nts.py` and `build_count_table.py` all explode or zip the
+    paired columns together, which cannot flatten one without the other, so there
+    the pairing holds structurally rather than by assertion. `masked_nt_sites.py`
+    reads only `("nt_site", "exclude")` and never touches those cells.
+
+    *Only the four curate rules are downstream of the mask, so the rebuild is
+    small -- but only under `mtime` triggers.* A production dry run with
+    `--rerun-triggers mtime` schedules **1,123 jobs across both trees, every one
+    a `curate_pcps_for_dasm*` rule or its collector**: not node dating, not the
+    count table, not the GLM, not fitness, and **not PCP generation**, since
+    `all_pcps.csv.gz` is *upstream* of the filter. The two shared mask files need
+    no rebuild and were verified not to want one -- all six
+    `masked_nt_sites.csv` are byte-identical under the new code, and
+    `censor_table.py` changed only a log line. The `mtime` flag is required for a
+    reason predating this change (#156's `filter_metadata` edit cascades from the
+    DAG root under the default `code` trigger), and the default-trigger dry run's
+    199 jobs is an **underestimate** rather than a smaller cascade: `get_clades`
+    re-runs, so the per-clade fan-out hides behind an unresolved checkpoint.
+    Reading that 199 as "less work than 1,123" is the trap. Note also that the
+    retired `{gene}_codon_sites_to_mask.txt` files must be **deleted by hand**
+    from a pre-existing output tree: no rule owns them, so nothing cleans them
+    up, and `validate_masked_nt_sites` reports a survivor as a failure.
+
+    Vectorized rather than looped, because this is the rule with no measured
+    cost and the largest input: the predicate compares the two encoded buffers
+    and tests only the differing positions, so it is *faster* than the codon loop
+    it replaced despite covering three times as many positions. All four
+    `curate_pcps_for_dasm*` rules gained a `benchmark:` in the same commit, since
+    none of them had one -- their `threads`/`mem_mb` are to be set from the
+    measurement per pattern 16, and neither is a rerun trigger, so that can
+    follow the run.
+    See [#158](https://github.com/matsengrp/mat-pcp/issues/158).
 
 
 ### Configuration Sections

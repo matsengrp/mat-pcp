@@ -19,11 +19,13 @@ from importlib import util as importlib_util
 # Version Management
 # =============================================================================
 
-# Per-gene problematic-codon masks are produced by ``rule
-# get_problematic_sites`` (one per configured protein, named by gene symbol:
-# ``<gene>_codon_sites_to_mask.txt``) and consumed by the per-gene DASM-ready
-# filter rules (#80, generalized over ``pcp_genes`` in #108): each protein is
-# filtered against its own ``<gene>_codon_sites_to_mask.txt``.
+# Per-gene nucleotide masks are produced by ``rule masked_nt_sites`` (one per
+# configured protein: ``pcps/<gene>/masked_nt_sites.csv``) and consumed by the
+# per-gene DASM-ready filter rules (#80, generalized over ``pcp_genes`` in
+# #108): each protein is filtered against its own mask. Through v12 that mask
+# was ``<gene>_codon_sites_to_mask.txt``, the same clade-independent set widened
+# to codons; #158 retired it, so the drop filter and DASM's loss now read one
+# mask at one granularity.
 
 # Read pipeline version from VERSION file
 VERSION_FILE = os.path.join(workflow.basedir, "..", "VERSION")
@@ -541,12 +543,6 @@ rule all:
             tree=TREE_LABELS,
             gene=PCP_GENES,
         ),
-        # Per-gene DASM codon masks (tree x gene).
-        expand(
-            os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt"),
-            tree=TREE_LABELS,
-            gene=PCP_GENES,
-        ),
         # Per-gene DASM training censor tables (tree x gene). Nothing inside this
         # repo consumes them -- the consumer is dasm2-experiments#1079 -- so
         # without this wiring they would never build (#144).
@@ -556,8 +552,9 @@ rule all:
             gene=PCP_GENES,
         ),
         # Per-gene clade-independent nucleotide masks (tree x gene), the other
-        # half of the same coordinate contract (#153). Also unread inside this
-        # repo, so it needs the same explicit wiring.
+        # half of the same coordinate contract (#153). Since #158 the DASM-ready
+        # filter reads this file, so it would be pulled in anyway; kept explicit
+        # so a gene whose DASM-ready outputs are not requested still gets one.
         expand(
             os.path.join(OUTDIR, "pcps/{gene}/masked_nt_sites.csv"),
             tree=TREE_LABELS,
@@ -1667,18 +1664,22 @@ rule curate_pcps_for_dasm:
     """Apply DASM-ready filters and train/val split to one clade's gene PCPs.
 
     Fanned over ``pcp_genes`` x clades: each protein's PCPs are filtered
-    against that protein's own codon mask (``{gene}_codon_sites_to_mask.txt``).
+    against that protein's own nucleotide mask
+    (``pcps/{gene}/masked_nt_sites.csv``). Through v12 that was the same mask
+    widened to codons; #158 retired the codon file so this filter and DASM's
+    loss read one mask at one granularity.
     """
     input:
         pcps=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}{clade}_pcps.csv.gz"),
-        # The codon mask is deliberately **not** arm-prefixed. It is invariant
-        # to sampling depth by construction: ``get_problematic_sites.py``
-        # masks a codon iff ``exclude`` holds at that site in every clade, and
-        # ``masking.compute_exclusions`` derives ``exclude`` from config, the
-        # ProblematicSites VCF, ``usher_masked_sites.yaml`` and the founder
-        # grid -- never from a count column. So reusing it is a no-op rather
-        # than a leak, unlike #149's temporal carve-out.
-        mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
+        # The mask is deliberately **not** arm-prefixed. It is invariant to
+        # sampling depth by construction: ``masked_nt_sites.py`` derives it
+        # from the config, the ProblematicSites VCF and ``site_include_range``
+        # -- never from a count column -- and reconciles it against
+        # ``exclude``, which ``masking.compute_exclusions`` likewise derives
+        # from config, the VCF, ``usher_masked_sites.yaml`` and the founder
+        # grid. So reusing it is a no-op rather than a leak, unlike #149's
+        # temporal carve-out.
+        mask_sites=os.path.join(OUTDIR, "pcps/{gene}/masked_nt_sites.csv")
     output:
         dasm_ready=os.path.join(
             OUTDIR, "pcps/{gene}/{arm_dir}{clade}_pcps_dasm_ready.csv.gz"
@@ -1692,6 +1693,10 @@ rule curate_pcps_for_dasm:
     params:
         seed=1729,
         val_fraction=0.10
+    benchmark:
+        os.path.join(
+            OUTDIR, "benchmarks/{arm_dir}curate_pcps_for_dasm_{gene}_{clade}.tsv"
+        )
     log:
         os.path.join(OUTDIR, "log/{arm_dir}curate_pcps_for_dasm_{gene}_{clade}.log")
     conda:
@@ -1708,7 +1713,7 @@ rule curate_all_pcps_for_dasm:
     """
     input:
         pcps=os.path.join(OUTDIR, "pcps/{gene}/{arm_dir}all_pcps.csv.gz"),
-        mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
+        mask_sites=os.path.join(OUTDIR, "pcps/{gene}/masked_nt_sites.csv")
     output:
         dasm_ready=os.path.join(
             OUTDIR, "pcps/{gene}/{arm_dir}all_pcps_dasm_ready.csv.gz"
@@ -1718,6 +1723,10 @@ rule curate_all_pcps_for_dasm:
     params:
         seed=42,
         val_fraction=0.10
+    benchmark:
+        os.path.join(
+            OUTDIR, "benchmarks/{arm_dir}curate_all_pcps_for_dasm_{gene}.tsv"
+        )
     log:
         os.path.join(OUTDIR, "log/{arm_dir}curate_all_pcps_for_dasm_{gene}.log")
     conda:
@@ -1775,7 +1784,8 @@ rule dasm_ready_pcps_all_clades:
 # parent-child pairs that is the branch set of no tree. Re-extraction also runs
 # the same ``pcp_from_tree.py``, so there is no second implementation to drift.
 #
-# **Known leakage, stated rather than hidden.** ``{gene}_codon_sites_to_mask.txt``
+# **Known leakage, stated rather than hidden.**
+# ``pcps/{gene}/masked_nt_sites.csv``
 # and ``pcps/{gene}/censored_mutations.csv`` are *not* recomputed per cutoff:
 # they come from the full tree's count table and from
 # ``data/usher_masked_sites.yaml``. A strict holdout would rebuild the mask from
@@ -2050,14 +2060,14 @@ rule aggregate_filtered_branches_upto:
 rule curate_pcps_for_dasm_upto:
     """DASM-ready filters and train/val split for one clade at one cutoff.
 
-    Reads the full tree's ``{gene}_codon_sites_to_mask.txt`` -- see the leakage
+    Reads the full tree's ``pcps/{gene}/masked_nt_sites.csv`` -- see the leakage
     note at the top of this section. Seed 1729, matching the per-clade
     full-tree rule, so a clade's train/val assignment differs between cutoffs
     only where the row set does.
     """
     input:
         pcps=os.path.join(OUTDIR, "pcps/{gene}/upto_{cutoff}/{clade}_pcps.csv.gz"),
-        mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
+        mask_sites=os.path.join(OUTDIR, "pcps/{gene}/masked_nt_sites.csv")
     output:
         dasm_ready=os.path.join(
             OUTDIR, "pcps/{gene}/upto_{cutoff}/{clade}_pcps_dasm_ready.csv.gz"
@@ -2071,6 +2081,11 @@ rule curate_pcps_for_dasm_upto:
     params:
         seed=1729,
         val_fraction=0.10
+    benchmark:
+        os.path.join(
+            OUTDIR,
+            "benchmarks/curate_pcps_for_dasm_{gene}_upto_{cutoff}_{clade}.tsv"
+        )
     log:
         os.path.join(
             OUTDIR, "log/curate_pcps_for_dasm_{gene}_upto_{cutoff}_{clade}.log"
@@ -2089,7 +2104,7 @@ rule curate_all_pcps_for_dasm_upto:
     """
     input:
         pcps=os.path.join(OUTDIR, "pcps/{gene}/upto_{cutoff}/all_pcps.csv.gz"),
-        mask_sites=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
+        mask_sites=os.path.join(OUTDIR, "pcps/{gene}/masked_nt_sites.csv")
     output:
         dasm_ready=os.path.join(
             OUTDIR, "pcps/{gene}/upto_{cutoff}/all_pcps_dasm_ready.csv.gz"
@@ -2103,6 +2118,10 @@ rule curate_all_pcps_for_dasm_upto:
     params:
         seed=42,
         val_fraction=0.10
+    benchmark:
+        os.path.join(
+            OUTDIR, "benchmarks/curate_all_pcps_for_dasm_{gene}_upto_{cutoff}.tsv"
+        )
     log:
         os.path.join(OUTDIR, "log/curate_all_pcps_for_dasm_{gene}_upto_{cutoff}.log")
     conda:
@@ -2786,37 +2805,6 @@ rule window_expected_counts:
         "scripts/window_expected_counts.py"
 
 
-rule get_problematic_sites:
-    """Identify problematic codon sites in one gene's CDS for masking.
-
-    Fanned over ``pcp_genes``: emits ``<gene>_codon_sites_to_mask.txt`` per
-    configured protein (the gene comes from the ``{gene}`` wildcard).
-
-    Genes the reference GTF carries are matched against ``counts_all.csv``'s
-    ``gene`` column. A gene added only through ``pcp_gene_cds_blocks`` (ORF1b)
-    never appears there, so its codon sites are derived from its own CDS blocks
-    instead -- hence the ``gtf`` input and the params. Matching on the name alone
-    selected zero rows and wrote an empty mask at exit 0, leaving that gene's
-    DASM-ready PCPs unmasked (#133).
-    """
-    input:
-        # Full tree, not the arm's: the codon mask is invariant to sampling
-        # fraction (see ``curate_pcps_for_dasm``), so an arm-local recompute
-        # would be a no-op that nonetheless costs a full count-table pass.
-        expected_vs_actual=os.path.join(OUTDIR, "counts_all.csv"),
-        gtf=rules.edit_ref_gtf.output.gtf
-    output:
-        sites_to_mask=os.path.join(OUTDIR, "{gene}_codon_sites_to_mask.txt")
-    params:
-        pcp_gene_cds_blocks=PCP_GENE_CDS_BLOCKS
-    log:
-        os.path.join(OUTDIR, "log/get_problematic_sites_{gene}.log")
-    conda:
-        "envs/default.yml"
-    script:
-        "scripts/get_problematic_sites.py"
-
-
 def _gene_founder_slice_map(wildcards):
     """``{clade: founder-slice path}`` for one gene, over this tree's clades.
 
@@ -2845,26 +2833,24 @@ rule masked_nt_sites:
     give a consumer the complete nucleotide mask with no codon widening
     anywhere (#153).
 
-    A separate rule rather than a second output on ``get_problematic_sites``,
-    which already computes this set and throws it away: that rule's
-    ``{gene}_codon_sites_to_mask.txt`` has seven consumers, one of them
-    ``curate_pcps_for_dasm``, so re-running it to add an output would restate
-    the 470 GiB of PCPs for a file nothing yet reads.
-
-    Reads the codon mask as an *input* so the two granularities are cross-checked
-    against each other (guard 2 in the script). Additive output -- no existing
-    schema is read and no current consumer reads it -- so the CLAUDE.md carve-out
-    applies and it ships no-bump.
+    Shipped in #153 as a separate rule rather than a second output on the
+    then-existing ``get_problematic_sites``, whose codon file had seven
+    consumers: re-running that rule to add an output would have restated every
+    PCP for a file nothing yet read. It carried the codon file as an *input* so
+    the two granularities could be cross-checked (guard 2). #158 retired the
+    codon file and pointed ``curate_pcps_for_dasm`` here instead, so that input
+    and that guard are gone -- this is now the only producer of the
+    clade-independent mask, at the granularity the loss uses.
 
     Cheap: a pure function of the config, the VCF, the edited GTF, the reference
     and one pass over ``counts_all.csv``'s two reconciliation columns.
     """
     input:
-        # Full tree, not the arm's, for the same reason get_problematic_sites
-        # reads the full tree: the global mask is invariant to sampling depth by
-        # construction (it never reads a count column, only `exclude`).
+        # Full tree, not the arm's, for the same reason ``curate_pcps_for_dasm``
+        # reads the full tree's mask: the global mask is invariant to sampling
+        # depth by construction (it never reads a count column, only
+        # `exclude`).
         counts=os.path.join(OUTDIR, "counts_all.csv"),
-        codon_mask=rules.get_problematic_sites.output.sites_to_mask,
         site_mask=rules.get_site_mask.output.csv,
         gtf=rules.edit_ref_gtf.output.gtf,
         ref_fasta=rules.get_ref_fasta.output.ref_fasta
@@ -2901,15 +2887,16 @@ rule censor_table:
     UShER masking deletes mutations from the MAT rather than marking sites
     ambiguous, so a masked site is *censored, not ambiguous*: the state is known,
     the event was destroyed. Training therefore needs the coordinates in the
-    loss, not an ``N`` in the sequence. ``{gene}_codon_sites_to_mask.txt`` cannot
-    serve: it never reaches the loss, it is codon-granular, and it is
-    clade-independent by construction (#144).
+    loss, not an ``N`` in the sequence. The retired
+    ``{gene}_codon_sites_to_mask.txt`` could not serve: it never reached the
+    loss, it was codon-granular, and it was clade-independent by construction
+    (#144).
 
     Carries the two clade-specific reasons of ``masking.compute_exclusions``'
-    five; the other three stay in the codon mask, so a training run applies
-    **both** files. Additive output -- no existing schema is read and no current
-    consumer reads it, so the CLAUDE.md carve-out applies and it ships no-bump
-    inside v11.
+    five; the other three are in ``masked_nt_sites.csv``, so a training run
+    applies **both** files. Additive output -- no existing schema is read and no
+    consumer inside this repo reads it, so the CLAUDE.md carve-out applied and
+    it shipped no-bump inside v11.
 
     Cheap: a pure function of the UShER yaml, the edited GTF, the reference, and
     the ``get_clades`` checkpoint. The founder slices are inputs only for the

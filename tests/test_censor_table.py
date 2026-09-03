@@ -12,9 +12,9 @@ cannot be exercised by any pipeline run** and is synthetic here.
 
 Runs the real ``workflow/scripts/censor_table.py`` against a stub ``snakemake``
 global, never a re-implementation of it. CLAUDE.md pattern 10 records why: an
-earlier ``get_problematic_sites`` test re-implemented the script's
-nt_site -> codon inversion and asserted against its own copy, so three separate
-breaks of the shipped script all left it green. The mutation tests below go
+earlier test of the since-retired ``get_problematic_sites`` re-implemented that
+script's nt_site -> codon inversion and asserted against its own copy, so three
+separate breaks of the shipped script all left it green. The mutation tests below go
 further and exec *deliberately corrupted* copies of the shipped script text,
 asserting the guards catch each corruption -- a guard that never fires on a
 broken input is indistinguishable from no guard.
@@ -205,9 +205,10 @@ def check_single_block_known_answer():
     """21M's six S-range site masks land at the arithmetically known indices.
 
     Also computes the codon number two independent ways -- ``nt_index // 3 + 1``
-    and ``genemap.codon_genomic_positions``, which is the derivation
-    ``get_problematic_sites.py`` uses for a PCP-only gene -- because a 1-vs-0-based
-    slip in either direction produces a plausible number on its own.
+    and ``genemap.codon_genomic_positions``, the derivation the retired
+    ``get_problematic_sites.py`` used for a PCP-only gene -- because a
+    1-vs-0-based slip in either direction produces a plausible number on its
+    own.
     """
     failures = []
     tmpdir = tempfile.mkdtemp()

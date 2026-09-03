@@ -277,14 +277,32 @@ jobs:
     # one-to-many index is synthetic; every config bounds the genome at
     # 266-29674 with no PCP gene outside it, so the `site_include_range` reason
     # is never emitted; every configured gene's mask is non-empty on every
-    # shipped tree, so the legitimately header-only case is unreachable; and all
-    # three guards pass on both production trees, which says nothing about
+    # shipped tree, so the legitimately header-only case is unreachable; and
+    # every guard passes on both production trees, which says nothing about
     # whether they fire. Each guard is mutation-tested against a corrupted copy
     # of the shipped script -- and the reason vocabulary against a corrupted
-    # `workflow/modules/masking.py`, where the definition lives.
+    # `workflow/modules/masking.py`, where the definition lives. Since #158
+    # retired `{gene}_codon_sites_to_mask.txt` this file is also the only
+    # coverage of the CDS-block inversion, the codon cross-check having gone
+    # with the file it compared against.
     - name: Verify the global nucleotide mask coordinates and guards
       run: |
         pixi run python tests/test_masked_nt_sites.py
+
+    # The DASM-ready drop filter's nucleotide predicate (#158). Here the run
+    # proves *nothing*: applying the retired codon rule and the new nucleotide
+    # rule to the test tree's PCPs gives identical row sets for every gene
+    # (S 8/8, ORF1ab 23/23, ORF1b 13/13, E 1/1), because no test-data PCP
+    # mutates an unmasked nucleotide inside a masked codon. So a green pipeline
+    # run is compatible with the filter being nucleotide-granular,
+    # codon-granular, or shifted by one, and the superset invariant is VACUOUS
+    # in CI. This file is the only thing that can tell those apart: it drives
+    # the real script against a stub `snakemake`, and mutation-tests the reader
+    # by corrupting `workflow/modules/masking.py`, where
+    # `read_masked_nt_indices` lives.
+    - name: Verify the DASM-ready nucleotide drop filter
+      run: |
+        pixi run python tests/test_dasm_ready_nt_filter.py
 
     # The steps above name each test file so a failure points at a readable log.
     # That enumeration is also a hole: `pytest` is in no env and pixi's [tasks]

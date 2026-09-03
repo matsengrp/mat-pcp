@@ -138,9 +138,8 @@ pixi run snakemake -j 4 --use-conda --configfile config/config.yaml \
 | `glm/era_fit_summary.csv` | Which eras this tree fitted and which were skipped, with each era's clade list (v10+). A skipped era leaves no rate table, so the absence is recorded here rather than being indistinguishable from a dropped one |
 | `rates_table.csv` | Neutral mutation rates by context (384 rows: the after-boundary half of the grid) |
 | `rates_table_{era}.csv` | Same, per era (v10+) |
-| `<gene>_codon_sites_to_mask.txt` | Problematic codon sites per configured protein (e.g. `S_codon_sites_to_mask.txt`) |
-| `pcps/{gene}/censored_mutations.csv` | Per-clade, per-nucleotide censor table for DASM training (v11+, #144), with a `censored_mutations.clades.txt` clade roster alongside. Carries the clade-specific UShER masks the codon mask drops; a training run applies **both** |
-| `pcps/{gene}/masked_nt_sites.csv` | The **clade-independent** mask at nucleotide granularity (v12+, [#153](https://github.com/matsengrp/mat-pcp/issues/153)): one row per `(nt_index, reason)` over the ProblematicSites VCF, `sites_to_exclude` and `site_include_range`. The other half of the censor table's coordinate contract; `{gene}_codon_sites_to_mask.txt` is this file widened to codons, a 2.85x over-mask on the v12 production genes |
+| `pcps/{gene}/censored_mutations.csv` | Per-clade, per-nucleotide censor table for DASM training (v11+, #144), with a `censored_mutations.clades.txt` clade roster alongside. Carries the clade-specific UShER masks `masked_nt_sites.csv` does not; a training run applies **both** |
+| `pcps/{gene}/masked_nt_sites.csv` | The **clade-independent** mask at nucleotide granularity (v12+, [#153](https://github.com/matsengrp/mat-pcp/issues/153)): one row per `(nt_index, reason)` over the ProblematicSites VCF, `sites_to_exclude` and `site_include_range`. The other half of the censor table's coordinate contract, and since [#158](https://github.com/matsengrp/mat-pcp/issues/158) what the DASM-ready drop filter reads. It replaced `{gene}_codon_sites_to_mask.txt`, which was this same mask widened to codons — a 2.85x over-mask on the v12 production genes |
 | `pcps/{gene}/upto_{cutoff}/…` | The whole per-gene PCP family rebuilt from the subtree of samples collected at or before `{cutoff}` (v12+, [#149](https://github.com/matsengrp/mat-pcp/issues/149)). Filenames match the full-tree ones, so a consumer just points at a different root. Re-extracted, **not** a row filter — `matUtils` collapses unifurcations and merges their mutations, so a cutoff table is not a subset of the full one |
 | `{arm}/…`, `pcps/{gene}/{arm}/…`, `aamut_fitness/{arm}/…` | The per-clade counts **and** PCP families rebuilt from subtrees re-extracted at reduced sampling depth (v12+, [#151](https://github.com/matsengrp/mat-pcp/issues/151)). An arm is named `cap_{max_samples}_{seed}` and thins every clade above `max_samples` down to it. `{arm}` is an *optional* path segment inserted before the basename, so filenames match the full-tree ones. Only the thinned clades get arm files; every other clade's per-clade files are the full tree's, read in place |
 | `pcps/cutoff_summary.csv` | The cutoff roster: one row per (cutoff, clade) **including the pairs that were not built**, so a clade skipped for being below `min_clade_size` at that date is distinguishable from a wiring mistake (v12+) |
@@ -512,32 +511,38 @@ grid, in `build_count_table` via `workflow/modules/masking.py`. A mutation is ex
 4. **Configured exclusions**: it is at a site in `sites_to_exclude`
 5. **Founder→reference reversion**: its destination base equals the reference base at that site — i.e. it reverts a clade-defining base back to the reference. These are enriched for artifacts and are always excluded (does **not** set `masked_in_usher`).
 
-The `<gene>_codon_sites_to_mask.txt` outputs (one per configured protein; the codon masks consumed by DASM) are built from
-this table but include **only sites masked across all clades** — i.e. every mutation at the
-site is excluded (the clade-independent reasons: `site_include_range`, `sites_to_exclude`, and
-the ProblematicSites VCF). Clade-specific masks (UShER per-clade `sites`/`mutations` and
-founder→reference reversions) are intentionally excluded from the codon mask.
+The `pcps/{gene}/masked_nt_sites.csv` outputs (one per configured protein; the masks consumed
+by DASM) are built from this table but include **only sites masked across all clades** — i.e.
+every mutation at the site is excluded (the clade-independent reasons: `site_include_range`,
+`sites_to_exclude`, and the ProblematicSites VCF). Clade-specific masks (UShER per-clade
+`sites`/`mutations` and founder→reference reversions) are intentionally excluded from it.
 
 The clade-specific UShER masks are instead emitted, at nucleotide and direction granularity,
 as `pcps/{gene}/censored_mutations.csv` (v11+, #144) with a `censored_mutations.clades.txt`
 roster alongside. UShER masking **deletes** the mutations from the MAT rather than marking the
 sites ambiguous, so the node inherits its parent's state: the site is *censored, not
 ambiguous*, and the correction belongs in the training loss rather than in the sequence. The
-codon mask cannot serve that purpose — it never reaches the loss, it is codon-granular, and it
-is clade-independent by construction. The two files carry **disjoint reasons but not disjoint
+retired `{gene}_codon_sites_to_mask.txt` could not serve that purpose — it never reached the
+loss, it was codon-granular, and it is clade-independent by construction. The two files carry
+**disjoint reasons but not disjoint
 sites** (a site can be both clade-masked in the yaml and in the ProblematicSites VCF), so a
 training run applies both. Nothing in this pipeline consumes the censor table; see
 [matsengrp/dasm2-experiments#1079](https://github.com/matsengrp/dasm2-experiments/issues/1079).
 
 The three **clade-independent** reasons are emitted at nucleotide granularity as
 `pcps/{gene}/masked_nt_sites.csv` (v12+, #153), with a `reason` column naming which of them
-applies. `{gene}_codon_sites_to_mask.txt` is that same mask widened to codons, which takes two
-innocent neighbours per suspect nucleotide — 121 masked nucleotide sites become 345 masked
-nucleotides across the six v12 production genes, a 2.85x over-mask. The codon file is not
-retired: it still drives the DASM-ready drop filter and the dashboards, and the new rule reads
-it as an *input*, raising unless widening the nucleotide indices reproduces it exactly. Between
-`masked_nt_sites.csv` and `censored_mutations.csv` a consumer has the complete nucleotide mask
-with no codon widening anywhere.
+applies. Between `masked_nt_sites.csv` and `censored_mutations.csv` a consumer has the complete
+nucleotide mask with no codon widening anywhere — and since #158 the pipeline's own DASM-ready
+drop filter reads the same file, so the filter and the loss no longer disagree about
+granularity.
+
+Through v12 that filter read `{gene}_codon_sites_to_mask.txt`, the same mask widened to codons,
+which took two innocent neighbours per suspect nucleotide — 121 masked nucleotide sites became
+345 masked nucleotides across the six v12 production genes, a 2.85x over-mask. #158 deleted
+that file and its producing rule. The one-time evidence that this was a substitution rather
+than a change of mask is that the retired rule's own cross-check passed with exact set
+equality: widening `masked_nt_sites.csv`'s indices reproduced the codon file for every
+configured gene on both v12 production trees and the test tree.
 
 #### UShER masks: source
 

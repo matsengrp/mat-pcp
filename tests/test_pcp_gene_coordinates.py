@@ -23,6 +23,22 @@ bare ``codon_offset: 0``, ORF1a's codons 4402-4405 would map onto ORF1ab codons
 indistinguishable from real ones. The configured offset is kept as a cross-check
 so a stale number fails loudly.
 
+**What #158 removed from this file.** Two checks here drove the real
+``get_problematic_sites.py``: one that a ``pcp_gene_cds_blocks`` gene's codon
+mask came from its CDS blocks rather than from a name match on
+``counts_all.csv`` (the #133 defect), and one covering that script's four
+empty-mask routes plus the positionally-paired ``;``-joined ``gene`` /
+``codon_site`` cells (``"N;ORF9b"`` with ``"4;1"``). #158 retired that script,
+so both went with it. The CDS-block inversion is still covered, by
+``tests/test_masked_nt_sites.py``'s junction and flat-offset checks, which drive
+the same ``sequences.genomic_to_pcp_indices`` through the surviving producer;
+``resolve_cds_blocks``' add-only guard is still covered by
+``check_override_is_add_only`` below. The ``;``-joined pairing trap has no test
+left, because it had no other *filtering* consumer: ``aamut_fitness.py``,
+``clade_founder_nts.py`` and ``build_count_table.py`` all explode or zip the
+paired columns together, which cannot flatten one without the other, so there
+the pairing holds structurally rather than by assertion.
+
 The coordinate identity is asserted on a synthetic genome on purpose: that
 ORF1b's blocks reproduce ORF1ab's interior slice is pure positional arithmetic
 and holds for any sequence. The genome-specific facts (2704 aa, no internal
@@ -423,277 +439,8 @@ def check_empty_fitness_slice_is_fatal():
     return failures
 
 
-MASK_SCRIPT = REPO_ROOT / "workflow" / "scripts" / "get_problematic_sites.py"
-
-
-class _Namespace:
-    """Stand-in for Snakemake's input/output/params/wildcards objects."""
-
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
-
-    def get(self, key, default=None):
-        return self.__dict__.get(key, default)
-
-
-def _run_mask_script(tmpdir, gene, rows, overrides=None, gtf_genes=None,
-                     drop_columns=None):
-    """Execute get_problematic_sites.py the way Snakemake does.
-
-    ``rows`` is a list of ``(nt_site, exclude, gene_cell, codon_site_cell)``.
-    Returns the codon sites actually written to the mask file; raises whatever
-    the script raises.
-
-    exec rather than import, because the script runs top-level statements
-    against the ``snakemake`` global -- exactly how Snakemake invokes it. This is
-    the point of the check: the first version of this test re-implemented the
-    script's nt_site -> codon inversion and asserted against its own copy, so
-    three separate breaks of the shipped script (always-empty mask, dropping the
-    shared frameshift nt, disabling the resolution guard) all left it green.
-    """
-    tmpdir = Path(tmpdir)
-    counts_path = tmpdir / "counts_all.csv"
-    out_path = tmpdir / f"{gene}_codon_sites_to_mask.txt"
-    log_path = tmpdir / f"{gene}.log"
-
-    drop = set(drop_columns or ())
-    columns = [c for c in ("nt_site", "exclude", "gene", "codon_site",
-                           "clade", "nt_mutation") if c not in drop]
-    with open(counts_path, "w") as f:
-        f.write(",".join(columns) + "\n")
-        for index, (nt_site, exclude, gene_cell, codon_cell) in enumerate(rows):
-            values = {
-                "nt_site": nt_site, "exclude": exclude, "gene": gene_cell,
-                "codon_site": codon_cell, "clade": "19A",
-                "nt_mutation": f"A{nt_site}T_{index}",
-            }
-            f.write(",".join(str(values[c]) for c in columns) + "\n")
-
-    gtf_path = _synthetic_gtf(
-        tmpdir / "ref.gtf",
-        gtf_genes if gtf_genes is not None else {"ORF1ab": ORF1AB_BLOCKS},
-    )
-
-    stub = _Namespace(
-        input=_Namespace(expected_vs_actual=str(counts_path), gtf=str(gtf_path)),
-        output=_Namespace(sites_to_mask=str(out_path)),
-        params=_Namespace(pcp_gene_cds_blocks=overrides or {}),
-        wildcards=_Namespace(gene=gene),
-        log=[str(log_path)],
-    )
-    script_globals = {
-        "__name__": "__main__",
-        "__file__": str(MASK_SCRIPT),
-        "snakemake": stub,
-    }
-    exec(compile(MASK_SCRIPT.read_text(), str(MASK_SCRIPT), "exec"), script_globals)
-    written = out_path.read_text().strip()
-    return [int(line) for line in written.splitlines() if line]
-
-
-def check_pcp_only_gene_gets_a_nonempty_codon_mask():
-    """A `pcp_gene_cds_blocks` gene's codon mask must come from its CDS blocks.
-
-    `counts_all.csv`'s `gene` column is derived from the reference GTF, so a gene
-    added only through `pcp_gene_cds_blocks` never appears in it. Matching on the
-    name selected zero rows and `get_problematic_sites` wrote an **empty** mask at
-    exit 0 -- so ORF1b's DASM-ready PCPs kept every problematic codon site that
-    every other gene had removed (35 of them on the v9 test tree). Found in the
-    PR #132 review; CI's existing check was `test -f`, which an empty file passes.
-
-    Runs the real script against a synthetic table so it holds without a pipeline
-    run, and asserts the codon numbers written to the file -- including that the
-    shared frameshift nucleotide yields *two* codons, which is the arithmetic a
-    naive one-codon-per-nt inversion would get wrong.
-    """
-    failures = []
-
-    # nt 13442 -> codon 1; nt 13468 is the shared frameshift nt, so codons 9 and
-    # 10 (block 1 contributes 27 nt = 9 codons); nt 21552 -> the last codon 2704.
-    # nt 13445 is only *partly* excluded, so it must not appear (codon 2), and
-    # nt 100 is outside ORF1b entirely.
-    rows = [
-        (13442, True, "nan", ""),
-        (13468, True, "ORF1a;ORF1ab;ORF1ab", "4401;4401;4402"),
-        (21552, True, "ORF1ab", "7096"),
-        (13445, True, "ORF1ab", "4394"),
-        (13445, False, "ORF1ab", "4394"),
-        (100, True, "nan", ""),
-    ]
-    with tempfile.TemporaryDirectory() as tmpdir:
-        try:
-            got = _run_mask_script(
-                tmpdir, "ORF1b", rows, overrides={"ORF1b": ORF1B_BLOCKS}
-            )
-        except Exception as exc:  # noqa: BLE001 - reported as a failure
-            return [f"ORF1b mask derivation raised: {exc}"]
-
-    expected = [1, 9, 10, 2704]
-    if got != expected:
-        failures.append(
-            f"ORF1b mask is {got}, expected {expected} (codon 1 from nt 13442, "
-            f"codons 9 and 10 from the shared frameshift nt 13468, codon 2704 "
-            f"from nt 21552; nt 13445 is only partly excluded and nt 100 is "
-            f"outside the gene)"
-        )
-    if not got:
-        failures.append(
-            "ORF1b mask is empty -- the #132 defect, which a `test -f` check "
-            "and a re-implemented inversion both pass"
-        )
-    if not failures:
-        print(f"  the shipped script derives ORF1b codons {got} from nt_site "
-              f"alone; the shared frameshift nt yields two codons")
-    return failures
-
-
-def check_mask_script_guards_and_gene_pairing():
-    """The mask script's three silent-failure routes must all raise, and it must
-    not file another gene's codon number under this one.
-
-    At an overlap site `ref_coding_sites` joins every covering CDS feature, so
-    `gene` and `codon_site` are `;`-joined and paired **positionally**
-    (`"N;ORF9b"` with `"4;1"`). The script flattened both and appended every
-    component, filing ORF9b's codon 1 as a codon of N. ORF9b's codon numbers
-    (1-98) are all valid N codon numbers, so no range check could see it -- it
-    over-masks a real codon of the wrong gene. Latent rather than firing on the
-    v9 test tree (297 sites have a divergent compound `codon_site`, none of them
-    fully excluded), and newly reachable because v9 adds N to `pcp_genes`.
-    """
-    failures = []
-    overlap_rows = [
-        (28300, True, "N;ORF9b", "4;1"),
-        (28400, True, "N", "37"),
-    ]
-    n_blocks = {"N": [(28274, 29533)], "ORF1ab": ORF1AB_BLOCKS}
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        try:
-            got = _run_mask_script(tmpdir, "N", overlap_rows, gtf_genes=n_blocks)
-        except Exception as exc:  # noqa: BLE001 - reported as a failure
-            failures.append(f"N mask derivation raised: {exc}")
-            got = None
-    if got is not None and got != [4, 37]:
-        failures.append(
-            f"N's mask is {got}, expected [4, 37]. [1, 4, 37] means ORF9b's "
-            f"codon 1 was filed as a codon of N: the components of 'gene' and "
-            f"'codon_site' are positionally paired and must be zipped, not "
-            f"flattened."
-        )
-
-    # The gene name must match a whole component, not a substring: `ORF1a` is a
-    # substring of `ORF1ab`, so a substring match files ORF1ab's codon numbers
-    # under ORF1a (#114). Without this case the whole-component match is
-    # uncovered -- relaxing it to `masking_gene not in gene_component` survives
-    # every other check here, and lands in the production tree's largest gene.
-    # It cannot be caught by the test config, whose pcp_genes (S, ORF1ab, E,
-    # ORF1b) contain no symbol that is a substring of another; `ORF1a` appears
-    # only in the production config.
-    substring_rows = [
-        (500, True, "ORF1a;ORF1ab", "79;79"),
-        (13468, True, "ORF1a;ORF1ab;ORF1ab", "4401;4401;4402"),
-    ]
-    substring_blocks = {"ORF1a": ORF1A_BLOCKS, "ORF1ab": ORF1AB_BLOCKS}
-    for gene, expected, note in [
-        ("ORF1a", [79, 4401],
-         "4402 present means ORF1ab's codon was filed under ORF1a via a "
-         "substring match"),
-        ("ORF1ab", [79, 4401, 4402],
-         "ORF1ab must collect both 4401 and 4402 at the shared frameshift "
-         "nucleotide, where it appears twice in one cell"),
-    ]:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            try:
-                got_sub = _run_mask_script(
-                    tmpdir, gene, substring_rows, gtf_genes=substring_blocks
-                )
-            except Exception as exc:  # noqa: BLE001 - reported as a failure
-                failures.append(f"{gene} mask derivation raised: {exc}")
-                continue
-        if got_sub != expected:
-            failures.append(
-                f"{gene}'s mask is {got_sub}, expected {expected} -- {note}"
-            )
-
-    # Each of these writes an empty mask at exit 0 if unguarded.
-    guarded = {
-        # "pcp_gene_cds_blocks" would be too weak a needle: every
-        # validate_cds_blocks message opens with `pcp_gene_cds_blocks[...]` and
-        # the add-only message names it too, so it cannot tell this error from
-        # several others.
-        "gene in neither the GTF nor the override": dict(
-            gene="ZZZ", rows=[(13442, True, "nan", "")], overrides={},
-            must_mention="appears in neither",
-        ),
-        "override blocks intersect nothing in the grid": dict(
-            gene="ORF1b", rows=[(100, True, "nan", ""), (110, True, "nan", "")],
-            overrides={"ORF1b": ORF1B_BLOCKS}, must_mention="intersect",
-        ),
-        "gene and codon_site disagree on component count": dict(
-            gene="N", rows=[(28300, True, "N;ORF9b", "4")], overrides={},
-            must_mention="components",
-        ),
-        # A missing codon_site column returned [] and wrote a 0-byte mask at
-        # exit 0 for every GTF-carried gene, while its two siblings (missing
-        # 'exclude', missing 'gene') raised. build_count_table.py drops a missing
-        # column from counts_all.csv silently, so one upstream schema regression
-        # would unmask every gene with nothing to attribute it to.
-        "counts table has no codon_site column": dict(
-            gene="N", rows=[(28300, True, "N", "4")], overrides={},
-            must_mention="codon_site", drop_columns=["codon_site"],
-        ),
-    }
-    for label, case in guarded.items():
-        with tempfile.TemporaryDirectory() as tmpdir:
-            try:
-                _run_mask_script(
-                    tmpdir, case["gene"], case["rows"],
-                    overrides=case["overrides"], gtf_genes=n_blocks,
-                    drop_columns=case.get("drop_columns"),
-                )
-            except (ValueError, KeyError) as exc:
-                if case["must_mention"] not in str(exc):
-                    failures.append(
-                        f"{label}: raised without mentioning "
-                        f"{case['must_mention']!r}: {exc}"
-                    )
-            else:
-                failures.append(f"{label}: wrote a mask instead of raising")
-
-    # The dispatch must key off the config, not off whichever genes the table
-    # mentions: a gene with an override that the GTF *also* carries must reach
-    # resolve_cds_blocks' add-only guard rather than silently taking the GTF path.
-    with tempfile.TemporaryDirectory() as tmpdir:
-        try:
-            _run_mask_script(
-                tmpdir, "ORF1ab", [(13442, True, "ORF1ab", "4393")],
-                overrides={"ORF1ab": ORF1AB_BLOCKS},
-            )
-        except ValueError as exc:
-            if "add-only" not in str(exc):
-                failures.append(
-                    f"a gene in both the GTF and the override raised, but not "
-                    f"the add-only error: {exc}"
-                )
-        else:
-            failures.append(
-                "a gene defined in both the GTF and pcp_gene_cds_blocks silently "
-                "took the GTF path, bypassing the add-only guard"
-            )
-
-    if not failures:
-        print(f"  codon pairing zipped not flattened, and matched on whole "
-              f"components (ORF1a != ORF1ab); all {len(guarded)} empty-mask "
-              f"routes raise; dispatch keys off the config")
-    return failures
-
-
 CHECKS = [
     ("override validation", check_override_validation),
-    ("PCP-only gene gets a non-empty codon mask",
-     check_pcp_only_gene_gets_a_nonempty_codon_mask),
-    ("mask script guards and cross-gene codon pairing",
-     check_mask_script_guards_and_gene_pairing),
     ("override is add-only", check_override_is_add_only),
     ("override is inert when unused", check_override_is_inert_when_unused),
     ("ORF1b reproduces the ORF1ab interior slice",

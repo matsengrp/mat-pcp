@@ -15,13 +15,24 @@ from pathlib import Path
 # changed, or the FASTA writer's header/wrap convention changed.
 SPIKE_19A_SENTINEL_MD5 = "b948f2a1f20edbce64cfff1dc540c119"
 
-# Cross-implementation byte-equivalence sentinels for DASM-ready PCP outputs
-# on the test dataset (#80). These md5s come from running the reference
+# Cross-implementation byte-equivalence sentinel for the DASM-ready PCP output
+# on the test dataset (#80). This md5 comes from running the reference
 # implementation in ``dasm2.preprocess_command.preprocess`` (the same
 # function that ``data-central/scripts/filter_viral_pcps.sh`` invokes) on
-# the test pipeline's ``all_pcps.csv`` + ``S_codon_sites_to_mask.txt``
-# with the canonical seeds. A mismatch here means either the filter logic
-# drifted from dasm2 or the train/val RNG call sequence changed.
+# the test pipeline's ``all_pcps.csv`` + the then-current
+# ``S_codon_sites_to_mask.txt``, with the canonical seeds. A mismatch here
+# means either the filter logic drifted from dasm2 or the train/val RNG call
+# sequence changed.
+#
+# **What it covers narrowed at #158, and the value did not move.** dasm2's own
+# masking is still codon-granular, so where a masked codon holds an unmasked
+# mutated nucleotide the two implementations now deliberately disagree. The
+# claim is therefore filters 1-5 plus the train/val RNG, not all six. The
+# sentinel is unchanged because it never exercised filter 6 in either
+# implementation: ``summarize_dasm_ready_pcps`` runs only on ``pcps/S/``
+# (``test_summary.py``), where the codon filter dropped 0 of 8 valid PCPs, and
+# the nucleotide filter drops the same 0. Do NOT re-baseline it on the strength
+# of #158 -- a moved value would mean something else changed.
 #
 # Since #134 our side is gzipped while the reference writes plain CSV, so
 # ``test_summary.py`` takes these md5s over the **decompressed** stream
@@ -859,58 +870,106 @@ def validate_reversion_masking(output_dir):
     return differences, summary
 
 
-def _parse_codon_sites(series):
-    """Flatten a codon_site column (handles ';'-joined and float values)."""
-    out = set()
-    for site in series.unique():
-        if site is None:
-            continue
-        s = str(site)
-        for part in s.split(";"):
-            part = part.strip()
-            if part.replace(".", "").replace("-", "").isdigit():
-                out.add(int(float(part)))
-    return out
+def validate_global_mask_all_clades(output_dir):
+    """Every PCP gene's nucleotide mask equals the sites excluded in ALL clades.
 
+    The independent re-derivation of *which* sites are masked, kept from the
+    v12 ``validate_spike_mask_all_clades`` and fanned over every gene rather
+    than hardcoded to S. It re-derives the expected set from
+    ``counts_all.csv``'s all-clades rule -- a ``nt_site`` qualifies iff every
+    row at it has ``exclude == True`` -- which reaches that flag through
+    ``masking.compute_exclusions``, not through
+    ``masking.global_masked_site_reasons``. So a regression to per-clade
+    masking, which would add clade-specific sites, still fails here.
 
-def validate_spike_mask_all_clades(output_dir, masking_gene="S"):
-    """The spike codon mask must equal the codon sites excluded in ALL clades.
+    **Compared in genomic coordinates, deliberately.** The obvious alternative
+    is to assert the emitted ``nt_index`` set equals
+    ``genomic_to_pcp_indices(blocks, s)`` over the expected sites, but that
+    needs the CDS inversion -- either re-implemented here, which is the second
+    implementation ``validate_masked_nt_sites`` refuses on principle, or called
+    from the same module the rule calls, which checks the inversion against
+    itself. ``nt_site`` needs no inversion, and the index side is covered
+    twice over in ``validate_masked_nt_sites``: against the founder slice
+    length, and against ``censored_mutations.csv``'s independently produced
+    indices for every shared site.
 
-    Re-derives the expected mask from counts_all.csv using the all-clades rule
-    (a nt_site qualifies iff every row at it has exclude==True) restricted to the
-    masking gene, and asserts the emitted ``{gene}_codon_sites_to_mask.txt`` matches.
-    This pins the clade-agnostic behavior: a regression to per-clade masking would
-    add clade-specific codon sites and fail here.
+    **One direction is universal and the other is not, and the difference is
+    #133.** Every emitted site must be all-clades-excluded in the count table:
+    that holds for any gene and is checked for all of them. The converse --
+    that no all-clades-excluded site of the gene is missing from the mask --
+    needs to know which grid rows belong to the gene, and a gene reaching
+    ``pcp_genes`` only through ``pcp_gene_cds_blocks`` (ORF1b) never appears in
+    ``counts_all.csv``'s GTF-derived ``gene`` column at all. Filtering on the
+    name there matched zero rows, which is exactly how ORF1b shipped an empty
+    codon mask at exit 0 in #133 -- so a validator that quietly took an empty
+    expectation as agreement would repeat that defect in the checker. Genes
+    where the converse could not run are named in the summary.
     """
     import pandas as pd
 
     counts_path = os.path.join(output_dir, "counts_all.csv")
-    mask_path = os.path.join(output_dir, f"{masking_gene}_codon_sites_to_mask.txt")
+    pcps_root = os.path.join(output_dir, "pcps")
     if not os.path.exists(counts_path):
         return [f"counts_all.csv not found under {output_dir}"], None
-    if not os.path.exists(mask_path):
-        return [f"{masking_gene}_codon_sites_to_mask.txt not found under {output_dir}"], None
+    if not os.path.isdir(pcps_root):
+        return [], f"SKIPPED: no {pcps_root}, so no nucleotide masks to check"
 
-    df = pd.read_csv(counts_path)
-    site_all_excluded = (df["exclude"] == True).groupby(df["nt_site"]).transform("all")  # noqa: E712
-    # Exact gene membership (mirrors get_problematic_sites.py, #114): split
-    # compound cells (e.g. "S;ORF3a") on ";" so the mask can't bleed a gene
-    # symbol into a longer one once this validator is used for other genes.
+    genes = sorted(
+        name for name in os.listdir(pcps_root)
+        if os.path.isfile(os.path.join(pcps_root, name, "masked_nt_sites.csv"))
+    )
+    if not genes:
+        return [], f"SKIPPED: no masked_nt_sites.csv under {pcps_root}"
+
+    df = pd.read_csv(counts_path, usecols=["nt_site", "gene", "exclude"])
+    all_excluded = (df["exclude"] == True).groupby(  # noqa: E712
+        df["nt_site"].astype(int)
+    ).all()
+    site_all_excluded = set(all_excluded.index[all_excluded].astype(int))
+
+    # Exact gene membership (#114): split compound cells (e.g. "S;ORF3a") on
+    # ";" so a gene symbol cannot bleed into a longer one -- ORF1a is a
+    # substring of ORF1ab.
     gene_members = df["gene"].astype(str).str.split(";")
-    in_gene = gene_members.apply(lambda members: masking_gene in [g.strip() for g in members])
-    expected = _parse_codon_sites(df[site_all_excluded & in_gene]["codon_site"])
-
-    with open(mask_path) as f:
-        emitted = {int(x) for x in f.read().split() if x.strip().lstrip("-").isdigit()}
 
     differences = []
-    if emitted != expected:
-        differences.append(
-            f"spike mask mismatch: emitted-only={sorted(emitted - expected)[:10]}, "
-            f"expected-only={sorted(expected - emitted)[:10]}"
+    per_gene = []
+    for gene in genes:
+        table = pd.read_csv(
+            os.path.join(pcps_root, gene, "masked_nt_sites.csv")
         )
+        emitted = set(int(site) for site in table["nt_site"])
+
+        unexpected = sorted(emitted - site_all_excluded)
+        if unexpected:
+            differences.append(
+                f"{gene}: {len(unexpected)} masked nt_site(s) are NOT excluded "
+                f"in every clade of counts_all.csv: {unexpected[:10]}. The "
+                f"nucleotide mask carries only clade-independent reasons, so a "
+                f"clade-specific mask has leaked into it."
+            )
+
+        in_gene = gene_members.apply(
+            lambda members: gene in [name.strip() for name in members]
+        )
+        gene_sites = set(df.loc[in_gene, "nt_site"].astype(int))
+        if not gene_sites:
+            # A pcp_gene_cds_blocks-only gene. Say so; do not read the empty
+            # expectation as agreement.
+            per_gene.append(f"{gene} {len(emitted)}s (one direction only)")
+            continue
+        missing = sorted((site_all_excluded & gene_sites) - emitted)
+        if missing:
+            differences.append(
+                f"{gene}: {len(missing)} nt_site(s) excluded in every clade of "
+                f"counts_all.csv are absent from masked_nt_sites.csv: "
+                f"{missing[:10]}. Those positions would be trained on as live."
+            )
+        per_gene.append(f"{gene} {len(emitted)}s")
+
     summary = None if differences else (
-        f"{len(emitted)} codon sites, all excluded across every clade"
+        "Global nucleotide masks reconcile with counts_all.csv: "
+        + ", ".join(per_gene)
     )
     return differences, summary
 
@@ -2171,22 +2230,20 @@ def validate_gzip_reproducibility(output_dir):
 
 
 def validate_masked_nt_sites(output_dir):
-    """Every PCP gene's clade-independent nucleotide mask agrees with its codon file.
+    """Every PCP gene's clade-independent nucleotide mask is well formed.
 
     The other half of #144's coordinate contract (#153). Unlike the censor
     table, this one is **non-empty on the test data** -- 23 rows for S, 104 for
     ORF1ab, 39 for ORF1b, 1 for E on the v12 test tree -- so a run can check the
     rows themselves rather than only the wrapper.
 
-    Three things here are not restatements of the script's own guards, because
-    they are properties of the output *tree* rather than of one rule's inputs:
+    Two things here are not restatements of the script's own guards, because
+    they are properties of the output *tree* rather than of one rule's inputs.
+    Through v12 there were three: the pair on disk against
+    ``{gene}_codon_sites_to_mask.txt``, which #158 retired. The over-mask factor
+    below is still reported, and is now derived from this file alone rather than
+    from a counterparty.
 
-    * The pair on disk is consistent. The script checks the codon widening
-      against the codon file it was handed; this checks the files as they now
-      sit, so rebuilding one without the other is caught. ``masked_nt_sites``
-      declares the codon mask as an input, so Snakemake makes that hard --
-      but the codon file is also the older of the two and the one seven other
-      rules read, so its being refreshed alone is the realistic direction.
     * ``nt_index`` is in range for the sequence the consumer actually gets.
       Checked against the length of this gene's founder slices, which is the
       coordinate system the PCP columns are in -- a file whose indices were
@@ -2253,7 +2310,6 @@ def validate_masked_nt_sites(output_dir):
     total_codon_nt = 0
     for gene in genes:
         table_path = os.path.join(pcps_root, gene, "masked_nt_sites.csv")
-        codon_mask = os.path.join(output_dir, f"{gene}_codon_sites_to_mask.txt")
 
         if not os.path.isfile(table_path):
             differences.append(f"nucleotide mask missing for {gene}: {table_path}")
@@ -2289,27 +2345,22 @@ def validate_masked_nt_sites(output_dir):
                 f"its sort key is not a total order"
             )
 
-        # The pair on disk, checked as it now sits.
-        if not os.path.isfile(codon_mask):
+        # #158 retired {gene}_codon_sites_to_mask.txt, so the check that used
+        # to sit here -- that widening this file reproduced that one, as the
+        # two now sat on disk -- has no counterparty. Its absence must be
+        # visible rather than merely gone: a stale codon file left behind by an
+        # older run would be read by nothing and would silently reassure
+        # anybody who looked at the directory.
+        stale_codon_mask = os.path.join(
+            output_dir, f"{gene}_codon_sites_to_mask.txt"
+        )
+        if os.path.isfile(stale_codon_mask):
             differences.append(
-                f"{gene} has a nucleotide mask but no {codon_mask}. Both ship "
-                f"until a consumer reads the new file and is validated, and the "
-                f"rule cross-checks one against the other."
+                f"{gene} still has {stale_codon_mask}. #158 retired the codon "
+                f"mask; a surviving copy is a stale artifact of an older run, "
+                f"and no rule reads it or keeps it in step with "
+                f"masked_nt_sites.csv."
             )
-        else:
-            codon_sites = {
-                int(value) for value in open(codon_mask).read().split()
-            }
-            widened = {int(index) // 3 + 1 for index in table["nt_index"]}
-            if widened != codon_sites:
-                differences.append(
-                    f"{gene}: widening masked_nt_sites.csv to codons gives "
-                    f"{len(widened)} codons but {codon_mask} has "
-                    f"{len(codon_sites)}; only here "
-                    f"{sorted(widened - codon_sites)[:10]}, only there "
-                    f"{sorted(codon_sites - widened)[:10]}. The two files "
-                    f"describe one mask at two granularities."
-                )
 
         # nt_index must index the sequence the consumer is handed.
         slice_length, mixed = founder_slice_length(gene)
@@ -2387,21 +2438,159 @@ def validate_masked_nt_sites(output_dir):
             f"{gene} {len(table)}r/{table['nt_site'].nunique()}s" + censor_note
         )
 
-    # Reported as masked *positions* against the codon file's 3x span, because
-    # that difference is the whole point of the file -- and because a row count
-    # would overstate it: a site carrying two reasons is two rows and one
-    # position.
+    # Reported as masked *positions* against the span they would occupy at
+    # codon granularity, because that difference is the whole point of the file
+    # -- and because a row count would overstate it: a site carrying two
+    # reasons is two rows and one position. Self-derived since #158: the codon
+    # span comes from widening this file's own indices, not from a second file.
     over_mask = (total_codon_nt / total_masked_nt) if total_masked_nt else float("nan")
     return differences, (
         f"Nucleotide masks: {len(genes)} gene(s), "
         + ", ".join(per_gene)
         + (
-            f"; {total_masked_nt} masked nt against {total_codon_nt} at codon "
-            f"granularity ({over_mask:.2f}x over-mask avoided)"
+            f"; {total_masked_nt} masked nt against {total_codon_nt} they "
+            f"would occupy at codon granularity ({over_mask:.2f}x over-mask "
+            f"avoided)"
             if total_masked_nt
             else "; empty for every gene"
         )
     )
+
+
+def validate_nt_filter_superset(output_dir, max_valid_rows=200000):
+    """The nucleotide drop rule keeps a superset of what the codon rule kept.
+
+    #158's central claim, and the only end-to-end evidence for it. Every masked
+    nucleotide lies in a masked codon by construction, so an unmasked codon
+    contains no masked nucleotide, so any difference the codon rule finds is
+    also a difference at an unmasked index. The containment is therefore
+    guaranteed -- but it is guaranteed by an argument, and this is what checks
+    the shipped script against it.
+
+    Two things about the shape. The codon set is **constructed** as the
+    widening of this file's own indices, not read from
+    ``{gene}_codon_sites_to_mask.txt``: #158 deleted that file, and the guard
+    that used to assert the two agreed went with it, so the widening is the
+    only definition left. And ``keep_nt`` is cross-checked against the count
+    the rule actually wrote (``after_mask_filter`` in
+    ``all_dasm_filter_stats.json``), so this validator cannot agree with itself
+    while disagreeing with the pipeline.
+
+    **VACUOUS on the test data, and reported as such.** Zero PCPs are recovered
+    for every test gene -- S 8/8, ORF1ab 23/23, ORF1b 13/13, E 1/1 -- because
+    no test-data PCP mutates an unmasked nucleotide inside a masked codon. So a
+    pass here is compatible with the filter being codon-granular. Saying
+    "VACUOUS" rather than printing a reassuring count is the standing
+    requirement of CLAUDE.md patterns 10, 12 and 15;
+    ``tests/test_dasm_ready_nt_filter.py`` is the coverage that is not vacuous.
+    """
+    import pandas as pd
+
+    pcps_root = os.path.join(output_dir, "pcps")
+    if not os.path.isdir(pcps_root):
+        return [], f"SKIPPED: no {pcps_root}"
+
+    genes = sorted(
+        name for name in os.listdir(pcps_root)
+        if os.path.isfile(os.path.join(pcps_root, name, "all_pcps.csv.gz"))
+        and os.path.isfile(os.path.join(pcps_root, name, "masked_nt_sites.csv"))
+    )
+    if not genes:
+        return [], f"SKIPPED: no aggregate PCPs plus mask under {pcps_root}"
+
+    def is_valid(parent, child):
+        """Filters 1-5 of curate_pcps_for_dasm.py, which this rule shares."""
+        if not parent or not child or len(parent) != len(child):
+            return False
+        if len(parent) % 3 != 0:
+            return False
+        if "N" in parent.upper() or "N" in child.upper():
+            return False
+        for sequence in (parent, child):
+            for i in range(0, len(sequence), 3):
+                if sequence[i : i + 3] in _STOP_CODONS:
+                    return False
+        return True
+
+    differences = []
+    per_gene = []
+    total_recovered = 0
+    for gene in genes:
+        gene_dir = os.path.join(pcps_root, gene)
+        mask = pd.read_csv(os.path.join(gene_dir, "masked_nt_sites.csv"))
+        masked = {int(index) for index in mask["nt_index"]}
+        masked_codons = {index // 3 for index in masked}
+
+        pcps = pd.read_csv(
+            os.path.join(gene_dir, "all_pcps.csv.gz"), usecols=["parent", "child"]
+        )
+        pairs = [
+            (str(parent), str(child))
+            for parent, child in zip(pcps["parent"], pcps["child"])
+        ]
+        valid = [pair for pair in pairs if is_valid(*pair)]
+        if len(valid) > max_valid_rows:
+            # Stated rather than skipped silently: this validator is for the
+            # test tree, and re-running both predicates over a production
+            # gene's millions of PCPs is not what it is for.
+            per_gene.append(f"{gene} NOT RUN ({len(valid)} valid rows)")
+            continue
+
+        keep_nt, keep_codon = set(), set()
+        for row, (parent, child) in enumerate(valid):
+            differing = [i for i, (p, c) in enumerate(zip(parent, child)) if p != c]
+            if any(i not in masked for i in differing):
+                keep_nt.add(row)
+            if any(i // 3 not in masked_codons for i in differing):
+                keep_codon.add(row)
+
+        dropped_but_kept = sorted(keep_codon - keep_nt)
+        if dropped_but_kept:
+            differences.append(
+                f"{gene}: {len(dropped_but_kept)} PCP(s) the codon rule keeps "
+                f"are dropped by the nucleotide rule (rows "
+                f"{dropped_but_kept[:5]}), so it is not a superset. Every "
+                f"masked nucleotide lies in a masked codon, so this cannot "
+                f"happen unless the mask files disagree."
+            )
+
+        stats_path = os.path.join(gene_dir, "all_dasm_filter_stats.json")
+        if os.path.isfile(stats_path):
+            with open(stats_path) as f:
+                stats = json.load(f)
+            if stats.get("after_mask_filter") != len(keep_nt):
+                differences.append(
+                    f"{gene}: this validator's nucleotide predicate keeps "
+                    f"{len(keep_nt)} PCPs but the rule wrote "
+                    f"{stats.get('after_mask_filter')} "
+                    f"(after_mask_filter). The check above is then measuring "
+                    f"something the pipeline did not do."
+                )
+            if stats.get("num_masked_sites") != len(masked):
+                differences.append(
+                    f"{gene}: the rule recorded "
+                    f"{stats.get('num_masked_sites')} masked sites but "
+                    f"masked_nt_sites.csv has {len(masked)} distinct "
+                    f"nt_index. num_masked_sites must be distinct indices, "
+                    f"not rows."
+                )
+
+        recovered = len(keep_nt - keep_codon)
+        total_recovered += recovered
+        per_gene.append(
+            f"{gene} {len(keep_nt)}/{len(valid)} kept, +{recovered}"
+        )
+
+    if differences:
+        return differences, None
+    verdict = (
+        "VACUOUS (0 PCPs recovered on this tree, so a codon-granular filter "
+        "would pass this check identically; see "
+        "tests/test_dasm_ready_nt_filter.py)"
+        if total_recovered == 0
+        else f"{total_recovered} PCPs recovered by nucleotide granularity"
+    )
+    return [], f"nt filter keeps a superset: {', '.join(per_gene)} -- {verdict}"
 
 
 def validate_censor_table(output_dir, yaml_path="data/usher_masked_sites.yaml"):
@@ -2420,9 +2609,11 @@ def validate_censor_table(output_dir, yaml_path="data/usher_masked_sites.yaml"):
     and so cannot see a roster that drops a clade.
 
     Also checks that the two masking outputs are both present. They carry
-    different exclusion reasons at different granularity, and a training run must
-    apply **both** -- the censor table is not a replacement for
-    ``{gene}_codon_sites_to_mask.txt``. Note the two are deliberately *not*
+    different exclusion reasons -- the clade-specific two here, the
+    clade-independent three in ``pcps/{gene}/masked_nt_sites.csv`` -- and a
+    training run must apply **both**. Through v12 the counterparty was
+    ``{gene}_codon_sites_to_mask.txt`` at codon granularity; #158 retired it, so
+    the pair is now at one granularity. Note the two are deliberately *not*
     asserted disjoint: a site can be both clade-masked in the yaml and in the
     ProblematicSites VCF (32 such pairs on the v11 gisaid-and-public tree), so
     disjointness is false on real data.
@@ -2488,7 +2679,7 @@ def validate_censor_table(output_dir, yaml_path="data/usher_masked_sites.yaml"):
     for gene in genes:
         table_path = os.path.join(pcps_root, gene, "censored_mutations.csv")
         roster_path = os.path.join(pcps_root, gene, "censored_mutations.clades.txt")
-        codon_mask = os.path.join(output_dir, f"{gene}_codon_sites_to_mask.txt")
+        global_mask = os.path.join(pcps_root, gene, "masked_nt_sites.csv")
 
         if not os.path.isfile(table_path):
             differences.append(f"censor table missing for {gene}: {table_path}")
@@ -2496,10 +2687,10 @@ def validate_censor_table(output_dir, yaml_path="data/usher_masked_sites.yaml"):
         if not os.path.isfile(roster_path):
             differences.append(f"censor clade roster missing for {gene}: {roster_path}")
             continue
-        if not os.path.isfile(codon_mask):
+        if not os.path.isfile(global_mask):
             differences.append(
-                f"{gene} has a censor table but no {codon_mask}. A training run "
-                f"must apply both -- the censor table carries only the two "
+                f"{gene} has a censor table but no {global_mask}. A training "
+                f"run must apply both -- the censor table carries only the two "
                 f"clade-specific UShER reasons, not the VCF/config/range ones."
             )
 
@@ -2656,7 +2847,9 @@ def main():
     site_mask_diffs, site_mask_summary = validate_usher_site_masking()
     mut_mask_diffs, mut_mask_summary = validate_usher_mutation_masking(output_dir)
     reversion_diffs, reversion_summary = validate_reversion_masking(output_dir)
-    spike_mask_diffs, spike_mask_summary = validate_spike_mask_all_clades(output_dir)
+    global_mask_diffs, global_mask_summary = validate_global_mask_all_clades(
+        output_dir
+    )
     orf1ab_diffs, orf1ab_summary = validate_orf1ab_founder(output_dir)
     orf1b_diffs, orf1b_summary = validate_orf1b_founder_slice(output_dir)
     glm_syn_diffs, glm_syn_summary = validate_glm_synonymous_training(output_dir)
@@ -2664,15 +2857,16 @@ def main():
     era_diffs, era_summary = validate_era_rate_tables(output_dir)
     censor_diffs, censor_summary = validate_censor_table(output_dir)
     nt_mask_diffs, nt_mask_summary = validate_masked_nt_sites(output_dir)
+    superset_diffs, superset_summary = validate_nt_filter_superset(output_dir)
     gzip_diffs, gzip_summary = validate_gzip_reproducibility(output_dir)
     rtt_diffs, rtt_summary = validate_root_to_tip_cloud(output_dir)
     cutoff_diffs, cutoff_summary = validate_cutoff_pcps(output_dir)
     arm_diffs, arm_summary = validate_subsample_arms(output_dir)
     differences += (
-        site_mask_diffs + mut_mask_diffs + reversion_diffs + spike_mask_diffs
+        site_mask_diffs + mut_mask_diffs + reversion_diffs + global_mask_diffs
         + orf1ab_diffs + orf1b_diffs + glm_syn_diffs + codon_bg_diffs + era_diffs
-        + censor_diffs + nt_mask_diffs + gzip_diffs + rtt_diffs + cutoff_diffs
-        + arm_diffs
+        + censor_diffs + nt_mask_diffs + superset_diffs + gzip_diffs
+        + rtt_diffs + cutoff_diffs + arm_diffs
     )
 
     if differences:
@@ -2701,8 +2895,8 @@ def main():
             print(f"  - UShER per-clade mutation mask: {mut_mask_summary}")
         if reversion_summary:
             print(f"  - Founder->reference reversions: {reversion_summary}")
-        if spike_mask_summary:
-            print(f"  - Spike codon mask (all-clades): {spike_mask_summary}")
+        if global_mask_summary:
+            print(f"  - Global nt mask (all-clades): {global_mask_summary}")
         if orf1ab_summary:
             print(f"  - {orf1ab_summary}")
         if orf1b_summary:
@@ -2717,6 +2911,8 @@ def main():
             print(f"  - {censor_summary}")
         if nt_mask_summary:
             print(f"  - {nt_mask_summary}")
+        if superset_summary:
+            print(f"  - {superset_summary}")
         if gzip_summary:
             print(f"  - {gzip_summary}")
         if rtt_summary:
