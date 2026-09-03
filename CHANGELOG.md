@@ -240,8 +240,8 @@ after a full 273-job test-data rebuild.
 
 `pcpio.REPRODUCIBLE_GZIP` is the policy's new, non-PCP-specific name;
 `PCP_CSV_COMPRESSION` remains as an alias so no PCP script's body changes --
-editing one is a `code` rerun trigger and would restate the 470 GiB of PCPs per
-tree to produce byte-identical output.
+editing one is a `code` rerun trigger and would restate every PCP in the tree
+(17 GiB apparent on gisaid v12) to produce byte-identical output.
 
 **Guarded by a sweep, not a unit test.** `validate_test.py::validate_gzip_reproducibility`
 walks every `.gz` the pipeline *wrote* and asserts `mtime == 0` (113 files on
@@ -291,8 +291,8 @@ what positionally-paired joined cells cost a consumer that flattens them.
 already computes this exact set (`site_all_excluded`) and throws it away after
 widening it, so adding the output there would have been the smaller diff. But
 its `{gene}_codon_sites_to_mask.txt` has seven consumers, one of them
-`curate_pcps_for_dasm`, and re-running it to add a file would restate the
-470 GiB of PCPs for a file nothing yet reads.
+`curate_pcps_for_dasm`, and re-running it to add a file would restate every
+PCP in the tree for a file nothing yet reads.
 
 **Nothing was retired in #153, and both deferrals were then taken up by #158
 below.** As shipped in #153, `{gene}_codon_sites_to_mask.txt` still drove the
@@ -358,7 +358,8 @@ change the `shell:` body of six rules, which **is** the default `code` trigger
 v12 trees' stored provenance records the pre-change command (verified: their
 `filter_mat_tree` and `export_newick` metadata contain no `-T`), so extending
 either tree requires `--rerun-triggers mtime` or Snakemake rebuilds everything
-downstream, the 470 GiB of PCPs included. The outputs themselves are
+downstream, the PCPs included -- 17 GiB apparent on gisaid v12, 7.4 GiB on
+public, not the 470 GiB of the pre-gzip v8 tree. The outputs themselves are
 byte-identical, so a tree already built stays *correct*; it is the provenance,
 not the data, that moved.
 
@@ -367,12 +368,24 @@ No script in the pipeline reads `snakemake.threads`, and only
 other allocation above 1 was reserving cores that idled -- at `threads: 4` a
 `-j 32` run schedules 8 concurrent jobs, not 32. Six rules measured
 single-threaded on the v12 gisaid tree (`cpu_time/wall`: `ntmut_fitness` 0.97
-over 31.5 h, `mat_clade_subset` 0.86 over 7.1 h, `window_subtree_counts` 0.98,
+over 8.0 h, `mat_clade_subset` 0.86 over 5.1 h, `window_subtree_counts` 0.98,
 `window_expected_counts` 1.00, `master_table` 0.48, `filter_mat_tree` 0.54) and
 are now 1. `chronumental` measured 1.25 and keeps 4; `optimize_mat_tree` keeps
-12. `ntmut_fitness` accounts for essentially the whole wall clock -- 31.54 h
-across 224 jobs at 8-way is 3.9 h against an observed 4h09m -- so this is
-roughly a 3x speedup of a full run, not a trim.
+12.
+
+**Two of those hour totals were wrong when this entry was first written, each
+by a different pooling, and #158 corrected them.** `ntmut_fitness` was quoted
+at "31.5 h across 224 jobs" -- that is the **v11 and v12 trees pooled** (228
+jobs / 32.1 h), the same rule counted once per version of the same two trees --
+and `mat_clade_subset` at 7.1 h, which is **both v12 trees** (198 jobs / 7.4 h).
+On gisaid v12 alone they are 57 jobs / 8.0 h and 101 jobs / 5.1 h. The
+`cpu_time/wall` ratios are unaffected, since a ratio does not care how many
+trees were pooled, so every `threads: 1` here still follows from its
+measurement. What does not survive is the magnitude claim: `ntmut_fitness` is
+the largest single contributor but only ~25% of the tree's 32.0 h of
+benchmarked job time, and no concurrency setting can beat `chronumental`'s
+single 6 h 10 min job, so "roughly a 3x speedup of a full run" was an
+overstatement of a real but smaller gain.
 
 `mem_mb` was corrected the same way, and it was wrong in both directions.
 Three rules were *under*-declared -- `extract_pcps_by_clade` at 8000 against a

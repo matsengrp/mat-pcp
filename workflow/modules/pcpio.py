@@ -70,6 +70,7 @@ REPRODUCIBLE_GZIP = {"method": "gzip", "mtime": 0}
 # Passed as ``to_csv(..., compression=PCP_CSV_COMPRESSION)`` by every rule that
 # writes one of the four PCP families. Kept as an alias rather than renamed at
 # those call sites on purpose: editing a PCP script's body is a ``code`` rerun
-# trigger, which would restate the 470 GiB of PCPs per tree to produce
+# trigger, which would restate every PCP in the tree (17 GiB apparent on
+# gisaid v12; the 470 GiB above is the pre-gzip v8 figure) to produce
 # byte-identical output.
 PCP_CSV_COMPRESSION = REPRODUCIBLE_GZIP

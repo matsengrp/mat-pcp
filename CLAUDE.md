@@ -342,7 +342,12 @@ mat-pcp/
    tree `pcps/` was **504 GB apparent (470 GiB), 93% of the whole 542 GB output
    tree** — quote apparent or allocated consistently, never a mix (allocated is
    403/415 GiB, i.e. 97%) — and
-   measured gzip level 9 gives ~125× on ORF1a / ~110× on S. The policy lives in
+   measured gzip level 9 gives ~125× on ORF1a / ~110× on S. **That 470 GiB is a
+   v8, pre-compression number and is not the size of a current tree**: at v12
+   `pcps/` is 17 GiB apparent (12 GiB allocated) on gisaid-and-public and
+   7.4 GiB (4.7 GiB) on public, against whole-tree totals of 42 GB and 18 GB.
+   Quoting it as the cost of a present-day rebuild overstates that cost ~28×,
+   which had happened in four places before being caught. The policy lives in
    `modules/pcpio.py::PCP_CSV_COMPRESSION` rather than at each `to_csv`, because a
    writer that omitted `mtime=0` would break reproducibility for that one file
    with nothing to attribute it. Level 9 is *not* pinned explicitly: it is
@@ -1066,8 +1071,8 @@ mat-pcp/
     machinery built to answer it. And requesting it on a released tree
     cascaded: its retention denominators are the **full tree's** `branch_qc/`
     sidecars, co-declared outputs of two rules that are absent on the v12 trees
-    (0 of 56 clades), so building it meant a GLM refit and a 470 GiB PCP
-    rewrite for a file with no reader.
+    (0 of 56 clades), so building it meant a GLM refit and a whole-tree PCP
+    rewrite (17 GiB apparent on gisaid v12) for a file with no reader.
     What that costs, stated rather than absorbed: an excluded clade now
     contributes no row and no files, so it is indistinguishable from a clade a
     wiring mistake dropped, and `tests/test_clade_subsamples.py` is its only
@@ -1215,14 +1220,40 @@ mat-pcp/
 
     *The measurement, not the intuition, decides.* `cpu_time/wall` from the v12
     gisaid tree's `benchmarks/*.tsv` is the discriminator: `ntmut_fitness` 0.97
-    across 224 jobs and 31.5 h, `mat_clade_subset` 0.86 over 7.1 h,
-    `window_expected_counts` 1.00, `window_subtree_counts` 0.98, `master_table`
+    across **57 jobs and 8.0 h**, `mat_clade_subset` 0.86 over **5.1 h** (101
+    jobs, 45 of them `_upto`), `window_expected_counts` 1.00,
+    `window_subtree_counts` 0.98, `master_table`
     0.48 -- all single-threaded despite holding 4 each. Two rules earn their
     allocation and keep it: `optimize_mat_tree` (passes `{threads}` through) and
     `chronumental`, which measured **1.25** because JAX threads internally with
-    no flag to pass. `ntmut_fitness` alone explains the whole wall clock:
-    31.54 h / 8 concurrent = 3.9 h against an observed 4h09m, so dropping it to
-    1 is a ~3x speedup of the entire pipeline rather than a micro-optimization.
+    no flag to pass.
+
+    *Two of those totals were originally quoted at roughly twice their value,
+    each by a different pooling, and the corrected numbers do not change the
+    decision.* An earlier draft of this pattern read `ntmut_fitness` "0.97
+    across 224 jobs and 31.5 h" and `mat_clade_subset` "0.86 over 7.1 h", both
+    attributed to the v12 gisaid tree. Neither scope was that: 228 jobs /
+    32.1 h is the **v11 and v12 trees pooled** (114 / 15.8 h and 114 / 16.4 h,
+    i.e. the same rule counted once per version of the same two trees), and
+    7.4 h is **both v12 trees** (198 jobs). Reading
+    `results/*_v1[12]/benchmarks` with one glob is all it takes, and the ratio
+    being so close to 2 is what makes it hard to see: a doubled total still
+    looks like a plausible cost. `cpu_time/wall` is a *ratio* and so is
+    invariant to the pooling -- which is why `threads: 1` stands unchanged and
+    only the magnitude claim moved.
+
+    *What the wall clock is actually bounded by is `chronumental`, not
+    concurrency.* The retracted claim was that `ntmut_fitness` "alone explains
+    the whole wall clock: 31.54 h / 8 concurrent = 3.9 h against an observed
+    4h09m", making `threads: 1` a ~3x speedup of the pipeline. On the real
+    numbers `ntmut_fitness` is the largest *single* contributor at 8.0 h but
+    only ~25% of gisaid v12's 32.0 h of total benchmarked job time -- and it is
+    that aggregate, at 8-way, that comes to 4.0 h. Raising concurrency also has
+    a floor no reservation can move: `chronumental` is **one job of 6 h 10
+    min**, so the observed 4h09m cannot have covered it, and the makespan of a
+    full build cannot fall below it however many lanes are free. Concurrency is
+    still worth having -- 32.0 h of job time at 8 lanes against 32 is real --
+    but the pipeline is chronumental-bound, not `ntmut_fitness`-bound.
 
     *`matUtils` defaults to 32 threads, so the reservation and the reality have
     to be pinned together.* All seven `matUtils extract` / `matUtils summary`
@@ -1259,7 +1290,9 @@ mat-pcp/
     the pre-change command (checked directly: neither their `filter_mat_tree`
     nor their `export_newick` entry contains `-T`). Extending either tree
     therefore needs `--rerun-triggers mtime`, or Snakemake rebuilds everything
-    downstream including the 470 GiB of PCPs. Reading "no output changes" as
+    downstream, the PCPs included -- 17 GiB apparent on gisaid v12 and 7.4 GiB
+    on public, **not** the 470 GiB of pattern 9, which is a v8 pre-gzip figure
+    predating #134. Reading "no output changes" as
     "no rerun" is the trap -- the data is byte-identical and every job is still
     stale.
 
